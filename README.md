@@ -1,17 +1,22 @@
 # SolveNest
 
-SolveNest is a premier student task submission and expert guidance platform designed to bridge the gap between academic challenges and expert solutions. Tailored for the Sri Lankan region, it offers a distinct, premium academic experience with fluid 3D visualizations and seamless user interaction.
+SolveNest is a student-focused platform where learners can submit academic tasks and get expert guidance, support, and feedback in a modern digital experience.
 
-## Features
+The project is built for students, mentors, and admins, with a premium academic feel and a strong emphasis on usability, trust, and smooth mentorship workflows.
 
-- **Multi-Role System:** Dedicated portals for Students, Experts/Mentors, and Admins/Superadmins.
-- **Premium 3D Experience:** Immersive, high-quality 3D visual direction integrated throughout the platform, including dashboards, for a modern and engaging academic feel.
-- **Task Submission & Mentorship:** Students can easily submit academic tasks and receive expert guidance.
-- **Secure File Uploads:** Support for up to ~100MB of total file uploads per submission.
-- **Integrated Payments:** Pay-per-task payment processing powered by Stripe.
-- **Authentication:** Secure Email + Password authentication, with future support for Google and Microsoft OAuth.
+## What SolveNest does
+
+- Students can submit assignments, projects, and study-related tasks.
+- Experts and mentors can review and guide students with structured support.
+- Admins manage the platform and oversee operations.
+- The platform supports secure file uploads and pay-per-task transactions.
+- The overall experience is designed with a premium 3D visual style and modern interface.
 
 ## Tech Stack
 
-- **Frontend:** React, TypeScript, Vite, Tailwind CSS, Three.js (for the 3D ecosystem).
-- **Backend:** Node.js (planned/in-progress).
+- React
+- TypeScript
+- Vite
+- Tailwind CSS
+- Three.js
+- Node.js
