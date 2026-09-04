@@ -21,5 +21,6 @@ import './styles/pages/focused-home-v2.css'
 import './styles/pages/method-page.css'
 import './styles/pages/plans-page.css'
 import './styles/pages/study-domains.css'
+import './styles/pages/why-page.css'
 
 createRoot(document.getElementById('app')).render(<React.StrictMode><App /></React.StrictMode>)
