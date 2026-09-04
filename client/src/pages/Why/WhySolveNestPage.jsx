@@ -505,41 +505,27 @@ const PLATES = [
 ]
 function Standard() {
   const [sel, setSel] = useState(0)
-  const [aligned, setAligned] = useState(false)
   return (
     <section className="wy-section wy-standard" id="wy-standard" aria-label="The SolveNest standard">
       <div className="wy-wrap">
         <Head label="07 / THE STANDARD" title={<>Seven principles. <em>One standard.</em></>} />
         <div className="wy-stack">
           <AnimatePresence mode="wait">
-            {!aligned ? (
-              <motion.div key={sel} className="wy-plate is-out" aria-live="polite" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: .2 }}>
-                <span>{String(sel + 1).padStart(2, '0')}</span><b>{PLATES[sel].k}</b>
-              </motion.div>
-            ) : (
-              <motion.div key="seal" className="wy-stack-seal" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: .2 }}>
-                THE SOLVENEST STANDARD<span className="wy-seal-cur">{String(sel + 1).padStart(2, '0')} · {PLATES[sel].k}</span>
-              </motion.div>
-            )}
+            <motion.div key={sel} className="wy-plate" aria-live="polite" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: .2 }}>
+              <span>{String(sel + 1).padStart(2, '0')}</span><b>{PLATES[sel].k}</b>
+            </motion.div>
           </AnimatePresence>
         </div>
         <AnimatePresence mode="wait">
-          {!aligned ? (
-            <motion.div key={sel} className="wy-plate-detail" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={{ duration: .2 }}>
-              <b>{PLATES[sel].k}</b><p>“{PLATES[sel].d}”</p>
-            </motion.div>
-          ) : (
-            <motion.div key="seal" className="wy-plate-detail" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={{ duration: .2 }}>
-              <b>THE SOLVENEST STANDARD</b><p>“All seven principles, aligned into one document.”</p>
-            </motion.div>
-          )}
+          <motion.div key={sel} className="wy-plate-detail" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={{ duration: .2 }}>
+            <b>{PLATES[sel].k}</b><p>“{PLATES[sel].d}”</p>
+          </motion.div>
         </AnimatePresence>
         <div className="wy-standard-nav" role="group" aria-label="Browse principles">
           <button className="wy-mini" onClick={() => setSel((sel + PLATES.length - 1) % PLATES.length)} aria-label="Previous principle">← Prev</button>
           <span className="wy-standard-count" aria-live="polite">{String(sel + 1).padStart(2, '0')} / 07</span>
           <button className="wy-mini" onClick={() => setSel((sel + 1) % PLATES.length)} aria-label="Next principle">Next →</button>
         </div>
-        <button className="wy-cta-primary" onClick={() => setAligned((a) => !a)}>{aligned ? 'Expand the Stack' : 'Align Into One Standard'}</button>
       </div>
     </section>
   )

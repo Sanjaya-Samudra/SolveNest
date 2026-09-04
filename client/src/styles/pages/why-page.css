@@ -234,8 +234,6 @@
 .wy-plate{box-sizing:border-box;width:100%;min-height:60px;overflow:hidden;display:flex;justify-content:center;gap:14px;align-items:center;background:#fff;border:1px solid var(--wy-violet);box-shadow:0 0 0 1px var(--wy-violet),0 14px 34px rgba(118,87,255,.18);padding:16px 20px;color:var(--wy-text);position:relative;z-index:1}
 .wy-plate span{font:10px 'DM Mono',monospace;color:#9AA3AD}
 .wy-plate b{font-size:13px;letter-spacing:.02em;white-space:nowrap}
-.wy-stack-seal{position:relative;z-index:1;background:var(--wy-navy);color:#fff;font:11px 'DM Mono',monospace;letter-spacing:.12em;padding:16px;text-align:center}
-.wy-seal-cur{display:block;margin-top:6px;font-size:9px;letter-spacing:.08em;color:#B9B2FF}
 .wy-plate-detail{max-width:560px;margin:22px auto 18px;background:#fff;border:1px solid var(--wy-line-strong);border-left:3px solid var(--wy-violet);padding:16px 20px;text-align:left}
 .wy-plate-detail b{font:11px 'DM Mono',monospace;letter-spacing:.08em;color:var(--wy-violet)}
 .wy-plate-detail p{margin:6px 0 0;font-size:14px;color:var(--wy-muted);line-height:1.6}
