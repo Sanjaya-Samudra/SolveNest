@@ -24,5 +24,6 @@ import './styles/pages/study-domains.css'
 import './styles/pages/why-page.css'
 import './styles/pages/help-page.css'
 import './styles/pages/connect-page.css'
+import './styles/pages/signin-page.css'
 
 createRoot(document.getElementById('app')).render(<React.StrictMode><App /></React.StrictMode>)
