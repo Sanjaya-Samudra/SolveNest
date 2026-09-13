@@ -1,0 +1,19 @@
+/* IntakeCanvas lives inside the premium .analyze-page shell.
+   Preserve the global midnight/navy background, grid overlay, and aurora;
+   only center this section and keep it above decorative layers. */
+.analyze-page {
+  position: relative;
+  display: flex !important;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 64px max(7vw, 30px) 96px !important;
+  min-height: calc(100vh - 76px);
+}
+.analyze-page .sni {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+}
+@media (max-width: 800px) {
+  .analyze-page { padding-top: 70px !important; }
+}
