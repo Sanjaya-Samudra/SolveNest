@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { Bell, BookOpen, ChevronDown, ChevronRight, ClipboardList, CreditCard, FolderOpen, HelpCircle, Home, LogOut, Menu, MessageCircle, PanelLeftClose, PanelLeftOpen, Plus, Settings, ShieldCheck, Sparkles, X, ArrowRight } from 'lucide-react'
+import { Bell, BookOpen, ChevronDown, ChevronRight, ClipboardList, CreditCard, FolderOpen, HelpCircle, Home, MessageCircle, PanelLeftClose, PanelLeftOpen, Plus, Settings, ShieldCheck, Sparkles, X, ArrowRight } from 'lucide-react'
 import { fetchStudentDashboard, formatDate, formatRelativeTime, getTaskJourney } from '../../student/studentDashboardData.js'
 import { TaskCreationStudio } from './TaskCreationStudio.jsx'
 import logo from '../../assets/logo-background-white.png'
@@ -14,11 +14,28 @@ const nameOf = (student) => student?.name || student?.displayName || 'Student'
 function ActionButton({ children, onClick, secondary = false }) { return <button className={secondary ? 'student-button student-button--secondary' : 'student-button'} onClick={onClick}>{children}<ChevronRight size={15} /></button> }
 
 function StudentSidebar({ collapsed, setCollapsed, path, model }) { return <aside className={`student-sidebar ${collapsed ? 'is-collapsed' : ''}`}><div className="student-brand"><img src={logo} alt="SolveNest" /><span>SolveNest</span></div><nav aria-label="Student workspace"><p className="student-nav-label">Workspace</p>{navItems.map(([label, target, Icon]) => <button key={target} className={`student-nav-item ${path === target ? 'is-active' : ''}`} onClick={() => go(target)} title={collapsed ? label : undefined}><Icon size={17} /><span>{label}</span>{label === 'Messages' && model.unreadMessages > 0 && <b>{model.unreadMessages}</b>}</button>)}<p className="student-nav-label student-nav-label--lower">Personal</p>{moreItems.map(([label, target, Icon]) => <button key={target} className={`student-nav-item ${path === target ? 'is-active' : ''}`} onClick={() => go(target)} title={collapsed ? label : undefined}><Icon size={17} /><span>{label}</span>{label === 'Notifications' && model.notifications.length > 0 && <b>{model.notifications.length}</b>}</button>)}</nav><button className="student-collapse" onClick={() => setCollapsed((value) => !value)} aria-label={collapsed ? 'Expand navigation' : 'Collapse navigation'}>{collapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}<span>{collapsed ? 'Expand' : 'Collapse'}</span></button></aside> }
-function TopBar({ student, onMenu, onNotifications, onNewTask, path }) { return <header className="student-topbar"><div className="student-context"><button className="student-mobile-menu" onClick={onMenu} aria-label="Open navigation"><Menu size={20} /></button><img className="student-mobile-logo" src={logo} alt="SolveNest" /><span>Student</span><ChevronRight size={14} /><strong>{labelOfPath(path)}</strong></div><div className="student-top-actions"><button className="student-new-task" onClick={onNewTask}><Plus size={17} /><span>New Task</span></button><button className="student-icon-button" onClick={onNotifications} aria-label="Open notifications"><Bell size={18} /></button><button className="student-profile" onClick={() => go('/student/account')} aria-label="My account"><span className="student-avatar">{student?.avatarUrl ? <img src={student.avatarUrl} alt="" /> : initials(student)}</span></button></div></header> }
+function TopBar({ student, onNotifications, onNewTask, path }) { return <header className="student-topbar"><div className="student-context"><img className="student-mobile-logo" src={logo} alt="SolveNest" /><span>Student</span><ChevronRight size={14} /><strong>{labelOfPath(path)}</strong></div><div className="student-top-actions"><button className="student-new-task" onClick={onNewTask}><Plus size={17} /><span>New Task</span></button><button className="student-icon-button" onClick={onNotifications} aria-label="Open notifications"><Bell size={18} /></button><button className="student-profile" onClick={() => go('/student/account')} aria-label="My account"><span className="student-avatar">{student?.avatarUrl ? <img src={student.avatarUrl} alt="" /> : initials(student)}</span></button></div></header> }
 function NotificationDrawer({ notifications, onClose }) { return <motion.aside className="student-drawer" initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }} aria-label="Notifications"><div className="student-drawer-header"><div><p className="student-overline">INBOX</p><h2>Notifications</h2></div><button className="student-icon-button" onClick={onClose} aria-label="Close notifications"><X size={18} /></button></div>{notifications.length === 0 ? <p className="student-muted-copy">You have no new notifications.</p> : notifications.map((item, index) => <button className="student-notification" key={item.id || index} onClick={() => { onClose(); if (item.route) go(item.route) }}><span className="student-state-dot tone-active" /><span><strong>{item.title || item.type || 'Notification'}</strong><small>{item.body || item.taskTitle || ''}</small><time>{formatRelativeTime(item.createdAt)}</time></span></button>)}</motion.aside> }
 function DashboardError({ onRetry, access }) { return <section className="student-local-error" role="alert"><p className="student-overline">{access ? 'ACCESS REQUIRED' : 'COULD NOT LOAD'}</p><h2>{access ? 'Sign in to open your student workspace.' : 'We could not load your workspace.'}</h2><p>{access ? 'Your student session is missing or has expired.' : 'We could not retrieve the current workspace data.'}</p><ActionButton onClick={() => access ? go('/login') : onRetry()}>{access ? 'Sign in' : 'Try again'}</ActionButton></section> }
 function DashboardSkeleton() { return <div className="student-dashboard-skeleton" aria-label="Loading student workspace"><span /><span /><div><span /><span /></div><span /><span /></div> }
-function StudentMobileNav({ onNewTask, path }) { return <nav className="student-bottom-nav" aria-label="Mobile student workspace"><button className={path === '/student/dashboard' ? 'is-active' : ''} onClick={() => go('/student/dashboard')}><Home size={18} /><span>Dashboard</span></button><button className={path === '/student/tasks' ? 'is-active' : ''} onClick={() => go('/student/tasks')}><ClipboardList size={18} /><span>Tasks</span></button><button className="is-primary" onClick={onNewTask}><Plus size={20} /><span>New Task</span></button><button className={path === '/student/messages' ? 'is-active' : ''} onClick={() => go('/student/messages')}><MessageCircle size={18} /><span>Messages</span></button><button className={path === '/student/account' ? 'is-active' : ''} onClick={() => go('/student/account')}><Settings size={18} /><span>More</span></button></nav> }
+function StudentMobileNav({ onNewTask, path }) {
+  const [expanded, setExpanded] = useState(false)
+  const allItems = [['Dashboard', '/student/dashboard', Home], ['Tasks', '/student/tasks', ClipboardList], ['Messages', '/student/messages', MessageCircle], ['Help', '/student/help', HelpCircle], ['Notifications', '/student/notifications', Bell], ['Account', '/student/account', Settings]]
+  return <>
+    {expanded && <div className="student-fab-overlay" onClick={() => setExpanded(false)} />}
+    <nav className={`student-bottom-nav ${expanded ? 'is-expanded' : ''}`} aria-label="Mobile student workspace">
+      <button className={path === '/student/dashboard' ? 'is-active' : ''} onClick={() => { setExpanded(false); go('/student/dashboard') }}><Home size={18} /><span>Dashboard</span></button>
+      <button className={path === '/student/tasks' ? 'is-active' : ''} onClick={() => { setExpanded(false); go('/student/tasks') }}><ClipboardList size={18} /><span>Tasks</span></button>
+      <button className="is-primary" onClick={() => setExpanded((v) => !v)}><Plus size={20} /></button>
+      <button className={path === '/student/messages' ? 'is-active' : ''} onClick={() => { setExpanded(false); go('/student/messages') }}><MessageCircle size={18} /><span>Messages</span></button>
+      <button className={path === '/student/account' ? 'is-active' : ''} onClick={() => { setExpanded(false); go('/student/account') }}><Settings size={18} /><span>More</span></button>
+    </nav>
+    {expanded && <div className="student-fab-menu">
+      <button className="student-fab-item" onClick={() => { setExpanded(false); onNewTask() }}><Plus size={16} /><span>New Task</span></button>
+      {allItems.filter(([label, target]) => target !== path).map(([label, target, Icon]) => <button className="student-fab-item" key={target} onClick={() => { setExpanded(false); go(target) }}><Icon size={16} /><span>{label}</span></button>)}
+    </div>}
+  </>
+}
 
 function resolveDashboardState(model) {
   if (!model || !model.focusAction) return { status: 'ALL CLEAR', headline: 'You are all caught up.', body: 'No action is required from you right now.', tone: 'neutral' }
@@ -240,7 +257,6 @@ function UpcomingSection({ actions }) {
 
 export function StudentDashboard() {
   const [collapsed, setCollapsed] = useState(() => window.localStorage.getItem('sn-student-sidebar') === 'collapsed')
-  const [mobileNav, setMobileNav] = useState(false)
   const [notificationsOpen, setNotificationsOpen] = useState(false)
   const [studioOpen, setStudioOpen] = useState(false)
   const [state, setState] = useState({ loading: true, error: null, model: null })
@@ -249,24 +265,17 @@ export function StudentDashboard() {
   useEffect(() => { window.localStorage.setItem('sn-student-sidebar', collapsed ? 'collapsed' : 'expanded') }, [collapsed])
   const model = state.model
   const path = window.location.pathname
-  const mobileItems = navItems.concat(moreItems)
   const onCreated = () => { load() }
   const attentionQueue = getAttentionQueue(model)
   return <div className="student-app">
     <StudentSidebar collapsed={collapsed} setCollapsed={setCollapsed} path={path} model={model || { unreadMessages: 0, notifications: [] }} />
     <div className="student-main">
-      <TopBar student={model?.student} onMenu={() => setMobileNav((value) => !value)} onNotifications={() => setNotificationsOpen(true)} onNewTask={() => setStudioOpen(true)} path={path} />
+      <TopBar student={model?.student} onNotifications={() => setNotificationsOpen(true)} onNewTask={() => setStudioOpen(true)} path={path} />
       <main className="student-content">
         {studioOpen ? <TaskCreationStudio onClose={() => setStudioOpen(false)} onCreated={onCreated} /> : path === '/student/help' ? <div className="student-help-panel"><p className="student-overline">HELP & SUPPORT</p><h2>How can we help you?</h2><div className="student-help-grid"><div className="student-help-card"><h3><BookOpen size={20} /> Getting Started</h3><p>Learn how to create your first task, upload assignment briefs, and work with Solvy to structure your academic workflow.</p></div><div className="student-help-card"><h3><MessageCircle size={20} /> Messages</h3><p>Communicate with your assigned expert, ask questions, and receive updates on your tasks.</p></div><div className="student-help-card"><h3><FolderOpen size={20} /> Files & Deliveries</h3><p>Access your completed work, download deliverables, and review revisions.</p></div><div className="student-help-card"><h3><CreditCard size={20} /> Payments</h3><p>View invoices, manage payment methods, and track transaction history.</p></div></div><div className="student-help-contact"><p className="student-overline">NEED MORE HELP?</p><p>If you have any questions or need assistance, reach out to our support team.</p><ActionButton onClick={() => go('/student/messages')}>Contact Support</ActionButton></div></div> : state.loading ? <DashboardSkeleton /> : state.error ? <DashboardError onRetry={load} access={state.error.message === 'STUDENT_ACCESS_REQUIRED'} /> : <div><section className="student-dashboard-heading"><p className="student-overline">STUDENT WORKSPACE</p><h1>{resolveDashboardState(model).headline}</h1><p>{model.focusAction ? 'Your most important task and next action are below.' : model.tasks.length ? 'Your tasks, progress, and updates are together here.' : 'Upload a brief and let Solvy help you understand it before you commit.'}</p></section><StudentNowCanvas model={model} onNewTask={() => setStudioOpen(true)} /><AttentionQueue queue={attentionQueue} /><ActiveTasks tasks={model.tasks} onNewTask={() => setStudioOpen(true)} /><div className="student-lower-grid"><RecentMovement items={model.recentActivity} /><UpcomingSection actions={model.upcomingActions} /></div></div>}
       </main>
       <StudentMobileNav onNewTask={() => setStudioOpen(true)} path={path} />
     </div>
-    {mobileNav && <div className="student-mobile-menu-panel">
-      <div className="student-mobile-menu-head"><strong>Student workspace</strong><button onClick={() => setMobileNav(false)} aria-label="Close navigation"><X size={18} /></button></div>
-      {mobileItems.map(([label, target, Icon]) => <button key={target} onClick={() => { setMobileNav(false); go(target) }}><Icon size={17} />{label}</button>)}
-      <button className="student-mobile-new-task" onClick={() => { setMobileNav(false); setStudioOpen(true) }}><Plus size={17} /><span>New Task</span></button>
-      <button onClick={() => go('/login')}><LogOut size={17} />Sign out</button>
-    </div>}
     <AnimatePresence>
       {notificationsOpen && model && <NotificationDrawer notifications={model.notifications} onClose={() => setNotificationsOpen(false)} />}
     </AnimatePresence>
