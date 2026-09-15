@@ -26,5 +26,8 @@ import './styles/pages/help-page.css'
 import './styles/pages/connect-page.css'
 import './styles/pages/signin-page.css'
 import './components/IntakeCanvas/intake.css'
+import './pages/Student/student-dashboard.css'
+import './pages/Student/student-mobile.css'
+import './pages/Student/student-polish.css'
 
 createRoot(document.getElementById('app')).render(<React.StrictMode><App /></React.StrictMode>)
