@@ -256,17 +256,17 @@ export function StudentDashboard() {
     <StudentSidebar collapsed={collapsed} setCollapsed={setCollapsed} path={path} model={model || { unreadMessages: 0, notifications: [] }} />
     <div className="student-main">
       <TopBar student={model?.student} onMenu={() => setMobileNav((value) => !value)} onNotifications={() => setNotificationsOpen(true)} onNewTask={() => setStudioOpen(true)} path={path} />
-      {mobileNav && <div className="student-mobile-menu-panel">
-        <div className="student-mobile-menu-head"><strong>Student workspace</strong><button onClick={() => setMobileNav(false)} aria-label="Close navigation"><X size={18} /></button></div>
-        {mobileItems.map(([label, target, Icon]) => <button key={target} onClick={() => { setMobileNav(false); go(target) }}><Icon size={17} />{label}</button>)}
-        <button className="student-mobile-new-task" onClick={() => { setMobileNav(false); setStudioOpen(true) }}><Plus size={17} /><span>New Task</span></button>
-        <button onClick={() => go('/login')}><LogOut size={17} />Sign out</button>
-      </div>}
       <main className="student-content">
         {studioOpen ? <TaskCreationStudio onClose={() => setStudioOpen(false)} onCreated={onCreated} /> : path === '/student/help' ? <div className="student-help-panel"><p className="student-overline">HELP & SUPPORT</p><h2>How can we help you?</h2><div className="student-help-grid"><div className="student-help-card"><h3><BookOpen size={20} /> Getting Started</h3><p>Learn how to create your first task, upload assignment briefs, and work with Solvy to structure your academic workflow.</p></div><div className="student-help-card"><h3><MessageCircle size={20} /> Messages</h3><p>Communicate with your assigned expert, ask questions, and receive updates on your tasks.</p></div><div className="student-help-card"><h3><FolderOpen size={20} /> Files & Deliveries</h3><p>Access your completed work, download deliverables, and review revisions.</p></div><div className="student-help-card"><h3><CreditCard size={20} /> Payments</h3><p>View invoices, manage payment methods, and track transaction history.</p></div></div><div className="student-help-contact"><p className="student-overline">NEED MORE HELP?</p><p>If you have any questions or need assistance, reach out to our support team.</p><ActionButton onClick={() => go('/student/messages')}>Contact Support</ActionButton></div></div> : state.loading ? <DashboardSkeleton /> : state.error ? <DashboardError onRetry={load} access={state.error.message === 'STUDENT_ACCESS_REQUIRED'} /> : <div><section className="student-dashboard-heading"><p className="student-overline">STUDENT WORKSPACE</p><h1>{resolveDashboardState(model).headline}</h1><p>{model.focusAction ? 'Your most important task and next action are below.' : model.tasks.length ? 'Your tasks, progress, and updates are together here.' : 'Upload a brief and let Solvy help you understand it before you commit.'}</p></section><StudentNowCanvas model={model} onNewTask={() => setStudioOpen(true)} /><AttentionQueue queue={attentionQueue} /><ActiveTasks tasks={model.tasks} onNewTask={() => setStudioOpen(true)} /><div className="student-lower-grid"><RecentMovement items={model.recentActivity} /><UpcomingSection actions={model.upcomingActions} /></div></div>}
       </main>
       <StudentMobileNav onNewTask={() => setStudioOpen(true)} path={path} />
     </div>
+    {mobileNav && <div className="student-mobile-menu-panel">
+      <div className="student-mobile-menu-head"><strong>Student workspace</strong><button onClick={() => setMobileNav(false)} aria-label="Close navigation"><X size={18} /></button></div>
+      {mobileItems.map(([label, target, Icon]) => <button key={target} onClick={() => { setMobileNav(false); go(target) }}><Icon size={17} />{label}</button>)}
+      <button className="student-mobile-new-task" onClick={() => { setMobileNav(false); setStudioOpen(true) }}><Plus size={17} /><span>New Task</span></button>
+      <button onClick={() => go('/login')}><LogOut size={17} />Sign out</button>
+    </div>}
     <AnimatePresence>
       {notificationsOpen && model && <NotificationDrawer notifications={model.notifications} onClose={() => setNotificationsOpen(false)} />}
     </AnimatePresence>
