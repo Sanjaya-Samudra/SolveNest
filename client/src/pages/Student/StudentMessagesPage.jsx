@@ -42,15 +42,64 @@ const caps = {
   messageSearch: false,
   conversationSearch: true,
   archive: false,
-  reply: true,
+  reply: false,
   moderation: true,
   pagination: true,
 };
 
 /* ---------------------------------------------------------------------
+   Real-time helpers
+--------------------------------------------------------------------- */
+function timeAgo(date) {
+  const now = Date.now();
+  const diffMs = now - date.getTime();
+  const diffMin = Math.floor(diffMs / 60000);
+  if (diffMin < 1) return "Just now";
+  if (diffMin < 60) return `${diffMin} min`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr} h`;
+  const diffDay = Math.floor(diffHr / 24);
+  if (diffDay === 1) return "Yesterday";
+  if (diffDay < 7) return `${diffDay} days`;
+  return date.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+}
+
+function formatTime(date) {
+  return date.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+}
+
+function formatTimestamp(date) {
+  const now = new Date();
+  const isToday = date.toDateString() === now.toDateString();
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const isYesterday = date.toDateString() === yesterday.toDateString();
+  const time = formatTime(date);
+  if (isToday) return time;
+  if (isYesterday) return `Yesterday · ${time}`;
+  return `${date.toLocaleDateString("en-GB", { day: "numeric", month: "short" })} · ${time}`;
+}
+
+function formatShortTimestamp(date) {
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMin = Math.floor(diffMs / 60000);
+  if (diffMin < 1) return "now";
+  if (diffMin < 60) return `${diffMin} min`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr} h`;
+  return date.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+}
+
+/* ---------------------------------------------------------------------
    MOCK DATA — replace wholesale
 --------------------------------------------------------------------- */
 const STAGES = ["Requested", "Assigned", "In Progress", "Quality Review", "Delivered"];
+
+const now = Date.now();
+const min = (m) => new Date(now - m * 60000);
+const hr = (h) => new Date(now - h * 3600000);
+const day = (d) => new Date(now - d * 86400000);
 
 const MOCK = {
   conversations: [
@@ -66,12 +115,17 @@ const MOCK = {
       needsReason: "SolveNest needs clarification about the citation requirement.",
       unread: 2,
       participant: { name: "Amara P.", role: "Verified Expert", initials: "AP", avatar: null, expertise: "Information Systems" },
-      lastAt: "12 min",
+      lastAt: min(12),
       lastPreview: "Can you confirm whether the rubric requires APA 7 or Harvard?",
       lastIsSystem: false,
       deadline: "24 Sep, 23:59",
       plan: "Standard · 2 revisions",
       fileCount: 3,
+      files: [
+        { id: "f1", name: "rubric-v2.pdf", type: "PDF", size: "1.4 MB", uploadedBy: "You", uploadedAt: day(1) },
+        { id: "f2", name: "research-brief.docx", type: "Word", size: "890 KB", uploadedBy: "You", uploadedAt: day(2) },
+        { id: "f3", name: "outline-draft.pdf", type: "PDF", size: "2.1 MB", uploadedBy: "Amara P.", uploadedAt: hr(3) },
+      ],
     },
     {
       id: "c_2039",
@@ -84,12 +138,16 @@ const MOCK = {
       needsStudent: false,
       unread: 0,
       participant: { name: "Nuwan D.", role: "Verified Expert", initials: "ND", avatar: null, expertise: "Databases" },
-      lastAt: "2 h",
+      lastAt: hr(2),
       lastPreview: "Quality review started",
       lastIsSystem: true,
       deadline: "21 Sep, 17:00",
       plan: "Standard · 1 revision",
       fileCount: 2,
+      files: [
+        { id: "f4", name: "assignment-spec.pdf", type: "PDF", size: "1.2 MB", uploadedBy: "You", uploadedAt: day(3) },
+        { id: "f5", name: "sample-dataset.xlsx", type: "Excel", size: "340 KB", uploadedBy: "Nuwan D.", uploadedAt: day(1) },
+      ],
     },
     {
       id: "c_1988",
@@ -102,63 +160,90 @@ const MOCK = {
       needsStudent: false,
       unread: 0,
       participant: { name: "SolveNest Support", role: "SolveNest", initials: "SN", avatar: null, expertise: null },
-      lastAt: "12 Sep",
+      lastAt: day(7),
       lastPreview: "Delivery available",
       lastIsSystem: true,
       deadline: "12 Sep, 09:00",
       plan: "Standard",
       fileCount: 5,
+      files: [
+        { id: "f6", name: "final-delivery.pdf", type: "PDF", size: "4.8 MB", uploadedBy: "SolveNest", uploadedAt: day(7) },
+        { id: "f7", name: "appendix-data.csv", type: "CSV", size: "120 KB", uploadedBy: "SolveNest", uploadedAt: day(7) },
+        { id: "f8", name: "rubric-markscheme.pdf", type: "PDF", size: "980 KB", uploadedBy: "You", uploadedAt: day(10) },
+      ],
     },
   ],
 
   messages: {
     c_2042: [
       { id: "m1", kind: "date", label: "Yesterday" },
-      { id: "m2", kind: "event", event: "EXPERT_ASSIGNED", title: "Expert assigned", at: "Yesterday · 09:12" },
+      { id: "m2", kind: "event", event: "EXPERT_ASSIGNED", title: "Expert assigned", at: day(1) },
       {
         id: "m3", kind: "message", from: "expert", author: "Amara P.", role: "Verified Expert", initials: "AP",
-        at: "09:20", body: "Hi Don — I've read through the brief. I'll start with the literature scan and share an outline before I draft anything.",
+        at: new Date(now - 86400000 + 3600000 * 9 + 60000 * 20),
+        body: "Hi Don — I've read through the brief. I'll start with the literature scan and share an outline before I draft anything.",
       },
       {
         id: "m4", kind: "message", from: "expert", author: "Amara P.", role: "Verified Expert", initials: "AP",
-        at: "09:21", body: "One thing I want to get right up front: the referencing style.",
+        at: new Date(now - 86400000 + 3600000 * 9 + 60000 * 21),
+        body: "One thing I want to get right up front: the referencing style.",
       },
       {
-        id: "m5", kind: "message", from: "student", author: "You", at: "09:44", status: "read",
+        id: "m5", kind: "message", from: "student", author: "You", at: new Date(now - 86400000 + 3600000 * 9 + 60000 * 44), status: "read",
         body: "Sounds good. I've attached the rubric the lecturer gave us.",
         attachments: [{ id: "f1", name: "rubric-v2.pdf", type: "PDF", size: "1.4 MB" }],
       },
-      { id: "m6", kind: "event", event: "FILE_ADDED", title: "File added to task", at: "Yesterday · 09:44" },
+      { id: "m6", kind: "event", event: "FILE_ADDED", title: "File added to task", at: new Date(now - 86400000 + 3600000 * 9 + 60000 * 44) },
       { id: "m7", kind: "date", label: "Today" },
       {
         id: "m8", kind: "message", from: "expert", author: "Amara P.", role: "Verified Expert", initials: "AP",
-        at: "14:02", body: "Evidence review is done. Twelve sources, four of them primary. I'll fold them into the argument section next.",
+        at: new Date(now - 3600000 * 2 + 60000 * 2),
+        body: "Evidence review is done. Twelve sources, four of them primary. I'll fold them into the argument section next.",
       },
-      { id: "m9", kind: "event", event: "PROGRESS_UPDATED", title: "Progress updated — evidence review completed", at: "Today · 14:06" },
+      { id: "m9", kind: "event", event: "PROGRESS_UPDATED", title: "Progress updated — evidence review completed", at: new Date(now - 3600000 * 2 + 60000 * 6) },
       { id: "m10", kind: "unread" },
       {
         id: "m11", kind: "message", from: "expert", author: "Amara P.", role: "Verified Expert", initials: "AP",
-        at: "14:38", body: "Can you confirm whether the rubric requires APA 7 or Harvard? Page 2 says APA, the marking grid says Harvard.",
+        at: new Date(now - 3600000 * 1 + 60000 * 22),
+        body: "Can you confirm whether the rubric requires APA 7 or Harvard? Page 2 says APA, the marking grid says Harvard.",
         needsResponse: true,
       },
       {
         id: "m12", kind: "message", from: "system_person", author: "SolveNest", role: "Support", initials: "SN",
-        at: "14:41", body: "We've flagged this to your lecturer's brief as an open clarification. Answer here and the Expert will see it straight away.",
+        at: new Date(now - 3600000 * 1 + 60000 * 19),
+        body: "We've flagged this to your lecturer's brief as an open clarification. Answer here and the Expert will see it straight away.",
       },
-      { id: "m13", kind: "event", event: "QUALITY_REVIEW", title: "Quality review started", at: "Today · 14:42", action: { label: "View plan", href: "#" } },
+      { id: "m13", kind: "event", event: "QUALITY_REVIEW", title: "Quality review started", at: new Date(now - 3600000 * 1 + 60000 * 18), action: { label: "View plan", href: "#" } },
     ],
     c_2039: [
       { id: "n1", kind: "date", label: "Today" },
-      { id: "n2", kind: "message", from: "expert", author: "Nuwan D.", role: "Verified Expert", initials: "ND", at: "11:05", body: "Draft is with internal checking now. Nothing needed from you at this stage." },
-      { id: "n3", kind: "event", event: "QUALITY_REVIEW", title: "Quality review started", at: "Today · 11:06" },
+      { id: "n2", kind: "message", from: "expert", author: "Nuwan D.", role: "Verified Expert", initials: "ND", at: new Date(now - 3600000 * 2 + 60000 * 5), body: "Draft is with internal checking now. Nothing needed from you at this stage." },
+      { id: "n3", kind: "event", event: "QUALITY_REVIEW", title: "Quality review started", at: new Date(now - 3600000 * 2 + 60000 * 4) },
     ],
     c_1988: [
       { id: "s1", kind: "date", label: "12 Sep" },
-      { id: "s2", kind: "message", from: "system_person", author: "SolveNest", role: "Support", initials: "SN", at: "08:58", body: "Your completed work is ready in Files & Deliveries." },
-      { id: "s3", kind: "event", event: "DELIVERY", title: "Delivery available", at: "12 Sep · 09:00", action: { label: "Open delivery", href: "#" } },
+      { id: "s2", kind: "message", from: "system_person", author: "SolveNest", role: "Support", initials: "SN", at: new Date(day(7).getTime() + 3600000 * 8 + 60000 * 58), body: "Your completed work is ready in Files & Deliveries." },
+      { id: "s3", kind: "event", event: "DELIVERY", title: "Delivery available", at: new Date(day(7).getTime() + 3600000 * 9), action: { label: "Open delivery", href: "#" } },
     ],
   },
 };
+
+/* ---------------------------------------------------------------------
+   Auto-close: conversations with no activity for 2 days get closed.
+   This is a hint only; the backend remains the authority.
+--------------------------------------------------------------------- */
+function autoCloseConversations(conversations) {
+  const TWO_DAYS = 2 * 86400000;
+  const nowTs = Date.now();
+  return conversations.map((c) => {
+    if (c.state === "closed") return c;
+    const lastActivity = c.lastAt instanceof Date ? c.lastAt.getTime() : new Date(c.lastAt).getTime();
+    if (nowTs - lastActivity > TWO_DAYS) {
+      return { ...c, state: "closed", needsStudent: false };
+    }
+    return c;
+  });
+}
 
 /* ---------------------------------------------------------------------
    Local moderation HINT only. Backend remains the authority.
@@ -180,7 +265,6 @@ function screenMessage(text) {
   let m;
   while ((m = phone.exec(text))) {
     const raw = m[0].replace(/\D/g, "");
-    // Skip things that read like years, page ranges, or ID strings
     if (raw.length >= 9 && raw.length <= 13) hits.push({ start: m.index, end: m.index + m[0].length });
   }
   return hits.length ? hits.sort((a, b) => a.start - b.start) : null;
@@ -216,6 +300,8 @@ const Icon = ({ name, ...rest }) => {
     file: <><path d="M4 2h5l3 3v9H4z" /><path d="M9 2v3h3" /></>,
     retry: <><path d="M13 8a5 5 0 1 1-1.6-3.6" /><path d="M13 2.5V5h-2.5" /></>,
     dot: <circle cx="8" cy="8" r="3" fill="currentColor" stroke="none" />,
+    folder: <><path d="M2 4v9a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1H8L6.5 3H3a1 1 0 0 0-1 1z" /></>,
+    open: <><path d="M14 10v3a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h3" /><path d="M9 2h5v5" /><path d="M14 2L7 9" /></>,
   };
   return <svg {...p}>{paths[name]}</svg>;
 };
@@ -273,7 +359,7 @@ function ConversationRow({ c, selected, onSelect }) {
         <span className="sn-row__preview">
           {c.lastIsSystem ? <span className="sn-row__sys">{c.lastPreview}</span> : c.lastPreview}
         </span>
-        <span className="sn-row__time">{c.lastAt}</span>
+        <span className="sn-row__time">{formatShortTimestamp(c.lastAt instanceof Date ? c.lastAt : new Date(c.lastAt))}</span>
         {c.unread > 0 && <span className="sn-row__unread" aria-label={`${c.unread} unread messages`}>{c.unread}</span>}
         {c.needsStudent && <span className="sn-row__needs" aria-label="Needs your response" />}
       </button>
@@ -298,12 +384,13 @@ function Attachment({ a }) {
 }
 
 function SystemEvent({ m }) {
+  const time = m.at instanceof Date ? m.at : new Date(m.at);
   return (
     <div className="sn-event" role="note">
       <span className="sn-event__rule" aria-hidden="true" />
       <span className="sn-event__body">
         <span className="sn-event__title">{m.title}</span>
-        <span className="sn-event__at">{m.at}</span>
+        <span className="sn-event__at">{formatTimestamp(time)}</span>
         {m.action && (
           <a className="sn-event__action" href={m.action.href} onClick={(e) => e.preventDefault()}>
             {m.action.label}
@@ -315,8 +402,9 @@ function SystemEvent({ m }) {
   );
 }
 
-function Message({ m, grouped, onReply }) {
+function Message({ m, grouped }) {
   const mine = m.from === "student";
+  const time = m.at instanceof Date ? m.at : new Date(m.at);
   return (
     <article className={"sn-msg sn-msg--" + m.from + (grouped ? " is-grouped" : "") + (m.pending ? " is-pending" : "") + (m.failed ? " is-failed" : "")}>
       {!grouped && !mine && (
@@ -334,17 +422,11 @@ function Message({ m, grouped, onReply }) {
           </div>
         )}
         <footer className="sn-msg__foot">
-          <span>{m.at}</span>
+          <span>{formatTime(time)}</span>
           {caps.readReceipts && mine && m.status && <span className="sn-msg__status">{m.status}</span>}
           {m.pending && <span className="sn-msg__status">Sending</span>}
           {m.failed && <span className="sn-msg__status is-failed">Not sent</span>}
         </footer>
-        {caps.reply && !m.failed && (
-          <div className="sn-msg__actions">
-            <button type="button" onClick={() => onReply(m)}>Reply</button>
-            <button type="button" onClick={() => navigator.clipboard?.writeText(m.body)}>Copy</button>
-          </div>
-        )}
       </div>
       {m.failed && (
         <div className="sn-msg__failbar">
@@ -384,6 +466,24 @@ function TaskContextBody({ c, onRespond }) {
         <div><dt>Plan</dt><dd>{c.plan}</dd></div>
         <div><dt>Files</dt><dd>{c.fileCount} shared</dd></div>
       </dl>
+
+      {c.files && c.files.length > 0 && (
+        <div className="sn-ctx__files">
+          <p className="sn-ctx__files-h">Open files</p>
+          <ul className="sn-ctx__files-list">
+            {c.files.map((f) => (
+              <li key={f.id}>
+                <a className="sn-ctx__file" href="#" onClick={(e) => e.preventDefault()}>
+                  <Icon name="file" width={14} height={14} />
+                  <span className="sn-ctx__file-name">{f.name}</span>
+                  <span className="sn-ctx__file-meta">{f.type} · {f.size}</span>
+                  <Icon name="open" width={12} height={12} />
+                </a>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className="sn-ctx__expert">
         <span className="sn-avatar sn-avatar--lg" aria-hidden="true">{c.participant.initials}</span>
@@ -507,7 +607,7 @@ function Composer({ conversation, replyTo, onClearReply, onSend, inputRef }) {
    PAGE
 ===================================================================== */
 export function StudentMessagesPage() {
-  const [conversations, setConversations] = useState(MOCK.conversations);
+  const [conversations, setConversations] = useState(() => autoCloseConversations(MOCK.conversations));
   const [threads, setThreads] = useState(MOCK.messages);
   const [selectedId, setSelectedId] = useState("c_2042");
   const [filter, setFilter] = useState("all");
@@ -585,11 +685,12 @@ export function StudentMessagesPage() {
     const id = "tmp_" + Date.now();
     const optimistic = {
       id, kind: "message", from: "student", author: "You",
-      at: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      at: new Date(),
       body: text, pending: true,
       attachments: file ? [{ id: id + "_f", name: file.name, type: (file.name.split(".").pop() || "").toUpperCase(), size: (file.size / 1048576).toFixed(1) + " MB" }] : undefined,
     };
     setThreads((t) => ({ ...t, [selectedId]: [...(t[selectedId] || []), optimistic] }));
+    setConversations((prev) => prev.map((c) => c.id === selectedId ? { ...c, lastAt: new Date(), lastPreview: text, lastIsSystem: false } : c));
     requestAnimationFrame(() => scrollToBottom("smooth"));
     setTimeout(() => {
       setThreads((t) => ({
@@ -719,7 +820,7 @@ export function StudentMessagesPage() {
                 if (m.kind === "event") return <SystemEvent key={m.id} m={m} />;
                 const prev = messages[i - 1];
                 const grouped = prev && prev.kind === "message" && prev.from === m.from && prev.author === m.author;
-                return <Message key={m.id} m={m} grouped={grouped} onReply={(msg) => { setReplyTo(msg); composerRef.current?.focus(); }} />;
+                return <Message key={m.id} m={m} grouped={grouped} />;
               })}
             </div>
 
@@ -884,7 +985,7 @@ const CSS = `
 
 /* ---------- ribbon ---------- */
 .sn-ribbon{ padding:11px 22px 12px; background:var(--sn-surface); border-bottom:1px solid var(--sn-line); }
-.sn-ribbon__rail{ display:flex; align-items:center; gap:0; max-width:520px; }
+.sn-ribbon__rail{ display:flex; align-items:center; gap:0; }
 .sn-ribbon__seg{ flex:1; height:1.5px; background:var(--sn-line); }
 .sn-ribbon__seg.is-done{ background:var(--sn-accent); opacity:.4; }
 .sn-ribbon__node{ width:7px; height:7px; border-radius:50%; background:var(--sn-line);
@@ -894,7 +995,7 @@ const CSS = `
   box-shadow:0 0 0 3px var(--sn-accent-soft); }
 .sn-ribbon.is-advanced .sn-ribbon__node.is-current{ animation:sn-advance .5s cubic-bezier(.2,.7,.3,1); }
 @keyframes sn-advance{ 0%{ transform:translateX(-14px) scale(.7); } 100%{ transform:none; } }
-.sn-ribbon__labels{ display:flex; max-width:520px; margin-top:7px; }
+.sn-ribbon__labels{ display:flex; }
 .sn-ribbon__step{ flex:1; display:flex; flex-direction:column; font-size:12.5px; color:var(--sn-ink-3); }
 .sn-ribbon__step em{ font-style:normal; font-size:10.5px; letter-spacing:.04em; text-transform:uppercase;
   color:#9A9AA8; margin-bottom:1px; }
@@ -948,11 +1049,6 @@ const CSS = `
   font-size:11px; color:var(--sn-ink-3); }
 .sn-msg__status.is-failed{ color:#A33; }
 .sn-msg__files{ margin-top:8px; display:flex; flex-direction:column; gap:6px; }
-.sn-msg__actions{ position:absolute; top:-12px; right:8px; display:none; gap:2px; padding:2px;
-  background:var(--sn-surface); border:1px solid var(--sn-line); border-radius:7px; }
-.sn-msg__actions button{ padding:3px 8px; font-size:11.5px; font-weight:600; color:var(--sn-ink-2); border-radius:5px; }
-.sn-msg__actions button:hover{ background:var(--sn-line-soft); }
-.sn-msg:hover .sn-msg__actions,.sn-msg:focus-within .sn-msg__actions{ display:flex; }
 .sn-msg__failbar{ display:flex; align-items:center; gap:10px; margin-top:4px; font-size:11.5px; color:#A33; }
 .sn-msg__failbar button{ font-weight:650; text-decoration:underline; }
 
@@ -1034,6 +1130,15 @@ const CSS = `
   border-bottom:1px solid var(--sn-line-soft); font-size:12.5px; }
 .sn-ctx__kv dt{ color:var(--sn-ink-3); }
 .sn-ctx__kv dd{ margin:0; font-weight:600; text-align:right; overflow-wrap:anywhere; }
+.sn-ctx__files{ margin-top:14px; }
+.sn-ctx__files-h{ margin:0 0 8px; font-size:10.5px; font-weight:700; letter-spacing:.06em;
+  text-transform:uppercase; color:#9A9AA8; }
+.sn-ctx__files-list{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:4px; }
+.sn-ctx__file{ display:flex; align-items:center; gap:7px; padding:6px 8px; text-decoration:none;
+  color:var(--sn-ink); border-radius:6px; transition:background .12s ease; font-size:12.5px; }
+.sn-ctx__file:hover{ background:var(--sn-canvas); }
+.sn-ctx__file-name{ flex:1; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; font-weight:500; }
+.sn-ctx__file-meta{ color:var(--sn-ink-3); font-size:11px; flex:none; }
 .sn-ctx__expert{ display:flex; align-items:center; gap:11px; margin-top:16px; }
 .sn-ctx__expert-name{ margin:0; font-size:13.5px; font-weight:650; }
 .sn-ctx__expert-role{ margin:1px 0 0; font-size:11.5px; color:var(--sn-ink-3); }
