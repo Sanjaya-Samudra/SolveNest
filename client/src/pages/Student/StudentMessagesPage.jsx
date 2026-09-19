@@ -421,12 +421,6 @@ function Message({ m, grouped }) {
             {m.attachments.map((a) => <Attachment key={a.id} a={a} />)}
           </div>
         )}
-        <footer className="sn-msg__foot">
-          <span>{formatTime(time)}</span>
-          {caps.readReceipts && mine && m.status && <span className="sn-msg__status">{m.status}</span>}
-          {m.pending && <span className="sn-msg__status">Sending</span>}
-          {m.failed && <span className="sn-msg__status is-failed">Not sent</span>}
-        </footer>
       </div>
       {m.failed && (
         <div className="sn-msg__failbar">
@@ -1045,9 +1039,6 @@ const CSS = `
 .sn-msg.is-pending .sn-msg__bubble{ opacity:.6; }
 .sn-msg.is-failed .sn-msg__bubble{ border-color:#E0B4B4; }
 .sn-msg__body{ margin:0; font-size:15px; line-height:1.55; white-space:pre-wrap; overflow-wrap:anywhere; }
-.sn-msg__foot{ display:flex; gap:8px; justify-content:flex-end; margin-top:4px;
-  font-size:11px; color:var(--sn-ink-3); }
-.sn-msg__status.is-failed{ color:#A33; }
 .sn-msg__files{ margin-top:8px; display:flex; flex-direction:column; gap:6px; }
 .sn-msg__failbar{ display:flex; align-items:center; gap:10px; margin-top:4px; font-size:11.5px; color:#A33; }
 .sn-msg__failbar button{ font-weight:650; text-decoration:underline; }
