@@ -147,7 +147,7 @@ function TaskMenu({ task }) {
   useEffect(() => { if (!open) return; const h = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }; document.addEventListener('mousedown', h); return () => document.removeEventListener('mousedown', h) }, [open])
   const actions = [
     { label: 'Open task', route: task.nextAction.route || '/student/tasks' },
-    task.display.key === 'DELIVERED' && { label: 'Review delivery', route: '/student/deliveries' },
+    task.display.key === 'DELIVERED' && { label: 'Review delivery', route: '/student/files' },
     { label: 'Open messages', route: '/student/messages' },
   ].filter(Boolean)
   return <div className="my-task-menu-wrap" ref={ref}>

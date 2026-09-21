@@ -12,7 +12,7 @@ const TASK_STATES = {
   ASSIGNMENT_PENDING: { label: 'Matching expertise', tone: 'calm', stage: 'MATCH', next: 'View task', route: '/student/tasks' },
   IN_PROGRESS: { label: 'In progress', tone: 'active', stage: 'PROGRESS', next: 'View progress', route: '/student/tasks' },
   QUALITY_REVIEW: { label: 'Quality review', tone: 'active', stage: 'VERIFY', next: 'View task', route: '/student/tasks' },
-  DELIVERED: { label: 'Delivery ready', tone: 'attention', stage: 'DELIVER', next: 'Review delivery', route: '/student/deliveries' },
+  DELIVERED: { label: 'Delivery ready', tone: 'attention', stage: 'DELIVER', next: 'Review delivery', route: '/student/files' },
   REVISION_REQUESTED: { label: 'Revision requested', tone: 'attention', stage: 'DELIVER', next: 'Review revision', route: '/student/tasks' },
   REVISION_IN_PROGRESS: { label: 'Revision in progress', tone: 'active', stage: 'PROGRESS', next: 'View progress', route: '/student/tasks' },
   COMPLETED: { label: 'Completed', tone: 'complete', stage: 'LEARN', next: 'Open task', route: '/student/tasks' },
