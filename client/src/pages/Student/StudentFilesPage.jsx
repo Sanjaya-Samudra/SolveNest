@@ -54,7 +54,7 @@ function ClickOutside({ onClick, children }) {
 function FilesHeader({ dossierCount, newDeliveries, onFocusDelivery }) {
   return (
     <section className="sn-files-header">
-      <p className="sn-files-overline">STUDENT WORKSPACE</p>
+      <p className="student-overline">STUDENT WORKSPACE</p>
       <h1>Files & Deliveries</h1>
       <p className="sn-files-subtitle">Everything connected to your SolveNest tasks, from the original brief to final delivery.</p>
       {newDeliveries > 0 && (
@@ -168,12 +168,14 @@ function TaskDossierNavigator({ dossiers, selectedId, onSelect, loading }) {
           const selected = d.taskId === selectedId
           return (
             <button key={d.taskId} role="option" aria-selected={selected} className={`sn-files-nav-row ${selected ? 'is-selected' : ''}`} onClick={() => onSelect(d.taskId)}>
-              <div className="sn-files-nav-title">{d.task.title}</div>
+              <div className="sn-files-nav-top">
+                <div className="sn-files-nav-title">{d.task.title}</div>
+                {d.hasNewDelivery && <span className="sn-files-new-badge">NEW</span>}
+              </div>
               <div className="sn-files-nav-meta">
                 <span className={`sn-files-status-dot tone-${d.display.tone}`} /><span>{d.display.label}</span>
                 <span className="sn-files-nav-count">{d.fileCount} file{d.fileCount === 1 ? '' : 's'}</span>
               </div>
-              {d.hasNewDelivery && <span className="sn-files-new-badge">NEW DELIVERY</span>}
             </button>
           )
         })}
@@ -201,6 +203,11 @@ function FileLedgerRow({ file, section, onPreview, onDownload, onReplace, onRemo
         <span className="sn-files-row-role">{file.role || file.type || ''}</span>
         <span className="sn-files-row-date">{formatDate(file.uploadedAt, { year: undefined })}</span>
         <span className="sn-files-row-size">{formatFileSize(file.size)}</span>
+      </div>
+      <div className="sn-files-row-meta-mobile">
+        {(file.role || file.type) && <span>{file.role || file.type}</span>}
+        <span>{formatDate(file.uploadedAt, { year: undefined })}</span>
+        <span>{formatFileSize(file.size)}</span>
       </div>
       <div className="sn-files-row-actions">
         {file.locked && <span className="sn-files-locked-badge" title={file.lockReason || 'Locked to confirmed scope'}><Lock size={13} /> Locked</span>}
@@ -307,63 +314,54 @@ function DeliveryPackage({ dossier, version, onPreview, onDownload, onRevision }
       <p className="sn-files-muted-copy">Not available yet. Current task stage: {dossier.display.label}. Delivery files will appear here when approved.</p>
     </div>
   )
-  const isCurrent = version === null || version === delivery.version
   return (
     <div className="sn-files-section sn-files-delivery-section">
-      <div className="sn-files-delivery-header">
-        <p className="sn-files-overline">DELIVERY PACKAGE {delivery.version ? `— VERSION ${delivery.version}` : ''}</p>
-        <p className="sn-files-delivery-meta">
-          Delivered {formatDate(delivery.deliveredAt)}
-          {delivery.deliveredAt && <span className="sn-files-delivery-time">{new Date(delivery.deliveredAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}</span>}
-          {!isCurrent && <span className="sn-files-prev-version-badge">PREVIOUS VERSION</span>}
-        </p>
-      </div>
-      <DeliveryVersionRail versions={dossier.deliveryVersions} current={delivery} onSelect={() => {}} />
-      <div className="sn-files-delivery-status-bar">
+      <div className="sn-files-delivery-top">
+        <div className="sn-files-delivery-header">
+          <p className="sn-files-overline">DELIVERY PACKAGE {delivery.version ? `— V${delivery.version}` : ''}</p>
+          <p className="sn-files-delivery-meta">
+            Delivered {formatDate(delivery.deliveredAt)}
+            {delivery.deliveredAt && <span className="sn-files-delivery-time">{new Date(delivery.deliveredAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}</span>}
+          </p>
+        </div>
         <span className={`sn-files-delivery-status tone-${delivery.status === 'ready_to_review' ? 'attention' : delivery.status === 'accepted' || delivery.status === 'completed' ? 'complete' : 'active'}`}>
           {DELIVERY_STATUS_LABELS[delivery.status] || delivery.status}
         </span>
       </div>
+      {dossier.deliveryVersions.length > 1 && <DeliveryVersionRail versions={dossier.deliveryVersions} current={delivery} onSelect={() => {}} />}
       {delivery.files.length > 0 && (
         <div className="sn-files-delivery-files">
           {delivery.files.map((f) => (
             <div key={f.id} className="sn-files-delivery-file-row">
-              <DossierIcon filename={f.name} size={16} />
-              <span className="sn-files-row-name" title={f.name}>{f.name}</span>
-              <span className="sn-files-row-type">{f.type || ''}</span>
+              <DossierIcon filename={f.name} size={15} />
+              <span className="sn-files-delivery-file-name" title={f.name}>{f.name}</span>
               <span className="sn-files-row-size">{formatFileSize(f.size)}</span>
               <div className="sn-files-delivery-file-actions">
-                <button className="sn-files-action-link" onClick={() => onPreview(f)}><Eye size={13} /> Preview</button>
-                <button className="sn-files-action-link" onClick={() => onDownload(f)}><Download size={13} /> Download</button>
+                <button className="sn-files-action-link" onClick={() => onPreview(f)}><Eye size={12} /> Preview</button>
+                <button className="sn-files-action-link" onClick={() => onDownload(f)}><Download size={12} /> Download</button>
               </div>
             </div>
           ))}
         </div>
       )}
-      {delivery.qa && (
-        <div className="sn-files-delivery-qa">
-          <p className="sn-files-overline">QUALITY CHECK</p>
-          <div className="sn-files-qa-items">
-            {delivery.qa.checks?.map((c, i) => <span key={i} className={`sn-files-qa-item ${c.pass ? 'is-pass' : 'is-fail'}`}>{c.label}</span>)}
-            {!delivery.qa.checks && delivery.qa.complete && <span className="sn-files-qa-item is-pass">Requirements reviewed</span>}
-          </div>
-        </div>
-      )}
-      {delivery.note && <div className="sn-files-delivery-note"><p className="sn-files-overline">DELIVERY NOTE</p><p>{delivery.note}</p></div>}
-      {revState.status && (
-        <div className={`sn-files-revision-notice sn-files-revision-${revState.status}`}>
-          <div className="sn-files-revision-header">
-            <p className="sn-files-overline">{REVISION_STATUS_LABELS[revState.status] || 'REVISION'}</p>
-          </div>
-          <p className="sn-files-revision-copy">{revState.copy}</p>
-          {revState.status === 'available' && <button className="sn-files-btn sn-files-btn--primary" onClick={() => onRevision(dossier.taskId)}>Request Revision →</button>}
-        </div>
-      )}
-      {delivery.explainAndDefend && (
-        <div className="sn-files-explain-bridge">
-          <p className="sn-files-overline">UNDERSTAND YOUR DELIVERY</p>
-          <p>Go beyond the files. Review concepts, practise questions and prepare to explain your work.</p>
-          <button className="sn-files-btn sn-files-btn--primary" onClick={() => go(delivery.explainAndDefend.route || '/student/explain')}>Open Explain & Defend →</button>
+      {(delivery.qa || delivery.note || revState.status || delivery.explainAndDefend) && (
+        <div className="sn-files-delivery-meta-strip">
+          {delivery.qa && (
+            <div className="sn-files-strip-qa">
+              {delivery.qa.checks?.map((c, i) => <span key={i} className={`sn-files-qa-dot ${c.pass ? 'is-pass' : 'is-fail'}`} title={c.label} />)}
+              {!delivery.qa.checks && delivery.qa.complete && <span className="sn-files-qa-dot is-pass" title="Requirements reviewed" />}
+            </div>
+          )}
+          {delivery.note && <span className="sn-files-strip-note" title={delivery.note}>Note: {delivery.note}</span>}
+          {revState.status && (
+            <span className={`sn-files-strip-revision sn-files-revision-${revState.status}`}>
+              {REVISION_STATUS_LABELS[revState.status] || 'REVISION'}
+              {revState.status === 'available' && <button className="sn-files-strip-btn" onClick={() => onRevision(dossier.taskId)}>Request Revision →</button>}
+            </span>
+          )}
+          {delivery.explainAndDefend && (
+            <button className="sn-files-strip-btn sn-files-strip-btn--explain" onClick={() => go(delivery.explainAndDefend.route || '/student/explain')}>Explain & Defend →</button>
+          )}
         </div>
       )}
     </div>
@@ -675,9 +673,11 @@ export function StudentFilesPage() {
           <div className="sn-files-mobile-list">
             {sortDossiers(filterDossiers(dossiers, { search, view }), sort).map((d) => (
               <button key={d.taskId} className="sn-files-mobile-task-row" onClick={() => handleSelectTask(d.taskId)}>
-                <div className="sn-files-mobile-task-title">{d.task.title}</div>
+                <div className="sn-files-mobile-task-top">
+                  <div className="sn-files-mobile-task-title">{d.task.title}</div>
+                  {d.hasNewDelivery && <span className="sn-files-new-badge">NEW</span>}
+                </div>
                 <div className="sn-files-mobile-task-meta">{d.display.label} · {d.fileCount} file{d.fileCount === 1 ? '' : 's'}</div>
-                {d.hasNewDelivery && <span className="sn-files-new-badge">NEW DELIVERY</span>}
               </button>
             ))}
           </div>

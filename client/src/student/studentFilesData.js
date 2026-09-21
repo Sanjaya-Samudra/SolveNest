@@ -175,131 +175,6 @@ export function syncDossierUrlState(state) {
   window.history.replaceState({}, '', url)
 }
 
-/* ── Mock Data ──────────────────────────────────────────────────────────── */
-
-const MOCK_DOSSIERS = [
-  {
-    id: 'task-1', taskId: 'task-1', title: 'Research Report — Information Systems', reference: 'SN-2042',
-    subject: 'Information Systems', status: 'DELIVERED', fileCount: 8,
-    hasNewDelivery: true, lastActivityAt: '2026-09-19T18:42:00Z',
-    expert: { name: 'Amara P.' },
-    sourceFiles: [
-      { id: 'sf-1', name: 'assessment-2-brief.pdf', type: 'application/pdf', size: 1843200, role: 'brief', origin: 'student', uploadedAt: '2026-09-14T09:44:00Z', uploadedByName: 'You', canReplace: true, canRemove: false, locked: true, lockReason: 'Locked to confirmed scope' },
-      { id: 'sf-2', name: 'rubric-marking-scheme.pdf', type: 'application/pdf', size: 524288, role: 'rubric', origin: 'student', uploadedAt: '2026-09-14T09:45:00Z', uploadedByName: 'You', canReplace: false, canRemove: false, locked: true },
-      { id: 'sf-3', name: 'lecture-notes-ch4.pptx', type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', size: 4194304, role: 'reference', origin: 'student', uploadedAt: '2026-09-14T09:46:00Z', uploadedByName: 'You', canReplace: false, canRemove: false, locked: false },
-      { id: 'sf-4', name: 'sample-dataset.csv', type: 'text/csv', size: 104857, role: 'supporting', origin: 'student', uploadedAt: '2026-09-14T10:02:00Z', uploadedByName: 'You', canReplace: true, canRemove: true, locked: false },
-    ],
-    exchangeFiles: [
-      { id: 'ef-1', name: 'dataset-cleaned.xlsx', type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', size: 524288, role: 'supporting', origin: 'expert', uploadedAt: '2026-09-15T14:42:00Z', conversationId: 'conv-1' },
-      { id: 'ef-2', name: 'methodology-outline.docx', type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', size: 209715, role: 'supporting', origin: 'expert', uploadedAt: '2026-09-16T11:05:00Z', conversationId: 'conv-1' },
-      { id: 'ef-3', name: 'additional-references.pdf', type: 'application/pdf', size: 734003, role: 'reference', origin: 'expert', uploadedAt: '2026-09-17T09:20:00Z', conversationId: null },
-    ],
-    deliveryVersions: [
-      {
-        id: 'dv-1', version: 1, deliveredAt: '2026-09-12T18:00:00Z', status: 'accepted',
-        files: [
-          { id: 'df-1', name: 'Report_V1.pdf', type: 'application/pdf', size: 2097152 },
-          { id: 'df-2', name: 'Appendix_V1.pdf', type: 'application/pdf', size: 524288 },
-        ],
-        qa: { complete: true, checks: [{ label: 'Requirements reviewed', pass: true }, { label: 'Citation checked', pass: true }] },
-        note: 'Initial delivery covering all required sections.',
-        revision: { status: 'completed', remaining: 1 },
-        explainAndDefend: null,
-      },
-      {
-        id: 'dv-2', version: 2, deliveredAt: '2026-09-19T18:42:00Z', status: 'ready_to_review',
-        files: [
-          { id: 'df-3', name: 'Final_Report.docx', type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', size: 3145728 },
-          { id: 'df-4', name: 'Final_Report.pdf', type: 'application/pdf', size: 2621440 },
-          { id: 'df-5', name: 'Reference_List.pdf', type: 'application/pdf', size: 104857 },
-          { id: 'df-6', name: 'Code_Source.zip', type: 'application/zip', size: 1572864 },
-        ],
-        qa: { complete: true, checks: [{ label: 'Requirements reviewed', pass: true }, { label: 'Citation checked', pass: true }, { label: 'Files verified', pass: true }] },
-        note: 'Revised per feedback — added methodology section and cleaned dataset analysis.',
-        revision: { status: 'available', remaining: 1 },
-        explainAndDefend: { eligible: true, route: '/student/explain' },
-      },
-    ],
-  },
-  {
-    id: 'task-2', taskId: 'task-2', title: 'Marketing Strategy Proposal', reference: 'SN-2051',
-    subject: 'Business Administration', status: 'IN_PROGRESS', fileCount: 3,
-    hasNewDelivery: false, lastActivityAt: '2026-09-18T10:30:00Z',
-    expert: { name: 'Jordan K.' },
-    sourceFiles: [
-      { id: 'sf-5', name: 'assignment-brief.pdf', type: 'application/pdf', size: 921600, role: 'brief', origin: 'student', uploadedAt: '2026-09-16T08:15:00Z', uploadedByName: 'You', canReplace: false, canRemove: false, locked: true },
-      { id: 'sf-6', name: 'brand-guidelines-v3.pdf', type: 'application/pdf', size: 3145728, role: 'reference', origin: 'student', uploadedAt: '2026-09-16T08:17:00Z', uploadedByName: 'You', canReplace: false, canRemove: false, locked: false },
-    ],
-    exchangeFiles: [
-      { id: 'ef-4', name: 'competitor-analysis.xlsx', type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', size: 262144, role: 'supporting', origin: 'expert', uploadedAt: '2026-09-18T10:30:00Z', conversationId: 'conv-2' },
-    ],
-    deliveryVersions: [],
-  },
-  {
-    id: 'task-3', taskId: 'task-3', title: 'Data Structures & Algorithms', reference: 'SN-2038',
-    subject: 'Computer Science', status: 'COMPLETED', fileCount: 5,
-    hasNewDelivery: false, lastActivityAt: '2026-09-10T16:00:00Z',
-    expert: { name: 'Priya S.' },
-    sourceFiles: [
-      { id: 'sf-7', name: 'problem-set.pdf', type: 'application/pdf', size: 655360, role: 'brief', origin: 'student', uploadedAt: '2026-09-05T12:00:00Z', uploadedByName: 'You', canReplace: false, canRemove: false, locked: true },
-      { id: 'sf-8', name: 'grading-rubric.pdf', type: 'application/pdf', size: 204800, role: 'rubric', origin: 'student', uploadedAt: '2026-09-05T12:01:00Z', uploadedByName: 'You', canReplace: false, canRemove: false, locked: true },
-    ],
-    exchangeFiles: [],
-    deliveryVersions: [
-      {
-        id: 'dv-3', version: 1, deliveredAt: '2026-09-10T16:00:00Z', status: 'accepted',
-        files: [
-          { id: 'df-7', name: 'Solution_Implementation.py', type: 'text/x-python', size: 15360 },
-          { id: 'df-8', name: 'Test_Cases.py', type: 'text/x-python', size: 8192 },
-          { id: 'df-9', name: 'Report.pdf', type: 'application/pdf', size: 1572864 },
-        ],
-        qa: { complete: true, checks: [{ label: 'Code compiles', pass: true }, { label: 'Tests passing', pass: true }, { label: 'Report complete', pass: true }] },
-        note: null,
-        revision: { status: null, remaining: null },
-        explainAndDefend: { eligible: true, route: '/student/explain' },
-      },
-    ],
-  },
-  {
-    id: 'task-4', taskId: 'task-4', title: 'Nursing Reflective Essay', reference: 'SN-2055',
-    subject: 'Nursing', status: 'QUOTE_READY', fileCount: 1,
-    hasNewDelivery: false, lastActivityAt: '2026-09-20T09:00:00Z',
-    expert: null,
-    sourceFiles: [
-      { id: 'sf-9', name: 'essay-prompt.pdf', type: 'application/pdf', size: 307200, role: 'brief', origin: 'student', uploadedAt: '2026-09-20T08:45:00Z', uploadedByName: 'You', canReplace: true, canRemove: true, locked: false },
-    ],
-    exchangeFiles: [],
-    deliveryVersions: [],
-  },
-  {
-    id: 'task-5', taskId: 'task-5', title: 'Environmental Impact Assessment', reference: 'SN-2060',
-    subject: 'Environmental Science', status: 'REVISION_REQUESTED', fileCount: 7,
-    hasNewDelivery: false, lastActivityAt: '2026-09-21T07:30:00Z',
-    expert: { name: 'Dr. Chen W.' },
-    sourceFiles: [
-      { id: 'sf-10', name: 'project-brief.pdf', type: 'application/pdf', size: 1228800, role: 'brief', origin: 'student', uploadedAt: '2026-09-11T10:00:00Z', uploadedByName: 'You', canReplace: false, canRemove: false, locked: true },
-      { id: 'sf-11', name: 'site-photos.zip', type: 'application/zip', size: 8388608, role: 'supporting', origin: 'student', uploadedAt: '2026-09-11T10:03:00Z', uploadedByName: 'You', canReplace: false, canRemove: false, locked: false },
-    ],
-    exchangeFiles: [
-      { id: 'ef-5', name: 'preliminary-data.xlsx', type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', size: 409600, role: 'supporting', origin: 'expert', uploadedAt: '2026-09-14T15:00:00Z', conversationId: 'conv-3' },
-    ],
-    deliveryVersions: [
-      {
-        id: 'dv-4', version: 1, deliveredAt: '2026-09-18T14:00:00Z', status: 'revision_in_progress',
-        files: [
-          { id: 'df-10', name: 'Assessment_Draft.pdf', type: 'application/pdf', size: 4194304 },
-        ],
-        qa: { complete: true, checks: [{ label: 'Structure reviewed', pass: true }, { label: 'Data validated', pass: false }] },
-        note: 'Good structure but data analysis needs strengthening in Section 4.',
-        revision: { status: 'in_progress', remaining: 0 },
-        explainAndDefend: null,
-      },
-    ],
-  },
-]
-
-function delay(ms) { return new Promise((r) => setTimeout(r, ms)) }
-
 /* ── API Functions ──────────────────────────────────────────────────────── */
 
 export async function fetchTaskDossiers({ page = 1, perPage = 20, view = 'all', search = '', filters = {}, sort = 'recently-updated', signal } = {}) {
@@ -310,51 +185,28 @@ export async function fetchTaskDossiers({ page = 1, perPage = 20, view = 'all', 
   if (filters.fileRole) params.set('file_role', filters.fileRole)
   if (filters.deliveryVersion) params.set('delivery_version', String(filters.deliveryVersion))
   if (filters.date) params.set('date', filters.date)
-  try {
-    const response = await fetch(`/api/student/dossiers?${params}`, { credentials: 'include', headers: { Accept: 'application/json' }, signal })
-    if (response.status === 401 || response.status === 403) {
-      const error = new Error('STUDENT_ACCESS_REQUIRED')
-      error.code = response.status
-      throw error
-    }
-    if (!response.ok) throw new Error(`STUDENT_DOSSIERS_${response.status}`)
-    const payload = await response.json()
-    const rows = Array.isArray(payload) ? payload : payload.dossiers || payload.data || []
-    return { dossiers: rows.map(mapDossier), meta: payload.meta || null, facets: payload.facets || null }
-  } catch (err) {
-    if (err.code === 401 || err.code === 403) throw err
-    if (err.name === 'AbortError') throw err
-    await delay(400)
-    let result = MOCK_DOSSIERS.map(mapDossier)
-    if (view === 'my-uploads') result = result.filter((d) => d.sourceFiles.some((f) => f.origin === 'you' || f.origin === 'student'))
-    if (view === 'deliveries') result = result.filter((d) => d.deliveryVersions.length > 0)
-    if (search) {
-      const term = search.toLowerCase()
-      result = result.filter((d) => [d.task.title, d.task.reference, d.task.subject, ...d.sourceFiles.map((f) => f.name), ...d.exchangeFiles.map((f) => f.name)].filter(Boolean).join(' ').toLowerCase().includes(term))
-    }
-    return { dossiers: result, meta: { total: result.length, current_page: 1, last_page: 1 }, facets: null }
+  const response = await fetch(`/api/student/dossiers?${params}`, { credentials: 'include', headers: { Accept: 'application/json' }, signal })
+  if (response.status === 401 || response.status === 403) {
+    const error = new Error('STUDENT_ACCESS_REQUIRED')
+    error.code = response.status
+    throw error
   }
+  if (!response.ok) throw new Error(`STUDENT_DOSSIERS_${response.status}`)
+  const payload = await response.json()
+  const rows = Array.isArray(payload) ? payload : payload.dossiers || payload.data || []
+  return { dossiers: rows.map(mapDossier), meta: payload.meta || null, facets: payload.facets || null }
 }
 
 export async function fetchTaskDossierDetail(taskId, { signal } = {}) {
-  try {
-    const response = await fetch(`/api/student/dossiers/${encodeURIComponent(taskId)}`, { credentials: 'include', headers: { Accept: 'application/json' }, signal })
-    if (response.status === 401 || response.status === 403) {
-      const error = new Error('STUDENT_ACCESS_REQUIRED')
-      error.code = response.status
-      throw error
-    }
-    if (!response.ok) throw new Error(`STUDENT_DOSSIER_DETAIL_${response.status}`)
-    const payload = await response.json()
-    return mapDossier(payload.dossier || payload.data || payload)
-  } catch (err) {
-    if (err.code === 401 || err.code === 403) throw err
-    if (err.name === 'AbortError') throw err
-    await delay(300)
-    const found = MOCK_DOSSIERS.find((d) => d.taskId === taskId || d.id === taskId)
-    if (!found) throw new Error('NOT_FOUND')
-    return mapDossier(found)
+  const response = await fetch(`/api/student/dossiers/${encodeURIComponent(taskId)}`, { credentials: 'include', headers: { Accept: 'application/json' }, signal })
+  if (response.status === 401 || response.status === 403) {
+    const error = new Error('STUDENT_ACCESS_REQUIRED')
+    error.code = response.status
+    throw error
   }
+  if (!response.ok) throw new Error(`STUDENT_DOSSIER_DETAIL_${response.status}`)
+  const payload = await response.json()
+  return mapDossier(payload.dossier || payload.data || payload)
 }
 
 export async function fetchDeliveryPackage(taskId, version, { signal } = {}) {
@@ -422,21 +274,14 @@ export async function uploadTaskFile(taskId, file, { section = 'source', onProgr
 }
 
 export async function removeTaskFile(fileId, { signal } = {}) {
-  try {
-    const response = await fetch(`/api/student/files/${encodeURIComponent(fileId)}`, { method: 'DELETE', credentials: 'include', headers: { Accept: 'application/json' }, signal })
-    if (response.status === 401 || response.status === 403) {
-      const error = new Error('STUDENT_ACCESS_REQUIRED')
-      error.code = response.status
-      throw error
-    }
-    if (!response.ok) throw new Error(`STUDENT_FILE_REMOVE_${response.status}`)
-    return true
-  } catch (err) {
-    if (err.code === 401 || err.code === 403) throw err
-    if (err.name === 'AbortError') throw err
-    await delay(200)
-    return true
+  const response = await fetch(`/api/student/files/${encodeURIComponent(fileId)}`, { method: 'DELETE', credentials: 'include', headers: { Accept: 'application/json' }, signal })
+  if (response.status === 401 || response.status === 403) {
+    const error = new Error('STUDENT_ACCESS_REQUIRED')
+    error.code = response.status
+    throw error
   }
+  if (!response.ok) throw new Error(`STUDENT_FILE_REMOVE_${response.status}`)
+  return true
 }
 
 export async function replaceTaskFile(fileId, file, { onProgress, signal } = {}) {
@@ -470,28 +315,21 @@ export async function replaceTaskFile(fileId, file, { onProgress, signal } = {})
 }
 
 export async function requestRevision(taskId, { note, signal } = {}) {
-  try {
-    const response = await fetch(`/api/student/dossiers/${encodeURIComponent(taskId)}/revision`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ note: note || '' }),
-      signal,
-    })
-    if (response.status === 401 || response.status === 403) {
-      const error = new Error('STUDENT_ACCESS_REQUIRED')
-      error.code = response.status
-      throw error
-    }
-    if (!response.ok) throw new Error(`STUDENT_REVISION_${response.status}`)
-    const payload = await response.json()
-    return payload.revision || payload.data || payload
-  } catch (err) {
-    if (err.code === 401 || err.code === 403) throw err
-    if (err.name === 'AbortError') throw err
-    await delay(300)
-    return { status: 'requested', remaining: 0 }
+  const response = await fetch(`/api/student/dossiers/${encodeURIComponent(taskId)}/revision`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ note: note || '' }),
+    signal,
+  })
+  if (response.status === 401 || response.status === 403) {
+    const error = new Error('STUDENT_ACCESS_REQUIRED')
+    error.code = response.status
+    throw error
   }
+  if (!response.ok) throw new Error(`STUDENT_REVISION_${response.status}`)
+  const payload = await response.json()
+  return payload.revision || payload.data || payload
 }
 
 /* ── Helpers ────────────────────────────────────────────────────────────── */
