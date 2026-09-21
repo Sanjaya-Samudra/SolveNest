@@ -233,3 +233,165 @@ Multipart form data with `file` field. Returns the uploaded file object.
 3. Enforce student ownership — a student can only see conversations linked to their tasks.
 4. The `unreadMessages` count on `GET /api/student/dashboard` should be derived from actual conversation data.
 5. Auto-close conversations with no activity for 2+ days is a frontend hint only; backend remains the authority on conversation state.
+
+## Files & Deliveries endpoints
+
+The `/student/files` page reads from task dossier endpoints. Each dossier groups a task's source materials, exchanges, and delivery packages.
+
+### List task dossiers
+
+`GET /api/student/dossiers`
+
+Query params: `page` (default 1), `per_page` (default 20), `view` (all|my-uploads|deliveries), `search`, `sort` (recently-updated|newest|oldest|name|task), `file_type`, `file_role`, `delivery_version`, `task`.
+
+```json
+{
+  "dossiers": [
+    {
+      "id": "task-id",
+      "taskId": "task-id",
+      "title": "Research Report",
+      "reference": "SN-2042",
+      "subject": "Information Systems",
+      "status": "IN_PROGRESS",
+      "fileCount": 6,
+      "hasNewDelivery": true,
+      "lastActivityAt": "2026-09-19T14:38:00Z",
+      "expert": { "name": "Amara P." },
+      "sourceFiles": [
+        {
+          "id": "file-id",
+          "name": "assessment-2.pdf",
+          "type": "application/pdf",
+          "size": 1843200,
+          "role": "brief",
+          "origin": "student",
+          "uploadedAt": "2026-09-14T09:44:00Z",
+          "uploadedByName": "You",
+          "canReplace": true,
+          "canRemove": false,
+          "locked": false
+        }
+      ],
+      "exchangeFiles": [
+        {
+          "id": "file-id",
+          "name": "dataset-cleaned.xlsx",
+          "type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          "size": 524288,
+          "role": "supporting",
+          "origin": "expert",
+          "uploadedAt": "2026-09-15T14:42:00Z",
+          "conversationId": "conv-id"
+        }
+      ],
+      "deliveryVersions": [
+        {
+          "id": "del-v1",
+          "version": 1,
+          "deliveredAt": "2026-09-12T18:00:00Z",
+          "status": "accepted",
+          "files": [
+            { "id": "df-1", "name": "Report_V1.pdf", "type": "application/pdf", "size": 2097152 }
+          ],
+          "qa": { "complete": true, "checks": [{ "label": "Requirements reviewed", "pass": true }, { "label": "Citation checked", "pass": true }] },
+          "note": "Initial delivery covering all sections.",
+          "revision": { "status": "completed", "remaining": 1 },
+          "explainAndDefend": null
+        },
+        {
+          "id": "del-v2",
+          "version": 2,
+          "deliveredAt": "2026-09-19T18:42:00Z",
+          "status": "ready_to_review",
+          "files": [
+            { "id": "df-3", "name": "Final_Report.docx", "type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "size": 3145728 },
+            { "id": "df-4", "name": "Final_Report.pdf", "type": "application/pdf", "size": 2621440 },
+            { "id": "df-5", "name": "Reference_List.pdf", "type": "application/pdf", "size": 104857 }
+          ],
+          "qa": { "complete": true, "checks": [{ "label": "Requirements reviewed", "pass": true }, { "label": "Citation checked", "pass": true }, { "label": "Files verified", "pass": true }] },
+          "note": "Revised per feedback — added methodology section.",
+          "revision": { "status": "available", "remaining": 1 },
+          "explainAndDefend": { "eligible": true, "route": "/student/explain" }
+        }
+      ]
+    }
+  ],
+  "meta": { "total": 6, "current_page": 1, "last_page": 1 },
+  "facets": {
+    "fileTypes": ["pdf", "docx", "xlsx"],
+    "fileRoles": ["brief", "rubric", "reference", "supporting", "deliverable"]
+  }
+}
+```
+
+### Get dossier detail
+
+`GET /api/student/dossiers/:taskId`
+
+Returns full dossier with source, exchange, and delivery files for a specific task. Enforces student ownership.
+
+### Get delivery package
+
+`GET /api/student/dossiers/:taskId/delivery`
+
+Query param: `version` (optional, defaults to latest).
+
+Returns the delivery package for a specific version including files, QA state, note, revision status, and Explain & Defend eligibility.
+
+### Get signed file access
+
+`GET /api/student/files/:fileId/access`
+
+Returns a short-lived signed URL for preview or download. The backend must enforce that the file belongs to a task owned by the student.
+
+```json
+{
+  "signedUrl": "https://storage.example.com/...",
+  "expiresAt": "2026-09-20T15:00:00Z"
+}
+```
+
+### Upload file to a dossier
+
+`POST /api/student/dossiers/:taskId/files`
+
+Multipart form data with `file` field and `section` field (source|exchange). Returns the uploaded file object. Upload is only permitted when task state allows it.
+
+### Replace a file
+
+`PUT /api/student/files/:fileId/replace`
+
+Multipart form data with `file` field. Returns the updated file object. Only allowed for student-uploaded source files before scope lock.
+
+### Remove a file
+
+`DELETE /api/student/files/:fileId`
+
+Removes a file from the task. Only allowed for student-uploaded files when task state permits. Returns `200` with `{ "ok": true }`.
+
+### Request revision
+
+`POST /api/student/dossiers/:taskId/revision`
+
+Body:
+```json
+{
+  "note": "Optional revision note"
+}
+```
+
+Creates a revision request against the current delivery. Returns the revision object.
+
+### Key rules
+
+1. All endpoints require student session (`credentials: include`).
+2. Return `401` for absent/expired session, `403` for non-Student.
+3. Enforce student ownership — a student can only see files and deliveries for their own tasks.
+4. Never expose internal Expert working files, admin-only attachments, hidden QA documents, private moderation files, other students' files, internal Expert notes, or permanent storage URLs.
+5. Use signed URLs for all file access — never place long-lived private URLs in the DOM, localStorage, or frontend config.
+6. The `hasNewDelivery` flag should be derived from real backend state (e.g. a delivery viewed/read timestamp per student).
+7. File upload is only permitted when task state allows it (e.g. before scope confirmation for source files).
+8. Revision requests are only permitted when the delivery's revision status is `available` and the revision limit has not been reached.
+9. QA data exposed to students must be student-safe only — no internal scoring, no expert private notes.
+10. Delivery version history must preserve all versions the student has access to.
