@@ -1,6 +1,7 @@
 import crypto from 'node:crypto'
 import express from 'express'
 import { listNotifications, markAllRead, markRead, unreadCount } from './store.js'
+import { createTicket, getCatalog, getTicket, listTickets, resolveGuidance, searchHelp } from './helpStore.js'
 
 const PORT = Number(process.env.PORT || 4174)
 const COOKIE = 'sn_sid'
@@ -78,6 +79,62 @@ app.patch('/api/student/notifications/:id/read', requireStudent, (req, res) => {
 app.post('/api/student/notifications/read-all', requireStudent, (req, res) => {
   const notifications = markAllRead()
   res.json({ ok: true, notifications, unreadCount: 0 })
+})
+
+app.get('/api/student/help', requireStudent, (req, res) => {
+  res.json(getCatalog())
+})
+
+app.get('/api/student/help/search', requireStudent, (req, res) => {
+  const query = String(req.query.q || '')
+  res.json({ query, results: searchHelp(query) })
+})
+
+app.get('/api/student/help/guidance', requireStudent, (req, res) => {
+  const { category, issue, taskId } = req.query
+  if (!category && !issue) {
+    res.status(400).json({ error: 'HELP_QUERY_REQUIRED' })
+    return
+  }
+  res.json(resolveGuidance({
+    category: String(category || ''),
+    issue: String(issue || ''),
+    taskId: taskId ? String(taskId) : null,
+  }))
+})
+
+app.get('/api/student/help/tickets', requireStudent, (req, res) => {
+  res.json({ tickets: listTickets() })
+})
+
+app.get('/api/student/help/tickets/:ticketId', requireStudent, (req, res) => {
+  const ticket = getTicket(req.params.ticketId)
+  if (!ticket) {
+    res.status(404).json({ error: 'TICKET_NOT_FOUND' })
+    return
+  }
+  res.json(ticket)
+})
+
+app.post('/api/student/help/tickets', requireStudent, (req, res) => {
+  const body = req.body || {}
+  const message = String(body.message || '').trim()
+  if (!message) {
+    res.status(400).json({ error: 'MESSAGE_REQUIRED' })
+    return
+  }
+  if (message.length > 4000) {
+    res.status(400).json({ error: 'MESSAGE_TOO_LONG' })
+    return
+  }
+  const ticket = createTicket({
+    student: req.student,
+    category: body.category ? String(body.category) : null,
+    issue: body.issue ? String(body.issue) : null,
+    taskId: body.taskId ? String(body.taskId) : null,
+    message,
+  })
+  res.status(201).json(ticket)
 })
 
 app.get('/api/health', (req, res) => {

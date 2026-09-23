@@ -880,3 +880,131 @@ Category values: `task`, `message`, `payment`, `delivery`.
 4. Display-safe fields only: `title`, `body`/`description`, optional `route`, timestamps.
 5. Unread counts must be derived from authorized records.
 6. Mark-as-read mutations must persist before the response returns.
+## Help & support endpoints
+
+The `/student/help` page reads a support catalog, resolves state-aware guidance against the student's workspace, searches guides, and files support tickets. All requests use `credentials: include`. Return `401` for absent/expired session and `403` for non-Student.
+
+### Catalog
+
+`GET /api/student/help`
+
+```json
+{
+  "categories": [
+    { "key": "payment", "label": "Payment & official plan", "blurb": "Funding, failed payments, plan changes or receipts.", "needsTask": true, "route": "/student/payments" }
+  ],
+  "issues": {
+    "payment": [
+      { "key": "processing", "label": "Payment is still processing" }
+    ]
+  },
+  "quickHelp": [
+    { "id": "qh-payment", "title": "Payment problems", "blurb": "Processing, failed payments and receipts.", "category": "payment", "issue": "processing" }
+  ],
+  "articles": [
+    { "id": "art-payment-processing", "title": "Payment still processing", "body": "…", "category": "payment", "issue": "processing" }
+  ],
+  "policies": [
+    { "id": "pol-payments", "title": "Payments, refunds & cancellation", "summary": "…" }
+  ],
+  "workspace": [
+    { "id": "SN-2042", "title": "Research Report", "subject": "Information Systems", "status": "PAYMENT_PENDING", "statusLabel": "Payment required", "paymentState": "Processing", "deliveryVersion": null, "helpCategory": "payment" }
+  ],
+  "tasks": [ { "id": "SN-2042", "title": "Research Report", "statusLabel": "Payment required", "paymentState": "Processing", "deliveryVersion": null, "helpCategory": "payment" } ],
+  "tickets": [ { "id": "SN-SUP-1001", "status": "received", "createdAt": "2026-09-23T12:00:00.000Z" } ]
+}
+```
+
+Category keys: `task`, `payment`, `files`, `messages`, `explain`, `account`, `technical`.
+
+### Search
+
+`GET /api/student/help/search?q=processing`
+
+```json
+{
+  "query": "processing",
+  "results": [
+    { "type": "guide", "title": "Payment still processing", "desc": "…", "articleId": "art-payment-processing", "category": "payment", "issue": "processing" },
+    { "type": "action", "title": "Start guided payment & official plan help", "desc": "…", "presetCategory": "payment" }
+  ]
+}
+```
+
+### Guidance
+
+`GET /api/student/help/guidance?category=payment&issue=processing&taskId=SN-2042`
+
+```json
+{
+  "kind": "guidance",
+  "found": "Your payment is currently being confirmed.",
+  "body": "You don't need to submit another payment while this status is active.",
+  "actions": [
+    { "label": "Refresh payment status", "kind": "primary", "route": "/student/payments?task=SN-2042" },
+    { "label": "How payment confirmation works", "kind": "secondary", "route": null, "articleId": "art-payment-processing" }
+  ],
+  "context": {
+    "task": { "id": "SN-2042", "title": "Research Report", "statusLabel": "Payment required", "paymentState": "Processing" },
+    "category": { "key": "payment", "label": "Payment & official plan" },
+    "issue": "processing"
+  }
+}
+```
+
+`kind` is one of `guidance` | `action` | `support`. Primary actions must carry real in-app `route` values. Secondary actions may open an `articleId` instead of navigating. Missing task context returns a `support` result so the UI can open the contact form.
+
+### Create support ticket
+
+`POST /api/student/help/tickets`
+
+Request:
+
+```json
+{
+  "category": "payment",
+  "issue": "processing",
+  "taskId": "SN-2042",
+  "message": "What expected and what happened."
+}
+```
+
+`201` response:
+
+```json
+{
+  "id": "SN-SUP-1001",
+  "status": "received",
+  "category": "payment",
+  "categoryLabel": "Payment & official plan",
+  "issue": "processing",
+  "issueLabel": "Payment is still processing",
+  "taskId": "SN-2042",
+  "taskTitle": "Research Report",
+  "message": "…",
+  "context": {
+    "studentId": "demo-student",
+    "studentName": "Demo Student",
+    "taskState": "Payment required",
+    "paymentState": "Processing"
+  },
+  "createdAt": "2026-09-23T12:00:00.000Z"
+}
+```
+
+Return `400` `MESSAGE_REQUIRED` when `message` is empty; `400` `MESSAGE_TOO_LONG` above 4000 characters.
+
+### List / get tickets
+
+`GET /api/student/help/tickets` returns `{ "tickets": [ ... ] }` for the signed-in student only.
+
+`GET /api/student/help/tickets/:ticketId` returns one ticket or `404` `TICKET_NOT_FOUND`.
+
+### Key rules
+
+1. All endpoints require student session (`credentials: include`).
+2. Return `401` for absent/expired session, `403` for non-Student.
+3. Enforce student ownership on tickets and workspace task context; never expose another student's tickets.
+4. Guidance actions must use real product routes (`/student/payments`, `/student/files`, `/student/tasks`, `/student/messages`, `/student/explain`, `/login`). Do not invent refund guarantees, response SLAs, or partner names.
+5. Article and policy copy is product knowledge content, not personalized legal advice.
+6. Ticket ids follow `SN-SUP-####` and increment per student store.
