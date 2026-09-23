@@ -395,3 +395,210 @@ Creates a revision request against the current delivery. Returns the revision ob
 8. Revision requests are only permitted when the delivery's revision status is `available` and the revision limit has not been reached.
 9. QA data exposed to students must be student-safe only — no internal scoring, no expert private notes.
 10. Delivery version history must preserve all versions the student has access to.
+
+## Explain & Defend endpoints
+
+The `/student/explain` practice studio reads eligible deliveries from the existing dossier APIs, then calls a dedicated Explain API for grounded practice rounds. All requests use `credentials: include`. Return `401` for an absent/expired session and `403` for a non-Student account. Enforce student ownership on every task, artifact, session, rubric, and usage record.
+
+### Eligibility and artifacts (existing dossier endpoints)
+
+Eligible tasks are derived from `GET /api/student/dossiers` and `GET /api/student/dossiers/:taskId`. Each delivery version already carries an `explainAndDefend` flag:
+
+```json
+{ "eligible": true, "route": "/student/explain" }
+```
+
+Processing / blocked shapes the client understands:
+
+```json
+{ "eligible": false, "status": "processing", "reason": "Indexing delivery files." }
+{ "eligible": false, "reason": "Explain & Defend is not available for this delivery." }
+```
+
+Delivery files for the Source pane come from the same dossier/delivery payloads (no separate artifact list endpoint). File preview/download continues to use `GET /api/student/files/:fileId/access`.
+
+### Start / continue a practice round
+
+`POST /api/student/explain/tasks/:taskId/explain`
+
+Body:
+
+```json
+{
+  "artifactId": "delivery-file-id-or-null",
+  "mode": "explain | why | quiz | lecturer | defend",
+  "selection": { "text": "optional student-selected excerpt", "anchor": {} },
+  "question": "optional free-text question",
+  "prompt": "optional structured prompt id or text",
+  "answers": ["optional quiz/viva answers for reveal/complete rounds"],
+  "scope": "optional quiz scope (e.g. quick | full | section)",
+  "round": "optional | question | reveal | complete"
+}
+```
+
+Either return a single JSON object or stream partial JSON lines. Streaming may use `Content-Type: text/event-stream` (`data: {...}` lines, optional `data: [DONE]`) or `application/x-ndjson` (one JSON object per line). Chunks are shallow-merged by the client until the stream ends.
+
+Status codes the client special-cases:
+
+| Status | Behavior |
+| --- | --- |
+| `401` / `403` | Auth error → access state |
+| `404` / `501` | `EXPLAIN_UNSUPPORTED` → unavailable state |
+| `422` + integrity payload | Academic-integrity notice |
+| other non-OK | Generic request failure |
+
+Integrity payload (also allowed on `200` JSON bodies):
+
+```json
+{
+  "integrity": {
+    "code": "INTEGRITY",
+    "message": "student-safe explanation of the concern",
+    "actions": []
+  }
+}
+```
+
+Common response envelope fields (mode-specific fields layered on top):
+
+```json
+{
+  "sessionId": "session-id",
+  "grounding": "delivery_source | task_requirements | rubric | general",
+  "anchor": {
+    "kind": "document | code | slide",
+    "ref": "block-or-section-ref",
+    "label": "Page 3",
+    "file": "Report_V2.pdf",
+    "page": 3,
+    "lines": [12, 40],
+    "section": "Methodology",
+    "index": 1
+  },
+  "source": "short citation label or null",
+  "rubricCriterionId": "c-method",
+  "usage": { "remaining": 17, "limit": 25, "periodLabel": "this week" },
+  "uncertainty": null
+}
+```
+
+Anchor `kind` must be `document`, `code`, or `slide`. `ref` is required for the client to offer “View Source”. Prefer real section/page/line references from the artifact — never invent citations.
+
+Mode payload fields:
+
+| Mode | Fields |
+| --- | --- |
+| `explain` | `plainExplanation` (`paragraphs`/`bullets`/`formula`/`example` or string), `whyItMatters`, `trySayingIt` |
+| `why` | `decision`, `reason`, `alternative`, `tradeOff` |
+| `quiz` | `setup?`, `question`, `reveal?`, `completion?`, `total`, `index` |
+| `lecturer` | `question`, `coaching` (`covered`/`missing`/`stronger`), `followUp?`, `complete`, `total`, `index` |
+| `defend` | `decision`, `question`, `feedback` (`clear`/`missing`/`strengthen`), `complete`, `total`, `index` |
+
+Question shape: `{ "id", "prompt", "type": "choice|short", "choices": [{ "id", "label" }], "total", "sourceTag", "context", "index" }`.
+
+Quiz rounds: omit `round` (or send `question`) to start; `round: "reveal"` after an answer; `round: "complete"` to finish. `answers` should carry prior answers for reveal/complete.
+
+### Rubric
+
+`GET /api/student/explain/tasks/:taskId/rubric`
+
+`404`/`501` (or empty list) means the UI hides the Rubric control. Shape:
+
+```json
+{
+  "criteria": [
+    { "id": "c-method", "label": "Methodology", "weight": 20, "description": "…" }
+  ],
+  "source": "optional label"
+}
+```
+
+A plain array of criteria is also accepted.
+
+### Session history and resume
+
+`GET /api/student/explain/tasks/:taskId/sessions`
+
+`404`/`501` or empty → history control hidden.
+
+```json
+{
+  "sessions": [
+    { "id": "sess-1", "title": "Methodology explained", "mode": "explain", "updatedAt": "2026-09-20T12:00:00Z" }
+  ]
+}
+```
+
+`GET /api/student/explain/sessions/:sessionId`
+
+```json
+{
+  "session": {
+    "id": "sess-1",
+    "mode": "explain",
+    "artifactId": "file-id",
+    "anchor": {},
+    "title": "Methodology explained",
+    "trail": [{ "key": "…", "label": "…", "status": "complete" }]
+  }
+}
+```
+
+`PATCH /api/student/explain/sessions/:sessionId`
+
+Body is a partial session patch (client currently sends `{ "trail": [...] }`). Returns `200` on success; failures surface a non-blocking “session could not be saved” notice.
+
+### Usage limits
+
+`GET /api/student/explain/usage`
+
+`404`/`501` or missing `remaining` hides the quota chip.
+
+```json
+{ "remaining": 17, "limit": 25, "periodLabel": "this week" }
+```
+
+The same `usage` object may be attached to explain responses so the chip updates after each round.
+
+### Artifact structured content
+
+`GET /api/student/explain/artifacts/:artifactId/content`
+
+Used when the Source pane needs searchable structured content (document blocks, code lines, slides, dataset rows) instead of a binary signed URL. Return `404`, `415`, or `501` when unsupported — the client falls back to signed URL/image/PDF preview.
+
+Document example:
+
+```json
+{
+  "kind": "document",
+  "title": "Final Report",
+  "pages": [
+    {
+      "n": 1,
+      "blocks": [
+        { "id": "b-1", "type": "heading", "text": "Methodology", "page": 1 },
+        { "id": "b-2", "type": "paragraph", "text": "…", "page": 1, "sectionId": "s-method" }
+      ]
+    }
+  ]
+}
+```
+
+Code example: `{ "kind": "code", "files": [{ "path": "src/app.py", "language": "python", "lines": [{ "n": 1, "text": "…" }] }] }`.
+
+Slides: `{ "kind": "slides", "slides": [{ "n": 1, "title": "…", "bullets": ["…"] }] }`.
+
+Dataset: `{ "kind": "dataset", "columns": ["…"], "rows": [["…"]], "totalRows": 5000, "truncated": true }` — client previews at most 100 rows.
+
+### Key rules
+
+1. All endpoints require student session (`credentials: include`).
+2. Return `401` for absent/expired session, `403` for non-Student.
+3. Enforce student ownership — a student can only explain tasks/deliveries/artifacts they own.
+4. Ground every non-`general` answer in real delivery, requirement, or rubric content; include a resolvable `anchor` and short `source` label when citing the artifact. Do not fabricate citations or page/line references.
+5. `grounding: "general"` must be reserved for answers that are not grounded in the student’s files (and should be rare in this product).
+6. Preserve `sessionId` across rounds of the same practice thread so trail/history resume works.
+7. Enforce and return `usage.remaining` server-side; never trust client quota math.
+8. Integrity rejections must use student-safe wording and the `422`/`integrity` contract above — do not leak model prompts, internal scores, or other students’ data.
+9. Optional endpoints (`rubric`, `sessions`, `usage`, artifact `content`) should answer `404`/`501` when not available so the UI degrades cleanly instead of erroring.
+10. Streaming is optional; a complete JSON body with the same fields is fully supported.
