@@ -50,7 +50,7 @@ function ClickOutside({ onClick, children, enabled = true }) {
   return <span ref={ref} className="sn-ex-clickoutside">{children}</span>
 }
 
-function usePopoverPosition(open, anchorRef, containerSelector) {
+function usePopoverPosition(open, anchorRef, containerSelector, { preferBelow = false } = {}) {
   const [style, setStyle] = useState({ top: -9999, left: -9999 })
   useEffect(() => {
     if (!open || !anchorRef.current) return undefined
@@ -68,6 +68,12 @@ function usePopoverPosition(open, anchorRef, containerSelector) {
       if (cRect) left = Math.max(cRect.left + 8, Math.min(left, cRect.right - width - 8))
       const estimatedHeight = Math.min(340, window.innerHeight * 0.5)
       let top = rect.bottom + 8
+      if (preferBelow) {
+        const room = window.innerHeight - 12 - top
+        const height = Math.max(140, Math.min(estimatedHeight, room))
+        setStyle({ top, left, width, maxHeight: height })
+        return
+      }
       if (top + estimatedHeight > window.innerHeight - 12) top = Math.max(12, rect.top - estimatedHeight - 8)
       setStyle({ top, left, width })
     }
@@ -75,7 +81,7 @@ function usePopoverPosition(open, anchorRef, containerSelector) {
     window.addEventListener('resize', compute)
     window.addEventListener('scroll', compute, true)
     return () => { window.removeEventListener('resize', compute); window.removeEventListener('scroll', compute, true) }
-  }, [open, anchorRef, containerSelector])
+  }, [open, anchorRef, containerSelector, preferBelow])
   return style
 }
 
@@ -1182,7 +1188,7 @@ function Composer({ mode, value, onChange, onSubmit, busy, onStop, canStop }) {
   }, [value])
   return (
     <form className="sn-ex-composer" onSubmit={(e) => { e.preventDefault(); onSubmit() }}>
-      <label className="sn-ex-composer-label" htmlFor="sn-ex-composer-input">Ask about this delivery…</label>
+      <label className="sn-visually-hidden" htmlFor="sn-ex-composer-input">Ask about this delivery</label>
       <div className="sn-ex-composer-row">
         <textarea
           id="sn-ex-composer-input"
@@ -1386,7 +1392,7 @@ function DefaultPrompts({ task, anchor, artifacts, onPick, mode, onSwitchMode, s
 
 function LearningTrail({ trail, open, onToggle }) {
   const buttonRef = useRef(null)
-  const position = usePopoverPosition(open, buttonRef, '.sn-ex-studio-pane')
+  const position = usePopoverPosition(open, buttonRef, '.sn-ex-studio-pane', { preferBelow: true })
   return (
     <div className="sn-ex-trail">
       <button ref={buttonRef} className="sn-ex-tool-btn" onClick={onToggle} aria-expanded={open} aria-haspopup="dialog">
@@ -1423,7 +1429,7 @@ function LearningTrail({ trail, open, onToggle }) {
 function SessionHistoryPopover({ sessions, onResume }) {
   const [open, setOpen] = useState(false)
   const buttonRef = useRef(null)
-  const position = usePopoverPosition(open, buttonRef)
+  const position = usePopoverPosition(open, buttonRef, null, { preferBelow: true })
   if (sessions == null) return null
   return (
     <div className="sn-ex-sessions">
