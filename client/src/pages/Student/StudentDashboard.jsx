@@ -22,27 +22,184 @@ const nameOf = (student) => student?.name || student?.displayName || 'Student'
 function ActionButton({ children, onClick, secondary = false }) { return <button className={secondary ? 'student-button student-button--secondary' : 'student-button'} onClick={onClick}>{children}<ChevronRight size={15} /></button> }
 
 function StudentSidebar({ collapsed, setCollapsed, path, model, unreadNotifications }) { return <aside className={`student-sidebar ${collapsed ? 'is-collapsed' : ''}`}><div className="student-brand"><img src={logo} alt="SolveNest" /><span>SolveNest</span></div><nav aria-label="Student workspace"><p className="student-nav-label">Workspace</p>{navItems.map(([label, target, Icon]) => <button key={target} className={`student-nav-item ${path === target ? 'is-active' : ''}`} onClick={() => go(target)} title={collapsed ? label : undefined}><Icon size={17} /><span>{label}</span>{label === 'Messages' && model.unreadMessages > 0 && <b>{model.unreadMessages}</b>}</button>)}<p className="student-nav-label student-nav-label--lower">Personal</p>{moreItems.map(([label, target, Icon]) => <button key={target} className={`student-nav-item ${path === target ? 'is-active' : ''}`} onClick={() => go(target)} title={collapsed ? label : undefined}><Icon size={17} /><span>{label}</span>{label === 'Notifications' && unreadNotifications > 0 && <b>{unreadNotifications}</b>}</button>)}</nav><button className="student-collapse" onClick={() => setCollapsed((value) => !value)} aria-label={collapsed ? 'Expand navigation' : 'Collapse navigation'}>{collapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}<span>{collapsed ? 'Expand' : 'Collapse'}</span></button></aside> }
-function TopBar({ student, onNotifications, onNewTask, path, unreadNotifications }) { return <header className="student-topbar"><div className="student-context"><img className="student-mobile-logo" src={logo} alt="SolveNest" /><span>Student</span><ChevronRight size={14} /><strong>{labelOfPath(path)}</strong></div><div className="student-top-actions"><button className="student-new-task" onClick={onNewTask}><Plus size={17} /><span>New Task</span></button><button className="student-icon-button student-bell" onClick={onNotifications} aria-label={unreadNotifications > 0 ? `Open notifications, ${unreadNotifications} unread` : 'Open notifications'}><Bell size={18} />{unreadNotifications > 0 && <span className="student-bell-badge" aria-hidden="true">{unreadNotifications > 9 ? '9+' : unreadNotifications}</span>}</button><button className="student-profile" onClick={() => go('/student/account')} aria-label="My account"><span className="student-avatar">{student?.avatarUrl ? <img src={student.avatarUrl} alt="" /> : initials(student)}</span></button></div></header> }
-function NotificationDrawer({ notifications, onClose }) { return <motion.aside className="student-drawer" initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }} aria-label="Notifications"><div className="student-drawer-header"><div><p className="student-overline">INBOX</p><h2>Notifications</h2></div><button className="student-icon-button" onClick={onClose} aria-label="Close notifications"><X size={18} /></button></div>{notifications.length === 0 ? <p className="student-muted-copy">You have no new notifications.</p> : <>{notifications.map((item, index) => <button className={`student-notification ${item.isRead ? '' : 'is-unread'}`} key={item.id || index} onClick={() => { onClose(); if (!item.isRead && item.id) { markNotificationRead(item.id).catch(() => {}) } const route = item.route || item.primaryAction?.route; if (route) go(route) }}><span className={`student-state-dot ${item.isRead ? 'tone-muted' : 'tone-active'}`} /><span><strong>{item.title || item.type || 'Notification'}</strong><small>{item.body || item.description || item.taskTitle || ''}</small><time>{formatRelativeTime(item.createdAt)}</time></span></button>)}<button className="student-drawer-view-all" onClick={() => { onClose(); go('/student/notifications') }}>View all notifications →</button></>}</motion.aside> }
+function TopBar({ student, onNotifications, onNewTask, path, unreadNotifications, onOpenMenu, menuOpen }) { return <header className="student-topbar"><div className="student-context"><button type="button" className="student-mobile-logo-btn" onClick={onOpenMenu} aria-label={menuOpen ? 'Close navigation menu' : 'Open navigation menu'} aria-haspopup="dialog" aria-expanded={Boolean(menuOpen)}><img className="student-mobile-logo" src={logo} alt="" /></button><span>Student</span><ChevronRight size={14} /><strong>{labelOfPath(path)}</strong></div><div className="student-top-actions"><button className="student-new-task" onClick={onNewTask}><Plus size={17} /><span>New Task</span></button><button className="student-icon-button student-bell" onClick={onNotifications} aria-label={unreadNotifications > 0 ? `Open notifications, ${unreadNotifications} unread` : 'Open notifications'}><Bell size={18} />{unreadNotifications > 0 && <span className="student-bell-badge" aria-hidden="true">{unreadNotifications > 9 ? '9+' : unreadNotifications}</span>}</button><button className="student-profile" onClick={() => go('/student/account')} aria-label="My account"><span className="student-avatar">{student?.avatarUrl ? <img src={student.avatarUrl} alt="" /> : initials(student)}</span></button></div></header> }
+function NotificationDrawer({ notifications, onClose, unreadCount }) {
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return (
+    <>
+      <motion.div
+        className="student-drawer-backdrop"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        transition={{ duration: 0.2 }}
+        onClick={onClose}
+        aria-hidden="true"
+      />
+      <motion.aside
+        className="student-drawer"
+        initial={{ x: '100%' }}
+        animate={{ x: 0 }}
+        exit={{ x: '100%' }}
+        transition={{ type: 'tween', duration: 0.28, ease: [0.4, 0, 0.2, 1] }}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Notifications"
+      >
+        <div className="student-drawer-header">
+          <div>
+            <p className="student-overline">INBOX</p>
+            <h2>Notifications</h2>
+          </div>
+          <div className="student-drawer-header-meta">
+            {unreadCount > 0 && (
+              <span className="student-drawer-unread-chip">{unreadCount} new</span>
+            )}
+            <button className="student-icon-button" onClick={onClose} aria-label="Close notifications">
+              <X size={18} />
+            </button>
+          </div>
+        </div>
+
+        <div className="student-drawer-body">
+          {notifications.length === 0 ? (
+            <div className="student-drawer-empty">
+              <span className="student-drawer-empty-icon" aria-hidden="true"><Bell size={20} /></span>
+              <p className="student-drawer-empty-title">You&apos;re all caught up</p>
+              <p className="student-drawer-empty-copy">New task, payment, and delivery updates will appear here.</p>
+            </div>
+          ) : (
+            notifications.map((item, index) => (
+              <button
+                className={`student-notification ${item.isRead ? '' : 'is-unread'}`}
+                key={item.id || index}
+                onClick={() => {
+                  onClose()
+                  if (!item.isRead && item.id) {
+                    markNotificationRead(item.id).catch(() => {})
+                  }
+                  const route = item.route || item.primaryAction?.route
+                  if (route) go(route)
+                }}
+              >
+                <span className={`student-state-dot ${item.isRead ? 'tone-muted' : 'tone-active'}`} />
+                <span className="student-notification-copy">
+                  <strong>{item.title || item.type || 'Notification'}</strong>
+                  <small>{item.body || item.description || item.taskTitle || item.task?.title || ''}</small>
+                  <time>{formatRelativeTime(item.createdAt)}</time>
+                </span>
+                <span className="student-notification-go" aria-hidden="true">→</span>
+              </button>
+            ))
+          )}
+        </div>
+
+        <button className="student-drawer-view-all" onClick={() => { onClose(); go('/student/notifications') }}>
+          View all notifications →
+        </button>
+      </motion.aside>
+    </>
+  )
+}
 function DashboardError({ onRetry, access }) { return <section className="student-local-error" role="alert"><p className="student-overline">{access ? 'ACCESS REQUIRED' : 'COULD NOT LOAD'}</p><h2>{access ? 'Sign in to open your student workspace.' : 'We could not load your workspace.'}</h2><p>{access ? 'Your student session is missing or has expired.' : 'We could not retrieve the current workspace data.'}</p><ActionButton onClick={() => access ? go('/login') : onRetry()}>{access ? 'Sign in' : 'Try again'}</ActionButton></section> }
 function DashboardSkeleton() { return <div className="student-dashboard-skeleton" aria-label="Loading student workspace"><span /><span /><div><span /><span /></div><span /><span /></div> }
-function StudentMobileNav({ onNewTask, path }) {
-  const [expanded, setExpanded] = useState(false)
-  const allItems = [['Dashboard', '/student/dashboard', Home], ['Tasks', '/student/tasks', ClipboardList], ['Messages', '/student/messages', MessageCircle], ['Help', '/student/help', HelpCircle], ['Notifications', '/student/notifications', Bell], ['Account', '/student/account', Settings]]
-  return <>
-    {expanded && <div className="student-fab-overlay" onClick={() => setExpanded(false)} />}
-    <nav className={`student-bottom-nav ${expanded ? 'is-expanded' : ''}`} aria-label="Mobile student workspace">
-      <button className={path === '/student/dashboard' ? 'is-active' : ''} onClick={() => { setExpanded(false); go('/student/dashboard') }}><Home size={18} /><span>Dashboard</span></button>
-      <button className={path === '/student/tasks' ? 'is-active' : ''} onClick={() => { setExpanded(false); go('/student/tasks') }}><ClipboardList size={18} /><span>Tasks</span></button>
-      <button className="is-primary" onClick={() => setExpanded((v) => !v)}><Plus size={20} /></button>
-      <button className={path === '/student/messages' ? 'is-active' : ''} onClick={() => { setExpanded(false); go('/student/messages') }}><MessageCircle size={18} /><span>Messages</span></button>
-      <button className={path === '/student/account' ? 'is-active' : ''} onClick={() => { setExpanded(false); go('/student/account') }}><Settings size={18} /><span>More</span></button>
+function MobileNavDrawer({ open, onClose, path, model, unreadNotifications, onNewTask }) {
+  useEffect(() => {
+    if (!open) return undefined
+    const onKey = (e) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open, onClose])
+
+  return (
+    <AnimatePresence>
+      {open && (
+        <>
+          <motion.div
+            className="student-nav-overlay"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={onClose}
+          />
+          <motion.aside
+            className="student-nav-drawer"
+            initial={{ x: '-100%' }}
+            animate={{ x: 0 }}
+            exit={{ x: '-100%' }}
+            transition={{ type: 'tween', duration: 0.28, ease: [0.4, 0, 0.2, 1] }}
+            aria-label="Student navigation"
+            role="dialog"
+            aria-modal="true"
+          >
+            <div className="student-nav-drawer-head">
+              <div className="student-brand student-brand--drawer">
+                <img src={logo} alt="" />
+                <span>SolveNest</span>
+              </div>
+              <button className="student-icon-button" onClick={onClose} aria-label="Close navigation">
+                <X size={18} />
+              </button>
+            </div>
+
+            <button
+              type="button"
+              className="student-nav-drawer-new"
+              onClick={() => { onClose(); onNewTask() }}
+            >
+              <Plus size={16} />
+              <span>New Task</span>
+            </button>
+
+            <nav className="student-nav-drawer-nav" aria-label="Workspace">
+              <p className="student-nav-label">Workspace</p>
+              {navItems.map(([label, target, Icon]) => (
+                <button
+                  key={target}
+                  className={`student-nav-item ${path === target ? 'is-active' : ''}`}
+                  onClick={() => { onClose(); go(target) }}
+                >
+                  <Icon size={17} />
+                  <span>{label}</span>
+                  {label === 'Messages' && model.unreadMessages > 0 && <b>{model.unreadMessages}</b>}
+                </button>
+              ))}
+
+              <p className="student-nav-label">Personal</p>
+              {moreItems.map(([label, target, Icon]) => (
+                <button
+                  key={target}
+                  className={`student-nav-item ${path === target ? 'is-active' : ''}`}
+                  onClick={() => { onClose(); go(target) }}
+                >
+                  <Icon size={17} />
+                  <span>{label}</span>
+                  {label === 'Notifications' && unreadNotifications > 0 && <b>{unreadNotifications}</b>}
+                </button>
+              ))}
+            </nav>
+          </motion.aside>
+        </>
+      )}
+    </AnimatePresence>
+  )
+}
+
+function StudentMobileNav({ onNewTask, path, openMenu }) {
+  return (
+    <nav className="student-bottom-nav" aria-label="Mobile student workspace">
+      <button className={path === '/student/dashboard' ? 'is-active' : ''} onClick={() => go('/student/dashboard')}><Home size={18} /><span>Dashboard</span></button>
+      <button className={path === '/student/tasks' ? 'is-active' : ''} onClick={() => go('/student/tasks')}><ClipboardList size={18} /><span>Tasks</span></button>
+      <button className="is-primary" onClick={openMenu} aria-label="Open menu"><Plus size={20} /></button>
+      <button className={path === '/student/messages' ? 'is-active' : ''} onClick={() => go('/student/messages')}><MessageCircle size={18} /><span>Messages</span></button>
+      <button className="is-primary" onClick={openMenu} aria-label="Open menu"><Settings size={18} /><span>More</span></button>
     </nav>
-    {expanded && <div className="student-fab-menu">
-      <button className="student-fab-item" onClick={() => { setExpanded(false); onNewTask() }}><Plus size={16} /><span>New Task</span></button>
-      {allItems.filter(([label, target]) => target !== path).map(([label, target, Icon]) => <button className="student-fab-item" key={target} onClick={() => { setExpanded(false); go(target) }}><Icon size={16} /><span>{label}</span></button>)}
-    </div>}
-  </>
+  )
 }
 
 function resolveDashboardState(model) {
@@ -267,6 +424,7 @@ export function StudentDashboard() {
   const [collapsed, setCollapsed] = useState(() => window.localStorage.getItem('sn-student-sidebar') === 'collapsed')
   const [notificationsOpen, setNotificationsOpen] = useState(false)
   const [studioOpen, setStudioOpen] = useState(false)
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [state, setState] = useState({ loading: true, error: null, model: null })
   const [notificationState, setNotificationState] = useState({ items: [], unreadCount: 0 })
   const load = () => { const controller = new AbortController(); setState((current) => ({ ...current, loading: true, error: null })); fetchStudentDashboard(controller.signal).then((model) => setState({ loading: false, error: null, model })).catch((error) => { if (error.name !== 'AbortError') setState({ loading: false, error, model: null }) }); return () => controller.abort() }
@@ -286,17 +444,33 @@ export function StudentDashboard() {
   const attentionQueue = getAttentionQueue(model)
   const unreadNotifications = notificationState.unreadCount
   const drawerNotifications = notificationState.items.slice(0, 8)
+  useEffect(() => { setMobileNavOpen(false) }, [path])
+  const closeMobileNav = () => setMobileNavOpen(false)
   return <div className="student-app">
     <StudentSidebar collapsed={collapsed} setCollapsed={setCollapsed} path={path} model={model || { unreadMessages: 0, notifications: [] }} unreadNotifications={unreadNotifications} />
     <div className="student-main">
-      <TopBar student={model?.student} onNotifications={() => setNotificationsOpen(true)} onNewTask={() => setStudioOpen(true)} path={path} unreadNotifications={unreadNotifications} />
+      <TopBar student={model?.student} onNotifications={() => setNotificationsOpen(true)} onNewTask={() => setStudioOpen(true)} path={path} unreadNotifications={unreadNotifications} onOpenMenu={() => setMobileNavOpen((v) => !v)} menuOpen={mobileNavOpen} />
       <main className="student-content">
         {studioOpen ? <TaskCreationStudio onClose={() => setStudioOpen(false)} onCreated={onCreated} /> : path === '/student/tasks' ? <StudentTasksPage /> : path === '/student/messages' ? <StudentMessagesPage /> : path === '/student/files' ? <StudentFilesPage /> : path === '/student/explain' ? <StudentExplainPage /> : path === '/student/payments' ? <StudentPaymentsPage /> : path === '/student/notifications' ? <StudentNotificationsPage /> : path === '/student/help' ? <StudentHelpPage /> : state.loading ? <DashboardSkeleton /> : state.error ? <DashboardError onRetry={load} access={state.error.message === 'STUDENT_ACCESS_REQUIRED'} /> : <div><section className="student-dashboard-heading"><p className="student-overline">STUDENT WORKSPACE</p><h1>{resolveDashboardState(model).headline}</h1><p>{model.focusAction ? 'Your most important task and next action are below.' : model.tasks.length ? 'Your tasks, progress, and updates are together here.' : 'Upload a brief and let Solvy help you understand it before you commit.'}</p></section><StudentNowCanvas model={model} onNewTask={() => setStudioOpen(true)} /><AttentionQueue queue={attentionQueue} /><ActiveTasks tasks={model.tasks} onNewTask={() => setStudioOpen(true)} /><div className="student-lower-grid"><RecentMovement items={model.recentActivity} /><UpcomingSection actions={model.upcomingActions} /></div></div>}
       </main>
-      <StudentMobileNav onNewTask={() => setStudioOpen(true)} path={path} />
+      <StudentMobileNav onNewTask={() => setStudioOpen(true)} path={path} openMenu={() => setMobileNavOpen(true)} />
+      <MobileNavDrawer
+        open={mobileNavOpen}
+        onClose={closeMobileNav}
+        path={path}
+        model={model || { unreadMessages: 0 }}
+        unreadNotifications={unreadNotifications}
+        onNewTask={() => setStudioOpen(true)}
+      />
     </div>
     <AnimatePresence>
-      {notificationsOpen && <NotificationDrawer notifications={drawerNotifications} onClose={() => setNotificationsOpen(false)} />}
+      {notificationsOpen && (
+        <NotificationDrawer
+          notifications={drawerNotifications}
+          unreadCount={unreadNotifications}
+          onClose={() => setNotificationsOpen(false)}
+        />
+      )}
     </AnimatePresence>
   </div>
 }
