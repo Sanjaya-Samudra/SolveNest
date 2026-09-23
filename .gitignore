@@ -1,3 +1,7 @@
 PROJECT_DOCUMENTATION.md
 STUDENT_DASHBOARD_BACKEND_CONTRACT.md
 SolveNest_Final_Complete_Project_Pack/
+server/node_modules/
+server/data/
+client/node_modules/
+client/dist/

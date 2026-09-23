@@ -821,3 +821,62 @@ The client also listens for `window` CustomEvent `solvenest:payment` with `detai
 5. Do not invent Stripe/PayPal names, taxes, fees, or successful checkouts.
 6. Optional endpoints (`focus`, `scope-change`, `receipt`) should answer `404`/`501` when not available so the UI degrades cleanly.
 7. Idempotency: honor `idempotencyKey` on checkout so retries do not double-charge.
+
+## Notifications endpoints
+
+The student notifications workspace and the top-bar bell share one collection.
+
+### List
+
+`GET /api/student/notifications`
+
+```json
+{
+  "notifications": [
+    {
+      "id": "n9",
+      "category": "delivery",
+      "title": "Delivery ready",
+      "task": { "title": "Research Report", "subject": "Information Systems", "ref": "SN-2042" },
+      "description": "Your latest delivery has completed the SolveNest review process and is ready.",
+      "previousState": "Quality review",
+      "currentState": "Delivery ready",
+      "meaning": "You can review and download your delivered files now.",
+      "next": "Review delivery",
+      "primaryAction": { "label": "Review delivery", "route": "/student/files?task=SN-2042" },
+      "secondaryAction": { "label": "Explain & Defend", "route": "/student/explain?task=SN-2042" },
+      "requiresAction": true,
+      "isRead": false,
+      "createdAt": "2026-09-19T14:42:00",
+      "entity": { "type": "delivery", "version": "Version 2", "state": "Current" },
+      "route": "/student/files?task=SN-2042",
+      "body": "Your latest delivery is ready to review."
+    }
+  ],
+  "unreadCount": 3,
+  "total": 9
+}
+```
+
+Category values: `task`, `message`, `payment`, `delivery`.
+
+### Unread count
+
+`GET /api/student/notifications/unread-count` returns `{ "unreadCount": 3 }` for the top-bar badge.
+
+### Mark one read
+
+`PATCH /api/student/notifications/:id/read` returns `{ "ok": true, "notification": { ... }, "unreadCount": 2 }` or `404`.
+
+### Mark all read
+
+`POST /api/student/notifications/read-all` returns `{ "ok": true, "notifications": [ ... ], "unreadCount": 0 }`.
+
+### Key rules
+
+1. All endpoints require student session (`credentials: include`).
+2. Return `401` for absent/expired session, `403` for non-Student.
+3. Enforce student ownership; never return another student's notifications.
+4. Display-safe fields only: `title`, `body`/`description`, optional `route`, timestamps.
+5. Unread counts must be derived from authorized records.
+6. Mark-as-read mutations must persist before the response returns.

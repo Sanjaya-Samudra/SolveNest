@@ -35,5 +35,6 @@ import './pages/Student/student-tasks-interactions.css'
 import './pages/Student/student-files.css'
 import './pages/Student/student-explain.css'
 import './pages/Student/student-payments.css'
+import './pages/Student/student-notifications.css'
 
 createRoot(document.getElementById('app')).render(<React.StrictMode><App /></React.StrictMode>)

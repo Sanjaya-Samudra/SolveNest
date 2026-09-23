@@ -52,9 +52,14 @@
 .student-new-task:hover::after{opacity:1}
 .student-new-task:focus-visible{outline:2px solid var(--student-indigo);outline-offset:3px}
 /* ICON & PROFILE BUTTONS */
-.student-icon-button{display:flex;align-items:center;justify-content:center;width:38px;height:38px;border:1px solid transparent;border-radius:8px;background:transparent;cursor:pointer;color:var(--student-muted);transition:all .2s ease}
+.student-icon-button{position:relative;display:flex;align-items:center;justify-content:center;width:38px;height:38px;border:1px solid transparent;border-radius:8px;background:transparent;cursor:pointer;color:var(--student-muted);transition:all .2s ease}
 .student-icon-button:hover{background:rgba(91,108,255,.06);color:var(--student-indigo);border-color:rgba(91,108,255,.15)}
 .student-icon-button:focus-visible{outline:2px solid var(--student-indigo);outline-offset:2px}
+.student-bell-badge{position:absolute;top:2px;right:2px;min-width:16px;height:16px;padding:0 4px;border-radius:999px;background:linear-gradient(135deg,var(--student-violet),var(--student-indigo));color:#fff;font:700 10px/16px 'DM Mono',monospace;text-align:center;box-shadow:0 0 0 2px var(--student-paper)}
+.student-drawer-view-all{margin-top:auto;padding:16px 24px;border:none;border-top:1px solid var(--student-line);background:rgba(91,108,255,.04);color:var(--student-indigo);font:600 13px 'DM Sans',sans-serif;cursor:pointer;text-align:left;transition:background .18s ease}
+.student-drawer-view-all:hover{background:rgba(91,108,255,.08)}
+.student-notification.is-unread strong{font-weight:700}
+.student-notification.is-unread{background:rgba(91,108,255,.03)}
 .student-profile{display:flex;align-items:center;border:none;background:transparent;cursor:pointer;padding:0;border-radius:50%;transition:box-shadow .2s ease}
 .student-profile:hover{box-shadow:0 0 0 2px rgba(91,108,255,.2)}
 .student-profile .student-avatar{width:36px;height:36px;font-size:13px}
@@ -62,6 +67,7 @@
 .student-avatar img{width:100%;height:100%;border-radius:50%;object-fit:cover}
 /* CONTENT AREA */
 .student-content{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding-top:0}
+.student-content:has(> .sn-ntf-page){padding-top:0;overflow:hidden}
 /* DASHBOARD HEADING */
 .student-dashboard-heading{padding:clamp(24px,4vw,48px) clamp(24px,4vw,56px) 0;max-width:900px;margin:0 auto}
 .student-dashboard-heading p.student-overline{color:var(--student-violet);font-weight:600;margin-bottom:8px}
