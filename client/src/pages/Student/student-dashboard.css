@@ -68,6 +68,7 @@
 /* CONTENT AREA */
 .student-content{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding-top:0}
 .student-content:has(> .sn-ntf-page){padding-top:0;overflow:hidden}
+.student-content:has(> .sn-hlp-page){padding-top:0;overflow:hidden}
 /* DASHBOARD HEADING */
 .student-dashboard-heading{padding:clamp(24px,4vw,48px) clamp(24px,4vw,56px) 0;max-width:900px;margin:0 auto}
 .student-dashboard-heading p.student-overline{color:var(--student-violet);font-weight:600;margin-bottom:8px}
