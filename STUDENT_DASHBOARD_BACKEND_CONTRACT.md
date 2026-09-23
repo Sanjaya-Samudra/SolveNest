@@ -602,3 +602,222 @@ Dataset: `{ "kind": "dataset", "columns": ["…"], "rows": [["…"]], "totalRows
 8. Integrity rejections must use student-safe wording and the `422`/`integrity` contract above — do not leak model prompts, internal scores, or other students’ data.
 9. Optional endpoints (`rubric`, `sessions`, `usage`, artifact `content`) should answer `404`/`501` when not available so the UI degrades cleanly instead of erroring.
 10. Streaming is optional; a complete JSON body with the same fields is fully supported.
+
+## Payments endpoints
+
+The `/student/payments` page reads funding focus, task funding summaries, official plans, funding structure, checkout, payment status/history/records/receipts, and optional scope-change data. All requests use `credentials: include`. Return `401` for an absent/expired session and `403` for a non-Student account. Enforce student ownership on every task, plan, milestone, payment, receipt, and scope-change record. Never invent currency, taxes, fees, or provider names - return only real backend state.
+
+### Funding focus (optional highlight)
+
+`GET /api/student/payments/focus`
+
+`404` or an empty body hides the Funding Focus strip. Otherwise return one task funding summary object (same shape as a row from `/tasks`, possibly nested under `task`/`funding`/`plan`).
+
+```json
+{
+  "taskId": "task-id",
+  "task": { "id": "task-id", "title": "Task title", "reference": "SN-2048", "status": "PAYMENT_PENDING", "deadline": null },
+  "plan": { "id": "plan-id", "status": "accepted" },
+  "funding": { "state": "payment_required", "amountDue": 8750, "amountPaid": 0, "currency": "LKR", "milestones": [] },
+  "amountDue": 8750,
+  "amountPaid": 0,
+  "currency": "LKR",
+  "paymentModel": "full"
+}
+```
+
+### Task funding summaries (navigator)
+
+`GET /api/student/payments/tasks?search=&filter=`
+
+`filter` is optional (`needs-payment` | `active` | `history`); the client also filters client-side. Return `{ "tasks": [ ...summary ] }` or a bare array. Prefer `200` + `[]` for an empty authorized list.
+
+```json
+{
+  "tasks": [
+    {
+      "id": "task-id",
+      "task": { "id": "task-id", "title": "Task title", "reference": "SN-2048", "status": "PAYMENT_PENDING", "subject": "Subject", "deadline": null },
+      "plan": { "id": "plan-id", "status": "accepted" },
+      "funding": { "state": "payment_required", "amountDue": 8750, "amountPaid": 0, "currency": "LKR" },
+      "milestones": [],
+      "currency": "LKR",
+      "amountDue": 8750,
+      "amountPaid": 0,
+      "paymentModel": "full"
+    }
+  ]
+}
+```
+
+Milestone objects (also used by funding structure):
+
+```json
+{
+  "id": "ms-1",
+  "sequence": 1,
+  "name": "Proposal",
+  "scope": "Scope text",
+  "amount": 3000,
+  "currency": "LKR",
+  "fundingState": "funded | payment_required | locked | released",
+  "workState": "optional",
+  "paidAt": "2026-09-20T10:00:00Z",
+  "paymentId": "pay_123"
+}
+```
+
+### Official plan
+
+`GET /api/student/payments/tasks/:taskId/plan`
+
+`404` means no plan yet (empty state). Accepted statuses (lowercased by the client): `draft`, `ready`, `awaiting_acceptance`, `pending_acceptance`, `accepted`, `declined`, `expired`, `revised`, `superseded`.
+
+```json
+{
+  "id": "plan-id",
+  "reference": "QP-1001",
+  "status": "ready",
+  "issuedAt": "2026-09-18T09:00:00Z",
+  "expiresAt": null,
+  "acceptedAt": null,
+  "title": "Optional plan title",
+  "taskId": "task-id",
+  "taskTitle": "Task title",
+  "scope": "Scope text",
+  "excluded": "Not included",
+  "delivery": "2026-09-28",
+  "price": 8750,
+  "currency": "LKR",
+  "paymentStructure": "full | milestone",
+  "revisionAllowance": 2,
+  "estimate": { "low": null, "high": null, "label": "optional" },
+  "canAccept": true
+}
+```
+
+`POST /api/student/payments/plans/:planId/accept`
+
+Returns the updated plan object. Non-OK responses surface a student-safe `message`.
+
+### Funding structure (standard + milestone)
+
+`GET /api/student/payments/tasks/:taskId/funding`
+
+`404` when unknown. The client may derive a conservative structure from the task summary when this endpoint is missing, but with `providerAvailable: false` (checkout stays disabled - never fake availability).
+
+```json
+{
+  "model": "full | milestone",
+  "currency": "LKR",
+  "amountDue": 8750,
+  "amountTotal": 8750,
+  "amountFunded": 0,
+  "planConfirmed": true,
+  "workLocked": true,
+  "workStateLabel": "optional",
+  "sequence": null,
+  "explanation": "optional",
+  "afterFunding": "optional student-safe note",
+  "providerAvailable": false,
+  "milestones": []
+}
+```
+
+`providerAvailable` must be `true` only when a real payment provider session can be created.
+
+### Checkout / status / history / record / receipt
+
+`POST /api/student/payments/checkout`
+
+Body:
+
+```json
+{
+  "taskId": "task-id",
+  "milestoneId": "ms-1-or-null",
+  "planId": "plan-id-or-null",
+  "idempotencyKey": "chk_unique"
+}
+```
+
+Success (`200`):
+
+```json
+{
+  "paymentId": "pay_123",
+  "checkoutUrl": "https://provider.example/session",
+  "clientSecret": null,
+  "provider": "real-provider-slug",
+  "status": "pending",
+  "message": null
+}
+```
+
+`501` / `404` / `code: "PROVIDER_UNAVAILABLE"` means the client shows an honest "payment unavailable" state. Never return a fabricated success without a real provider session.
+
+`GET /api/student/payments/payments/:paymentId/status` returns a payment record object (same shape as history rows). Poll until terminal: `succeeded` | `paid` | `failed` | `cancelled` | `canceled` | `refunded` | `partially_refunded`. Intermediate: `pending` | `processing` | `requires_action`.
+
+`GET /api/student/payments/history?task=&search=&filter=` returns `{ "payments": [ ... ] }` or a bare array; `404` is treated as `[]`.
+
+Payment record row:
+
+```json
+{
+  "id": "pay_123",
+  "taskId": "task-id",
+  "taskTitle": "Task title",
+  "type": "Funding | Milestone",
+  "milestoneId": null,
+  "milestoneName": null,
+  "planReference": "QP-1001",
+  "amount": 8750,
+  "currency": "LKR",
+  "status": "succeeded",
+  "paidAt": "2026-09-20T10:00:00Z",
+  "createdAt": "2026-09-20T10:00:00Z",
+  "reference": "student-safe reference",
+  "provider": "optional",
+  "receiptUrl": null,
+  "hasReceipt": false,
+  "failureReason": null,
+  "refundAmount": null
+}
+```
+
+`GET /api/student/payments/payments/:paymentId` returns a single record or `404`.
+
+`GET /api/student/payments/payments/:paymentId/receipt` returns `{ "url": "signed-url", "filename": "receipt.pdf", "expiresAt": null }` or `404`/`501` when unavailable. Receipts must be real, signed, and permission-checked; never generate client-side receipts.
+
+### Scope change (optional)
+
+`GET /api/student/payments/tasks/:taskId/scope-change` returns `404` when none.
+
+```json
+{
+  "id": "sc-1",
+  "status": "requested",
+  "reason": "Reason text",
+  "original": { "scope": "Previous scope", "price": 8750, "delivery": "2026-09-28" },
+  "requested": { "scope": "Revised scope", "priceDelta": 1500, "deliveryDelta": "+2 days" },
+  "currency": "LKR",
+  "newTotal": 10250,
+  "canAccept": true
+}
+```
+
+`POST /api/student/payments/scope-changes/:scopeChangeId/accept` returns the updated scope-change object.
+
+### Realtime (optional)
+
+The client also listens for `window` CustomEvent `solvenest:payment` with `detail.kind` one of `payment.succeeded` / `payment_confirmed`, `milestone.funded` / `milestone_funded`, `plan.accepted` / `plan_accepted`, `payment.failed` / `payment_failed`. If the backend pushes via SSE/WebSocket, bridge into this event (or expose REST polling alone - both are supported).
+
+### Key rules
+
+1. All endpoints require student session (`credentials: include`).
+2. Return `401` for absent/expired session, `403` for non-Student.
+3. Enforce student ownership on tasks, plans, milestones, payments, receipts, and scope changes.
+4. Currency always comes from the backend (`LKR` only if that is the real configured currency).
+5. Do not invent Stripe/PayPal names, taxes, fees, or successful checkouts.
+6. Optional endpoints (`focus`, `scope-change`, `receipt`) should answer `404`/`501` when not available so the UI degrades cleanly.
+7. Idempotency: honor `idempotencyKey` on checkout so retries do not double-charge.
