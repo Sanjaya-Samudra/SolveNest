@@ -1,5 +1,6 @@
 import crypto from 'node:crypto'
 import express from 'express'
+import { getAccountView, updatePreferences, updateProfile } from './accountStore.js'
 import { listNotifications, markAllRead, markRead, unreadCount } from './store.js'
 import { createTicket, getCatalog, getTicket, listTickets, resolveGuidance, searchHelp } from './helpStore.js'
 
@@ -30,7 +31,12 @@ function setSessionCookie(res, sid) {
 function ensureStudentSession(req, res) {
   const cookies = parseCookies(req.headers.cookie)
   let sid = cookies[COOKIE]
-  if (sid && sessions.has(sid)) return sessions.get(sid)
+  if (sid && sessions.has(sid)) {
+    const session = sessions.get(sid)
+    session.lastActiveAt = new Date().toISOString()
+    session.device = userAgentLabel(req.headers['user-agent'])
+    return session
+  }
 
   if (process.env.STRICT_SESSION === '1') {
     const err = new Error('STUDENT_ACCESS_REQUIRED')
@@ -39,10 +45,42 @@ function ensureStudentSession(req, res) {
   }
 
   sid = crypto.randomUUID()
-  const session = { id: sid, role: 'Student', studentId: 'demo-student', name: 'Demo Student' }
+  const now = new Date().toISOString()
+  const session = {
+    id: sid,
+    role: 'Student',
+    studentId: 'demo-student',
+    name: 'Demo Student',
+    createdAt: now,
+    lastActiveAt: now,
+    device: userAgentLabel(req.headers['user-agent']),
+  }
   sessions.set(sid, session)
   setSessionCookie(res, sid)
   return session
+}
+
+function userAgentLabel(agent = '') {
+  const text = String(agent || '')
+  if (!text) return 'This device'
+  if (/iPhone|iPad/i.test(text)) return 'iOS device'
+  if (/Android/i.test(text)) return 'Android device'
+  if (/Windows/i.test(text)) return 'Windows device'
+  if (/Macintosh|Mac OS/i.test(text)) return 'Mac device'
+  if (/Linux/i.test(text)) return 'Linux device'
+  return 'This device'
+}
+
+function studentSessionList(studentId, activeSessionId) {
+  return [...sessions.values()]
+    .filter((session) => session.studentId === studentId)
+    .map((session) => ({
+      id: session.id,
+      device: session.device || 'This device',
+      lastActiveAt: session.lastActiveAt || session.createdAt || null,
+      current: session.id === activeSessionId,
+    }))
+    .sort((a, b) => String(b.lastActiveAt || '').localeCompare(String(a.lastActiveAt || '')))
 }
 
 function requireStudent(req, res, next) {
@@ -79,6 +117,69 @@ app.patch('/api/student/notifications/:id/read', requireStudent, (req, res) => {
 app.post('/api/student/notifications/read-all', requireStudent, (req, res) => {
   const notifications = markAllRead()
   res.json({ ok: true, notifications, unreadCount: 0 })
+})
+
+app.get('/api/student/account', requireStudent, (req, res) => {
+  const catalog = getCatalog()
+  res.json({
+    account: getAccountView({
+      student: req.student,
+      sessions: studentSessionList(req.student.studentId, req.student.id),
+      activeSessionId: req.student.id,
+      activeTasks: Array.isArray(catalog.tasks) ? catalog.tasks.length : 0,
+    }),
+  })
+})
+
+app.patch('/api/student/account', requireStudent, (req, res) => {
+  const body = req.body || {}
+  const section = body.section ? String(body.section) : null
+  if (section === 'profile') {
+    updateProfile(req.student.studentId, body.profile || {})
+  } else if (section === 'preferences') {
+    updatePreferences(req.student.studentId, body.preferences || {})
+  } else {
+    res.status(400).json({ error: 'ACCOUNT_SECTION_REQUIRED' })
+    return
+  }
+  const catalog = getCatalog()
+  res.json({
+    account: getAccountView({
+      student: req.student,
+      sessions: studentSessionList(req.student.studentId, req.student.id),
+      activeSessionId: req.student.id,
+      activeTasks: Array.isArray(catalog.tasks) ? catalog.tasks.length : 0,
+    }),
+  })
+})
+
+app.post('/api/student/account/logout', requireStudent, (req, res) => {
+  sessions.delete(req.student.id)
+  res.setHeader('Set-Cookie', `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`)
+  res.json({ ok: true })
+})
+
+app.delete('/api/student/account/sessions/current', requireStudent, (req, res) => {
+  sessions.delete(req.student.id)
+  res.setHeader('Set-Cookie', `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`)
+  res.json({ ok: true, signedOut: true })
+})
+
+app.delete('/api/student/account/sessions/:sessionId', requireStudent, (req, res) => {
+  const sessionId = String(req.params.sessionId || '')
+  const target = sessions.get(sessionId)
+  if (!target || target.studentId !== req.student.studentId) {
+    res.status(404).json({ error: 'SESSION_NOT_FOUND' })
+    return
+  }
+  if (sessionId === req.student.id) {
+    sessions.delete(sessionId)
+    res.setHeader('Set-Cookie', `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`)
+    res.json({ ok: true, signedOut: true })
+    return
+  }
+  sessions.delete(sessionId)
+  res.json({ ok: true })
 })
 
 app.get('/api/student/help', requireStudent, (req, res) => {
