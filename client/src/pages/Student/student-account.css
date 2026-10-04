@@ -17,7 +17,7 @@
   height: 100%;
   min-height: 0;
   max-height: 100%;
-  padding: clamp(18px, 2.6vw, 32px) clamp(18px, 3vw, 40px) clamp(18px, 2.6vw, 32px);
+  padding: clamp(24px, 3vw, 40px) clamp(28px, 3.5vw, 48px) clamp(48px, 5vw, 72px);
   overflow: auto;
   box-sizing: border-box;
   color: var(--acc-ink);
@@ -579,6 +579,7 @@
   gap: 1rem;
   align-items: start;
   min-height: 0;
+  padding-bottom: clamp(12px, 1.5vw, 24px);
 }
 
 .sn-acc__main-col {
@@ -586,6 +587,11 @@
   flex-direction: column;
   gap: 0.9rem;
   min-width: 0;
+  padding-bottom: 0.75rem;
+}
+
+.sn-acc__main-col > .sn-acc__card:last-child {
+  margin-bottom: 0.25rem;
 }
 
 .sn-acc__side {
@@ -597,7 +603,7 @@
   border: 1px solid var(--acc-line);
   border-radius: var(--acc-radius);
   position: sticky;
-  top: 0;
+  top: 0.35rem;
 }
 
 .sn-acc__side-item {
@@ -885,7 +891,7 @@
 
 @media (max-width: 680px) {
   .sn-acc {
-    padding: 14px 14px 88px;
+    padding: 18px 16px 104px;
   }
 
   .sn-acc__header {

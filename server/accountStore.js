@@ -94,7 +94,7 @@ function formatWhen(iso) {
 
 export function getAccountView({ student, sessions = [], activeSessionId = null, activeTasks = 0 }) {
   const account = readAccount(student?.studentId || 'demo-student')
-  const name = student?.name || account.profile.fullName || ''
+  const name = account.profile.fullName || student?.name || ''
   const memberSince = formatWhen(account.createdAt)
 
   return {
