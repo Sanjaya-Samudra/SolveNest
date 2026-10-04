@@ -10,6 +10,7 @@ import { authenticateUser, createSession, createUser, deleteSession, getSession,
 import { getAccountView, updatePreferences, updateProfile } from './accountStore.js'
 import { addNotification, listNotifications, markAllRead, markRead, unreadCount } from './store.js'
 import { createTicket, getCatalog, getTicket, listTickets, resolveGuidance, searchHelp } from './helpStore.js'
+import { expressInterest, getAssignment, listAssignments, listAvailableTasks, listMovement, readExpertStore, setAvailability, toExpertWorkspace } from './expertStore.js'
 import { addActivity, buildTaskSummary, getStudentAnalysis, getStudentFiles, getStudentTask, getStudentTasks, readTaskStore, withTaskStore } from './taskStore.js'
 import { publish, subscribe } from './realtime.js'
 import { hasObjectStorage, persistUpload, removeStoredObject, signedObjectUrl } from './storage.js'
@@ -18,6 +19,8 @@ import { hasSupabaseAuth, supabaseRefresh, supabaseSignIn, supabaseSignUp, supab
 
 const PORT = Number(process.env.PORT || 4174)
 const COOKIE = 'sn_sid'
+const EXPERT_COOKIE = 'sn_eid'
+const expertSessions = new Map()
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const uploadDir = path.join(__dirname, 'private-uploads')
 const requestWindows = new Map()
@@ -642,6 +645,139 @@ function requireStudent(req, res, next) {
   })
 }
 
+function ensureExpertSession(req, res) {
+  const cookies = parseCookies(req.headers.cookie)
+  const sid = cookies[EXPERT_COOKIE]
+  if (sid && expertSessions.has(sid)) {
+    const session = expertSessions.get(sid)
+    session.lastActiveAt = now()
+    session.device = userAgentLabel(req.headers['user-agent'])
+    return session
+  }
+  if (process.env.STRICT_SESSION === '1') {
+    throw Object.assign(new Error('EXPERT_ACCESS_REQUIRED'), { status: 401 })
+  }
+  const newSid = crypto.randomUUID()
+  const stamp = now()
+  const session = {
+    id: newSid,
+    role: 'Expert',
+    expertId: 'demo-expert',
+    studentId: 'demo-expert',
+    name: 'Alex Morgan',
+    email: null,
+    createdAt: stamp,
+    lastActiveAt: stamp,
+    device: userAgentLabel(req.headers['user-agent']),
+  }
+  expertSessions.set(newSid, session)
+  res.setHeader('Set-Cookie', `${EXPERT_COOKIE}=${newSid}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`)
+  return session
+}
+
+function requireExpert(req, res, next) {
+  try {
+    req.expert = ensureExpertSession(req, res)
+    next()
+  } catch (error) {
+    res.status(error.status || 401).json({ error: 'EXPERT_ACCESS_REQUIRED' })
+  }
+}
+
+function expertRoute(handler) {
+  return (req, res, next) => {
+    Promise.resolve(handler(req, res, next)).catch(() => {
+      if (res.headersSent) return
+      safeError(res, 500, 'EXPERT_LOAD_FAILED', 'The expert workspace could not be loaded.')
+    })
+  }
+}
+
+async function expertWorkspaceView() {
+  return toExpertWorkspace(await readExpertStore())
+}
+
+app.get('/api/expert/me', requireExpert, expertRoute(async (req, res) => {
+  const workspace = await expertWorkspaceView()
+  res.json({
+    user: { id: req.expert.expertId, role: 'Expert', name: workspace.expert.name, email: req.expert.email || null },
+    accountState: workspace.accountState,
+    availability: workspace.availability,
+    expert: workspace.expert,
+  })
+}))
+
+app.get('/api/expert/dashboard', requireExpert, expertRoute(async (_req, res) => {
+  res.json(await expertWorkspaceView())
+}))
+
+app.get('/api/expert/availability', requireExpert, expertRoute(async (_req, res) => {
+  res.json({ availability: (await expertWorkspaceView()).availability })
+}))
+
+app.patch('/api/expert/availability', requireExpert, expertRoute(async (req, res) => {
+  const status = String(req.body?.status || '')
+  if (!['available', 'limited', 'unavailable'].includes(status)) {
+    return safeError(res, 400, 'AVAILABILITY_INVALID', 'Choose Available, Limited, or Unavailable.')
+  }
+  const availability = await setAvailability(status)
+  res.json({ ok: true, availability })
+}))
+
+app.get('/api/expert/assignments', requireExpert, expertRoute(async (_req, res) => {
+  res.json({ assignments: await listAssignments() })
+}))
+
+app.get('/api/expert/assignments/:assignmentId', requireExpert, expertRoute(async (req, res) => {
+  const assignment = await getAssignment(req.params.assignmentId)
+  if (!assignment) return safeError(res, 404, 'ASSIGNMENT_NOT_FOUND', 'Assignment not found.')
+  res.json({ assignment })
+}))
+
+app.get('/api/expert/available-tasks', requireExpert, expertRoute(async (req, res) => {
+  const limit = Number(req.query.limit) || 3
+  res.json({ tasks: await listAvailableTasks(limit) })
+}))
+
+app.post('/api/expert/available-tasks/:taskId/interest', requireExpert, expertRoute(async (req, res) => {
+  const result = await expressInterest(req.params.taskId)
+  if (!result.ok) {
+    if (result.error === 'INTEREST_ALREADY_SENT') return safeError(res, 409, 'INTEREST_ALREADY_SENT', 'Interest was already recorded for this task.')
+    return safeError(res, 404, 'TASK_NOT_FOUND', 'Task not found.')
+  }
+  res.status(201).json(result)
+}))
+
+app.get('/api/expert/movement', requireExpert, expertRoute(async (_req, res) => {
+  res.json({ movement: await listMovement() })
+}))
+
+app.get('/api/expert/events', requireExpert, (req, res) => {
+  res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' })
+  res.flushHeaders()
+  res.write(`event: ready\ndata: ${JSON.stringify({ connectedAt: now() })}\n\n`)
+  const key = req.expert.expertId
+  const set = expertSessions.get('__sse__') || new Map()
+  if (!set.has(key)) set.set(key, new Set())
+  expertSessions.set('__sse__', set)
+  const listeners = set.get(key)
+  listeners.add(res)
+  req.on('close', () => {
+    listeners.delete(res)
+    if (!listeners.size) set.delete(key)
+  })
+})
+
+app.post('/api/expert/logout', requireExpert, (req, res) => {
+  expertSessions.delete(req.expert.id)
+  res.setHeader('Set-Cookie', `${EXPERT_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`)
+  res.json({ ok: true })
+})
+
+app.get('/api/health', (req, res) => {
+  res.json({ ok: true, service: 'solvenest-server' })
+})
+
 app.post('/api/auth/register', async (req, res) => {
   const { name, email, password } = req.body || {}
   if (String(name || '').trim().length < 2) return safeError(res, 400, 'NAME_REQUIRED', 'Enter your full name.', { name: 'Enter your full name.' })
@@ -826,10 +962,6 @@ app.post('/api/student/help/tickets', requireStudent, (req, res) => {
     message,
   })
   res.status(201).json(ticket)
-})
-
-app.get('/api/health', (req, res) => {
-  res.json({ ok: true, service: 'solvenest-server' })
 })
 
 app.use((req, res) => {
