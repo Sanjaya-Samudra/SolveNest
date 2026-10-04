@@ -430,6 +430,7 @@ export function StudentDashboard() {
   const [notificationState, setNotificationState] = useState({ items: [], unreadCount: 0 })
   const load = () => { const controller = new AbortController(); setState((current) => ({ ...current, loading: true, error: null })); fetchStudentDashboard(controller.signal).then((model) => setState({ loading: false, error: null, model })).catch((error) => { if (error.name !== 'AbortError') setState({ loading: false, error, model: null }) }); return () => controller.abort() }
   useEffect(() => load(), [])
+  useEffect(() => { const events = new EventSource('/api/student/events', { withCredentials: true }); const refresh = () => { load(); loadNotifications({ force: true }).catch(() => {}) }; events.addEventListener('TaskSubmittedForReview', refresh); events.addEventListener('AnalysisCompleted', refresh); return () => events.close() }, [])
   useEffect(() => { window.localStorage.setItem('sn-student-sidebar', collapsed ? 'collapsed' : 'expanded') }, [collapsed])
   useEffect(() => {
     const unsubscribe = subscribeNotifications((snapshot) => setNotificationState({ items: snapshot.items, unreadCount: snapshot.unreadCount }))
@@ -441,7 +442,7 @@ export function StudentDashboard() {
   }, [notificationsOpen])
   const model = state.model
   const path = window.location.pathname
-  const onCreated = () => { load() }
+  const onCreated = () => { load(); loadNotifications({ force: true }).catch(() => {}) }
   const attentionQueue = getAttentionQueue(model)
   const unreadNotifications = notificationState.unreadCount
   const drawerNotifications = notificationState.items.slice(0, 8)

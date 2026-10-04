@@ -11,10 +11,13 @@ async function request(path, options = {}) {
   return response.json()
 }
 
-export function uploadStudentTaskFile(file, kind, onProgress) {
+export function createStudentTaskSession() { return request('/session', { method: 'POST', headers: { Accept: 'application/json' } }) }
+
+export function uploadStudentTaskFile(file, kind, onProgress, sessionId) {
   const body = new FormData()
   body.append('file', file)
   body.append('kind', kind)
+  if (sessionId) body.append('sessionId', sessionId)
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest()
     xhr.open('POST', `${API}/files`)
@@ -26,10 +29,15 @@ export function uploadStudentTaskFile(file, kind, onProgress) {
   })
 }
 
-export function analyzeStudentTask(fileIds) {
-  return request('/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ fileIds }) })
+export function removeStudentTaskFile(fileId) {
+  return request(`/files/${encodeURIComponent(fileId)}`, { method: 'DELETE', headers: { Accept: 'application/json' } })
+}
+
+export function analyzeStudentTask(fileIds, sessionId) {
+  return request('/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ fileIds, sessionId }) })
 }
 
 export function createStudentTask(payload) {
-  return request('/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(payload) })
+  const key = payload.idempotencyKey || crypto.randomUUID()
+  return request('/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'Idempotency-Key': key }, body: JSON.stringify({ ...payload, idempotencyKey: key }) })
 }

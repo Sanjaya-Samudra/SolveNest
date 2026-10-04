@@ -5,6 +5,7 @@ import {
 } from 'framer-motion'
 import { ArrowRight, Check, FileSearch, ClipboardCheck, TrendingUp, ShieldCheck } from 'lucide-react'
 import { PolicyReader } from './PolicyReader.jsx'
+import { loginStudent } from '../../student/authData.js'
 
 const nav = (p) => { window.history.pushState({}, '', p); window.dispatchEvent(new PopStateEvent('popstate')) }
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -277,7 +278,7 @@ export function SignInPage() {
     setErrors((e) => ({ ...e, [k]: null, form: null }))
   }
 
-  const submit = (e) => {
+  const submit = async (e) => {
     e.preventDefault()
     if (status === 'sending' || status === 'granted') return
     const errs = {}
@@ -291,12 +292,7 @@ export function SignInPage() {
       else window.localStorage.removeItem('sn-email')
     } catch {}
     setStatus('sending')
-    timers.current.push(setTimeout(() => {
-      let fail = false
-      try { fail = new URLSearchParams(window.location.search).get('demo') === 'fail' } catch {}
-      setStatus(fail ? 'failed' : 'granted')
-      if (fail) setErrors({ form: 'Those details did not match an account.' })
-    }, 900))
+    try { await loginStudent({ email: email.trim(), password }); setStatus('granted') } catch (error) { setStatus('failed'); setErrors({ form: error.message, ...(error.fieldErrors || {}) }) }
   }
   const sendReset = (e) => {
     e.preventDefault()
@@ -417,7 +413,7 @@ export function SignInPage() {
               <h1>Your workspace<br /><em>is ready.</em></h1>
               <p className="sn-lede">Identity verified. Continue into SolveNest.</p>
               <div className="sn-granted-actions">
-                <button className="sn-cta" onClick={() => nav('/analyze')}>Analyze My Task <ArrowRight size={15} /></button>
+                <button className="sn-cta" onClick={() => nav('/student/dashboard')}>Open Student Workspace <ArrowRight size={15} /></button>
                 <button className="sn-link" onClick={() => nav('/help')}>Visit Help Centre →</button>
               </div>
             </motion.div>

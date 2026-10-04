@@ -5,6 +5,7 @@ import {
 } from 'framer-motion'
 import { ArrowRight, Check, Mail, ClipboardList, Sparkles, FolderOpen, TrendingUp } from 'lucide-react'
 import { PolicyReader } from './PolicyReader.jsx'
+import { registerStudent } from '../../student/authData.js'
 
 const nav = (p) => { window.history.pushState({}, '', p); window.dispatchEvent(new PopStateEvent('popstate')) }
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -183,7 +184,7 @@ export function SignUpPage() {
     timers.current.push(setTimeout(() => setStep(2), 650))
   }
 
-  const submitAccount = (e) => {
+  const submitAccount = async (e) => {
     e.preventDefault()
     if (status === 'sending') return
     const errs = {}
@@ -197,12 +198,7 @@ export function SignUpPage() {
     setErrors(errs)
     if (Object.keys(errs).length) return
     setStatus('sending')
-    timers.current.push(setTimeout(() => {
-      let fail = false
-      try { fail = new URLSearchParams(window.location.search).get('demo') === 'fail' } catch {}
-      if (fail) { setStatus('idle'); setErrors({ form: 'We couldn’t create your account with those details.' }) }
-      else { setStatus('idle'); setStep(1) }
-    }, 900))
+    try { await registerStudent({ name: name.trim(), email: email.trim(), password }); setStatus('idle'); setStep(1) } catch (error) { setStatus('idle'); setErrors({ form: error.message, ...(error.fieldErrors || {}) }) }
   }
 
   return (
@@ -323,8 +319,8 @@ export function SignUpPage() {
                 <h1>Your workspace<br /><em>is created.</em></h1>
                 <p className="sn-lede">Account ready. Your empty SolveNest workspace is waiting inside.</p>
                 <div className="sn-granted-actions">
-                  <button className="sn-cta" onClick={() => nav('/')}>Continue to SolveNest <ArrowRight size={15} /></button>
-                  <button className="sn-link" onClick={() => nav('/analyze')}>Analyze My Task →</button>
+                  <button className="sn-cta" onClick={() => nav('/student/dashboard')}>Continue to Student Workspace <ArrowRight size={15} /></button>
+                  <button className="sn-link" onClick={() => nav('/student/dashboard')}>Analyze My Task →</button>
                 </div>
               </motion.div>
             )}
