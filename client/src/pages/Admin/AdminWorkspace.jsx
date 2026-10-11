@@ -53,6 +53,7 @@ function AdminSidebar({ filter, setFilter, staff, mobileOpen, setMobileOpen }) {
         <button className={filter === 'in-review' ? 'is-active' : ''} onClick={() => { setFilter('in-review'); setMobileOpen(false); go(null) }}><Clock3 size={17} /> In review</button>
         <button className={filter === 'decided' ? 'is-active' : ''} onClick={() => { setFilter('decided'); setMobileOpen(false); go(null) }}><CheckCircle2 size={17} /> Decisions</button>
         <button className={filter === 'all' ? 'is-active' : ''} onClick={() => { setFilter('all'); setMobileOpen(false); go(null) }}><ClipboardList size={17} /> All tasks</button>
+        {staff?.role === 'Superadmin' && <><p className="adm-nav-label" style={{ marginTop: 22 }}>GOVERNANCE</p><button onClick={() => window.location.assign('/superadmin')}><ShieldCheck size={17} /> Super Admin</button></>}
       </nav>
       <div className="adm-sidebar-foot"><span className="adm-avatar">{staff?.name?.slice(0, 1) || 'A'}</span><span><strong>{staff?.name || 'Admin'}</strong><small>{staff?.demo ? 'Local preview' : staff?.role}</small></span></div>
     </aside></>

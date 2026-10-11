@@ -38,7 +38,7 @@ Required in production:
 4. Put the server-only service role key in `SUPABASE_SERVICE_ROLE_KEY`. Never add this key to `client/.env` or browser code.
 5. Set `SUPABASE_STORAGE_BUCKET=student-files`.
 6. Create a private Storage bucket with that name.
-7. In the Supabase SQL Editor, run the contents of `server/migrations/001_initial.sql`.
+7. In the Supabase SQL Editor, run `server/migrations/001_initial.sql`, then `server/migrations/002_staff_governance.sql`.
 8. In **Authentication > Providers**, enable Email/password. Decide whether email confirmation is required; if enabled, configure SMTP in Supabase Auth and complete confirmation before the first Student session.
 
 The migration creates a `profiles` table linked to `auth.users`, a signup trigger, Row Level Security policies, task/file/analysis/review tables, idempotency records, and guest-transfer records. The service role is used only by the trusted server for Storage and server-side operations.
@@ -46,6 +46,8 @@ The migration creates a `profiles` table linked to `auth.users`, a signup trigge
 Expert sign-in uses `/expert/login` and requires an existing Supabase Auth user whose `profiles.role` is `Expert` and whose profile ID matches the assigned Expert workspace ID. Local development without Supabase can still open the demo Expert workspace when `STRICT_SESSION=0`. Production always requires a signed-in Expert session.
 
 Admin sign-in uses `/admin` and requires an existing Supabase Auth user whose `profiles.role` is `Admin` or `Superadmin`. Set the role for an approved staff account in the Supabase dashboard or SQL Editor. For local preview only, set `ADMIN_DEMO_SESSION=1` in `server/.env` and restart the server. The preview is available only from the same computer while `NODE_ENV` is not `production`.
+
+Super Admin sign-in uses `/superadmin` and requires `profiles.role = 'Superadmin'`. Apply `server/migrations/002_staff_governance.sql` to enable audited role changes and the activity feed. Create the first Superadmin through a trusted Supabase administrator; the workspace does not let a user promote their own account. Set `SUPERADMIN_DEMO_SESSION=1` for a loopback-only visual preview. That preview cannot read or change real team access.
 
 ## 4. PostgreSQL
 

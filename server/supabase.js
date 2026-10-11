@@ -13,6 +13,36 @@ export function hasSupabase() { return Boolean(authClient && adminClient) }
 export function hasSupabaseAuth() { return Boolean(authClient) }
 export function hasSupabaseStorage() { return Boolean(adminClient) }
 export async function supabaseProfile(userId) { if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED'); const { data, error } = await adminClient.from('profiles').select('id, role, name, email').eq('id', userId).maybeSingle(); if (error) throw error; return data }
+export async function supabaseTeam() {
+  if (!adminClient) return null
+  const roles = ['Student', 'Expert', 'Admin', 'Superadmin']
+  const counts = await Promise.all(roles.map(async (role) => {
+    const { count, error } = await adminClient.from('profiles').select('id', { count: 'exact', head: true }).eq('role', role)
+    if (error) throw error
+    return [role, count || 0]
+  }))
+  const { data, error } = await adminClient.from('profiles').select('id, name, email, role, created_at, updated_at').in('role', ['Expert', 'Admin', 'Superadmin']).order('created_at', { ascending: false }).limit(200)
+  if (error) throw error
+  return { counts: Object.fromEntries(counts), people: data || [], capped: (counts.find(([role]) => role === 'Expert')?.[1] || 0) + (counts.find(([role]) => role === 'Admin')?.[1] || 0) + (counts.find(([role]) => role === 'Superadmin')?.[1] || 0) > (data || []).length }
+}
+export async function supabaseFindProfileByEmail(email) {
+  if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED')
+  const { data, error } = await adminClient.from('profiles').select('id, name, email, role, created_at, updated_at').eq('email', email).maybeSingle()
+  if (error) throw error
+  return data
+}
+export async function supabaseRoleEvents() {
+  if (!adminClient) return []
+  const { data, error } = await adminClient.from('staff_role_events').select('id, actor_email, target_email, previous_role, new_role, note, created_at').order('created_at', { ascending: false }).limit(50)
+  if (error) throw error
+  return data || []
+}
+export async function supabaseChangeStaffRole(actorId, targetId, expectedRole, newRole, note) {
+  if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED')
+  const { data, error } = await adminClient.rpc('change_staff_role', { p_actor: actorId, p_target: targetId, p_expected_role: expectedRole, p_new_role: newRole, p_note: note })
+  if (error) throw error
+  return data
+}
 export async function supabaseReadState() { if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED'); const { data, error } = await adminClient.from('app_state').select('state').eq('id', 'default').maybeSingle(); if (error) throw error; return data?.state || { tasks: [], files: [], analyses: [], reviews: [], drafts: [], guestTransfers: [], conversations: [], messages: [], payments: [], plans: [], scopeChanges: [], explainSessions: [], explainArtifacts: [], idempotency: {}, activity: [], notifications: [] } }
 export async function supabaseWriteState(state) { if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED'); const { error } = await adminClient.from('app_state').upsert({ id: 'default', state, updated_at: new Date().toISOString() }); if (error) throw error; return state }
 export async function supabaseSignUp({ email, password, name }) { if (!authClient) throw new Error('SUPABASE_NOT_CONFIGURED'); return authClient.auth.signUp({ email, password, options: { data: { name, role: 'Student' } } }) }

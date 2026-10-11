@@ -44,8 +44,9 @@ import { addActivity, buildTaskSummary, getStudentAnalysis, getStudentFiles, get
 import { publish, subscribe } from './realtime.js'
 import { hasObjectStorage, persistUpload, removeStoredObject, signedObjectUrl } from './storage.js'
 import { hasEmail, sendEmail } from './email.js'
-import { hasSupabaseAuth, supabaseProfile, supabaseRefresh, supabaseRequestPasswordReset, supabaseUpdatePassword, supabaseSignIn, supabaseSignUp, supabaseUser } from './supabase.js'
+import { hasSupabase, hasSupabaseAuth, supabaseChangeStaffRole, supabaseFindProfileByEmail, supabaseProfile, supabaseRefresh, supabaseRequestPasswordReset, supabaseTeam, supabaseUpdatePassword, supabaseSignIn, supabaseSignUp, supabaseUser } from './supabase.js'
 import { getAdminCase, getAdminOverview, recordAdminReview } from './adminStore.js'
+import { getSuperadminActivity, getSuperadminOverview } from './superadminStore.js'
 
 const PORT = Number(process.env.PORT || 4174)
 const COOKIE = 'sn_sid'
@@ -1350,26 +1351,44 @@ app.post('/api/student/help/tickets', requireStudent, (req, res) => {
 })
 
 function localStaffPreview(req) {
-  return process.env.NODE_ENV !== 'production' && process.env.ADMIN_DEMO_SESSION === '1' && /^(::1|127\.0\.0\.1|::ffff:127\.0\.0\.1)$/.test(req.ip || '')
+  return process.env.NODE_ENV !== 'production' && (process.env.ADMIN_DEMO_SESSION === '1' || process.env.SUPERADMIN_DEMO_SESSION === '1') && /^(::1|127\.0\.0\.1|::ffff:127\.0\.0\.1)$/.test(req.ip || '')
 }
 
-function requireStaff(req, res, next) {
+async function requireStaff(req, res, next) {
   const sid = parseCookies(req.headers.cookie)[STAFF_COOKIE]
   if (sid && staffSessions.has(sid)) {
-    req.staff = staffSessions.get(sid)
-    return next()
+    try {
+      const session = staffSessions.get(sid)
+      const profile = await supabaseProfile(session.id)
+      if (['Admin', 'Superadmin'].includes(profile?.role)) {
+        req.staff = { id: profile.id, name: profile.name, email: profile.email, role: profile.role }
+        return next()
+      }
+      staffSessions.delete(sid)
+      return safeError(res, 401, 'STAFF_ACCESS_REQUIRED', 'This account no longer has staff access.')
+    } catch (error) {
+      console.error('[staff] profile check failed', error)
+      return safeError(res, 503, 'STAFF_ACCESS_UNAVAILABLE', 'Staff access could not be verified right now.')
+    }
   }
   if (localStaffPreview(req)) {
-    req.staff = { id: 'local-admin', name: 'Local Admin', role: 'Admin', demo: true }
+    const superadmin = process.env.SUPERADMIN_DEMO_SESSION === '1'
+    req.staff = { id: superadmin ? 'local-superadmin' : 'local-admin', name: superadmin ? 'Local Super Admin' : 'Local Admin', role: superadmin ? 'Superadmin' : 'Admin', demo: true }
     return next()
   }
   safeError(res, 401, 'STAFF_ACCESS_REQUIRED', 'Sign in with an Admin account to continue.')
 }
 
+function requireSuperadmin(req, res, next) {
+  if (req.staff?.role !== 'Superadmin') return safeError(res, 403, 'SUPERADMIN_REQUIRED', 'Super Admin access is required.')
+  next()
+}
+
 function staffRoute(handler) {
   return (req, res) => Promise.resolve(handler(req, res)).catch((error) => {
     console.error(`[staff] ${req.method} ${req.originalUrl}`, error)
-    if (!res.headersSent) safeError(res, 500, 'STAFF_LOAD_FAILED', 'The Admin workspace could not be loaded.')
+    if (!res.headersSent && /staff_role_events|change_staff_role/.test(String(error.message || ''))) return safeError(res, 503, 'STAFF_GOVERNANCE_SETUP_REQUIRED', 'Apply the staff governance database migration to use this feature.')
+    if (!res.headersSent) safeError(res, 500, 'STAFF_LOAD_FAILED', 'The staff workspace could not be loaded.')
   })
 }
 
@@ -1405,6 +1424,48 @@ app.post('/api/admin/tasks/:taskId/review', requireStaff, staffRoute(async (req,
   const result = await recordAdminReview(req.params.taskId, req.staff.id, req.body?.action, req.body?.note)
   if (result.error) return safeError(res, result.error === 'TASK_NOT_FOUND' ? 404 : result.error === 'NOTE_REQUIRED' || result.error === 'INVALID_ACTION' ? 400 : 409, result.error, result.error === 'NOTE_REQUIRED' ? 'Add an internal note of at least 10 characters.' : 'This review cannot be changed from its current state.')
   res.json(result)
+}))
+
+app.get('/api/superadmin/overview', requireStaff, requireSuperadmin, staffRoute(async (_req, res) => {
+  const services = [
+    { id: 'auth', label: 'Account sign in', configured: hasSupabaseAuth() },
+    { id: 'data', label: 'Persistent data', configured: hasSupabase() },
+    { id: 'storage', label: 'Private file storage', configured: hasObjectStorage() },
+    { id: 'analysis', label: 'Solvy analysis', configured: Boolean(process.env.SOLVY_API_URL && process.env.SOLVY_API_KEY) },
+    { id: 'payments', label: 'Payments', configured: Boolean(stripe && process.env.STRIPE_WEBHOOK_SECRET) },
+    { id: 'email', label: 'Email delivery', configured: hasEmail() },
+  ]
+  res.json(await getSuperadminOverview(services))
+}))
+app.get('/api/superadmin/team', requireStaff, requireSuperadmin, staffRoute(async (req, res) => {
+  res.json({ directory: req.staff.demo ? null : await supabaseTeam() })
+}))
+app.get('/api/superadmin/team/lookup', requireStaff, requireSuperadmin, staffRoute(async (req, res) => {
+  if (req.staff.demo || !hasSupabase()) return safeError(res, 503, 'TEAM_LOOKUP_UNAVAILABLE', 'Team lookup requires a real Super Admin account and Supabase.')
+  if (!limited(`staff-lookup:${req.staff.id}`, 30)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before looking up another account.')
+  const email = String(req.query.email || '').trim().toLowerCase()
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 320) return safeError(res, 400, 'INVALID_EMAIL', 'Enter a valid account email.')
+  res.json({ person: await supabaseFindProfileByEmail(email) })
+}))
+app.get('/api/superadmin/activity', requireStaff, requireSuperadmin, staffRoute(async (req, res) => {
+  res.json({ activity: await getSuperadminActivity(!req.staff.demo && hasSupabase()) })
+}))
+app.post('/api/superadmin/team/:profileId/role', requireStaff, requireSuperadmin, staffRoute(async (req, res) => {
+  if (req.staff.demo || !hasSupabase()) return safeError(res, 503, 'ROLE_MANAGEMENT_UNAVAILABLE', 'Role management requires a real Super Admin account and Supabase.')
+  if (!limited(`staff-role:${req.staff.id}`, 20)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before changing another role.')
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(req.params.profileId)) return safeError(res, 400, 'INVALID_PROFILE', 'Choose a valid account.')
+  const { role, expectedRole, note } = req.body || {}
+  if (!['Student', 'Expert', 'Admin', 'Superadmin'].includes(role) || !['Student', 'Expert', 'Admin', 'Superadmin'].includes(expectedRole)) return safeError(res, 400, 'INVALID_ROLE', 'Choose a valid account role.')
+  if (String(note || '').trim().length < 10) return safeError(res, 400, 'NOTE_REQUIRED', 'Add a reason of at least 10 characters.')
+  if (req.params.profileId === req.staff.id) return safeError(res, 400, 'SELF_ROLE_CHANGE_BLOCKED', 'You cannot change your own role.')
+  try {
+    const result = await supabaseChangeStaffRole(req.staff.id, req.params.profileId, expectedRole, role, String(note).trim().slice(0, 2000))
+    res.json({ result })
+  } catch (error) {
+    const code = ['ROLE_CHANGED', 'ROLE_UNCHANGED', 'PROFILE_NOT_FOUND', 'SUPERADMIN_REQUIRED', 'SELF_ROLE_CHANGE_BLOCKED'].find((item) => String(error.message).includes(item))
+    if (code) return safeError(res, code === 'PROFILE_NOT_FOUND' ? 404 : 409, code, 'The role could not be changed. Refresh the team directory and try again.')
+    throw error
+  }
 }))
 
 app.use((req, res) => {
