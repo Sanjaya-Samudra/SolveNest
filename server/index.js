@@ -45,11 +45,14 @@ import { publish, subscribe } from './realtime.js'
 import { hasObjectStorage, persistUpload, removeStoredObject, signedObjectUrl } from './storage.js'
 import { hasEmail, sendEmail } from './email.js'
 import { hasSupabaseAuth, supabaseProfile, supabaseRefresh, supabaseRequestPasswordReset, supabaseUpdatePassword, supabaseSignIn, supabaseSignUp, supabaseUser } from './supabase.js'
+import { getAdminCase, getAdminOverview, recordAdminReview } from './adminStore.js'
 
 const PORT = Number(process.env.PORT || 4174)
 const COOKIE = 'sn_sid'
 const EXPERT_COOKIE = 'sn_eid'
 const expertSessions = new Map()
+const staffSessions = new Map()
+const STAFF_COOKIE = 'sn_staff'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const uploadDir = path.join(__dirname, 'private-uploads')
 const requestWindows = new Map()
@@ -1345,6 +1348,64 @@ app.post('/api/student/help/tickets', requireStudent, (req, res) => {
   })
   res.status(201).json(ticket)
 })
+
+function localStaffPreview(req) {
+  return process.env.NODE_ENV !== 'production' && process.env.ADMIN_DEMO_SESSION === '1' && /^(::1|127\.0\.0\.1|::ffff:127\.0\.0\.1)$/.test(req.ip || '')
+}
+
+function requireStaff(req, res, next) {
+  const sid = parseCookies(req.headers.cookie)[STAFF_COOKIE]
+  if (sid && staffSessions.has(sid)) {
+    req.staff = staffSessions.get(sid)
+    return next()
+  }
+  if (localStaffPreview(req)) {
+    req.staff = { id: 'local-admin', name: 'Local Admin', role: 'Admin', demo: true }
+    return next()
+  }
+  safeError(res, 401, 'STAFF_ACCESS_REQUIRED', 'Sign in with an Admin account to continue.')
+}
+
+function staffRoute(handler) {
+  return (req, res) => Promise.resolve(handler(req, res)).catch((error) => {
+    console.error(`[staff] ${req.method} ${req.originalUrl}`, error)
+    if (!res.headersSent) safeError(res, 500, 'STAFF_LOAD_FAILED', 'The Admin workspace could not be loaded.')
+  })
+}
+
+app.post('/api/admin/login', staffRoute(async (req, res) => {
+  if (!hasSupabaseAuth()) return safeError(res, 503, 'STAFF_LOGIN_UNAVAILABLE', 'Staff sign-in is not configured yet.')
+  if (!limited(`staff-login:${req.ip}`, 10)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before trying again.')
+  const { data, error } = await supabaseSignIn({ email: req.body?.email, password: req.body?.password })
+  if (error || !data?.user) return safeError(res, 401, 'INVALID_CREDENTIALS', 'Those details did not match an account.')
+  const profile = await supabaseProfile(data.user.id)
+  if (!['Admin', 'Superadmin'].includes(profile?.role)) return safeError(res, 403, 'STAFF_ACCESS_REQUIRED', 'This account does not have staff access.')
+  const sid = crypto.randomUUID()
+  const staff = { id: profile.id, name: profile.name, email: profile.email, role: profile.role }
+  staffSessions.set(sid, staff)
+  res.setHeader('Set-Cookie', `${STAFF_COOKIE}=${sid}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`)
+  res.json({ staff })
+}))
+
+app.get('/api/admin/me', requireStaff, (req, res) => res.json({ staff: req.staff }))
+app.post('/api/admin/logout', requireStaff, (req, res) => {
+  const sid = parseCookies(req.headers.cookie)[STAFF_COOKIE]
+  if (sid) staffSessions.delete(sid)
+  res.setHeader('Set-Cookie', `${STAFF_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`)
+  res.json({ ok: true })
+})
+app.get('/api/admin/overview', requireStaff, staffRoute(async (_req, res) => res.json(await getAdminOverview())))
+app.get('/api/admin/tasks/:taskId', requireStaff, staffRoute(async (req, res) => {
+  const detail = await getAdminCase(req.params.taskId)
+  if (!detail) return safeError(res, 404, 'TASK_NOT_FOUND', 'This task could not be found.')
+  res.json(detail)
+}))
+app.post('/api/admin/tasks/:taskId/review', requireStaff, staffRoute(async (req, res) => {
+  if (!limited(`admin-review:${req.staff.id}`, 30)) return safeError(res, 429, 'RATE_LIMITED', 'Too many review actions. Please wait a moment.')
+  const result = await recordAdminReview(req.params.taskId, req.staff.id, req.body?.action, req.body?.note)
+  if (result.error) return safeError(res, result.error === 'TASK_NOT_FOUND' ? 404 : result.error === 'NOTE_REQUIRED' || result.error === 'INVALID_ACTION' ? 400 : 409, result.error, result.error === 'NOTE_REQUIRED' ? 'Add an internal note of at least 10 characters.' : 'This review cannot be changed from its current state.')
+  res.json(result)
+}))
 
 app.use((req, res) => {
   res.status(404).json({ error: 'NOT_FOUND' })

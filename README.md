@@ -24,3 +24,5 @@ The project is built for students, mentors, and admins, with a premium academic 
 ## Run locally
 
 Install dependencies in both `client` and `server`, then run `npm run dev` from the project root. This starts the API on port 4174 and Vite on its available development port. Starting only Vite leaves `/api` requests without a server, so the Student and Expert workspaces cannot load.
+
+The Admin review workspace is at `/admin`. Local development can preview it with `ADMIN_DEMO_SESSION=1` in `server/.env`; this preview is limited to loopback requests and never applies in production. A deployed Admin signs in with a Supabase profile whose role is `Admin` or `Superadmin`.

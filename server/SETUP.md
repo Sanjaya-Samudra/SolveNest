@@ -45,6 +45,8 @@ The migration creates a `profiles` table linked to `auth.users`, a signup trigge
 
 Expert sign-in uses `/expert/login` and requires an existing Supabase Auth user whose `profiles.role` is `Expert` and whose profile ID matches the assigned Expert workspace ID. Local development without Supabase can still open the demo Expert workspace when `STRICT_SESSION=0`. Production always requires a signed-in Expert session.
 
+Admin sign-in uses `/admin` and requires an existing Supabase Auth user whose `profiles.role` is `Admin` or `Superadmin`. Set the role for an approved staff account in the Supabase dashboard or SQL Editor. For local preview only, set `ADMIN_DEMO_SESSION=1` in `server/.env` and restart the server. The preview is available only from the same computer while `NODE_ENV` is not `production`.
+
 ## 4. PostgreSQL
 
 1. Supabase already provides PostgreSQL.
