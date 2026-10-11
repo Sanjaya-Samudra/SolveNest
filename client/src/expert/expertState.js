@@ -101,6 +101,7 @@ export function resolveExpertNextAction(task) {
 }
 
 export function resolveExpertDeadlinePriority(task) {
+  if (resolveExpertTaskState(task).closed) return 'green'
   const deadline = parseDeadline(task?.deadline)
   if (!deadline) return 'neutral'
   const diff = deadline - Date.now()
@@ -239,7 +240,11 @@ export function resolveExpertDashboardFocus(assignments = [], availableTasks = [
 export function buildExpertRoute({ section, assignmentId, taskId } = {}) {
   const key = section || 'dashboard'
   if (key === 'dashboard') return '/expert/dashboard'
-  if (key === 'available-tasks' && taskId) return `/expert/available-tasks?task=${encodeURIComponent(taskId)}`
-  if (key === 'assignments' && assignmentId) return `/expert/assignments?assignment=${encodeURIComponent(assignmentId)}`
+  if (key === 'available-tasks') {
+    return taskId
+      ? `/expert/available?task=${encodeURIComponent(taskId)}`
+      : '/expert/available'
+  }
+  if (key === 'assignments' && assignmentId) return `/expert/assignments/${encodeURIComponent(assignmentId)}`
   return `/expert/${key}`
 }

@@ -20,3 +20,7 @@ The project is built for students, mentors, and admins, with a premium academic 
 - Tailwind CSS
 - Three.js
 - Node.js
+
+## Run locally
+
+Install dependencies in both `client` and `server`, then run `npm run dev` from the project root. This starts the API on port 4174 and Vite on its available development port. Starting only Vite leaves `/api` requests without a server, so the Student and Expert workspaces cannot load.

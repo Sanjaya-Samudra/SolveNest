@@ -11,3 +11,5 @@ async function request(path, body) {
 
 export function registerStudent(payload) { return request('/api/auth/register', payload) }
 export function loginStudent(payload) { return request('/api/auth/login', payload) }
+export function requestPasswordReset(email) { return request('/api/auth/password-reset', { email }) }
+export function completePasswordReset(payload) { return request('/api/auth/password-reset/complete', payload) }

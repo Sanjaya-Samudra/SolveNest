@@ -323,6 +323,12 @@
   background: rgba(255, 255, 255, 0.05);
 }
 
+.exp-sidebar.is-collapsed .exp-availability-chip {
+  justify-content: center;
+  height: 36px;
+  padding: 0;
+}
+
 .expert-app.is-collapsed .exp-brand {
   justify-content: center;
   padding-left: 0;
@@ -830,6 +836,10 @@
   color: #ff8f86;
 }
 
+.exp-focus-deadline[data-tone='green'] {
+  color: #57cf94;
+}
+
 .exp-focus-reason {
   font-size: 14px;
   line-height: 1.5;
@@ -1070,6 +1080,10 @@
   background: var(--exp-red);
 }
 
+.exp-ledger-dot[data-tone='green'] {
+  background: var(--exp-green);
+}
+
 .exp-ledger-main {
   grid-area: main;
   min-width: 0;
@@ -1148,6 +1162,10 @@
 
 .exp-ledger-due[data-tone='red'] {
   color: var(--exp-red);
+}
+
+.exp-ledger-due[data-tone='green'] {
+  color: var(--exp-green);
 }
 
 .exp-ledger-next {
@@ -1332,6 +1350,10 @@
   color: var(--exp-red);
 }
 
+.exp-pulse-due[data-tone='green'] {
+  color: var(--exp-green);
+}
+
 .exp-pulse-latest {
   display: flex;
   align-items: center;
@@ -1392,6 +1414,11 @@
   border-color: rgba(217, 72, 63, 0.32);
 }
 
+.exp-radar-list li[data-tone='green'] {
+  background: var(--exp-green-wash);
+  border-color: rgba(31, 157, 97, 0.32);
+}
+
 .exp-radar-marker {
   width: 8px;
   height: 8px;
@@ -1407,6 +1434,11 @@
 .exp-radar-list li[data-tone='red'] .exp-radar-marker {
   background: var(--exp-red);
   box-shadow: 0 0 0 4px rgba(217, 72, 63, 0.16);
+}
+
+.exp-radar-list li[data-tone='green'] .exp-radar-marker {
+  background: var(--exp-green);
+  box-shadow: 0 0 0 4px rgba(31, 157, 97, 0.16);
 }
 
 .exp-radar-list li div {

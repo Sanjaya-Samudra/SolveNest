@@ -1,18 +1,18 @@
 import { useEffect, useMemo, useState } from 'react'
 import { LogOut, ShieldCheck, Radio } from 'lucide-react'
 import { useExpertAccountGate, useExpertDashboard } from '../../expert/expertDashboardData.js'
+import { parseAssignmentRoute } from '../../expert/assignmentState.js'
 import { signOutExpert } from '../../expert/expertApi.js'
 import { ExpertAppShell, ExpertGate, goExpert } from './ExpertAppShell.jsx'
 import {
-  AssignmentDesk,
-  AvailableForYou,
-  DeadlineRadar,
-  ExpertAssignmentPulse,
   ExpertAvailabilityControl,
   ExpertDashboardPage,
   ExpertDashboardSkeletons,
   RecentMovement,
 } from './ExpertDashboardPage.jsx'
+import { ExpertAssignments } from './ExpertAssignments.jsx'
+import { ExpertAssignmentWorkspace } from './ExpertAssignmentWorkspace.jsx'
+import { ExpertAvailableForYou } from './ExpertAvailableForYou.jsx'
 
 function currentPath() {
   return window.location.pathname.startsWith('/expert') ? window.location.pathname : '/expert/dashboard'
@@ -21,43 +21,6 @@ function currentPath() {
 function normalizePath(path) {
   if (path === '/expert') return '/expert/dashboard'
   return path
-}
-
-function AssignmentsSection({ dashboard }) {
-  const { assignments, selectedAssignment, selectAssignment, loading } = dashboard
-  return (
-    <div className="exp-section">
-      <header className="exp-section-head">
-        <p className="exp-overline">ASSIGNMENTS</p>
-        <h1>Assignment desk</h1>
-        <p>Every confirmed SolveNest assignment with its current work state and next action.</p>
-      </header>
-      <div className="exp-section-split">
-        <AssignmentDesk
-          assignments={assignments}
-          selected={selectedAssignment}
-          onSelect={selectAssignment}
-          loading={loading}
-        />
-        <ExpertAssignmentPulse assignment={selectedAssignment} onSelect={selectAssignment} />
-      </div>
-      <DeadlineRadar deadlines={dashboard.deadlines} />
-    </div>
-  )
-}
-
-function AvailableSection({ dashboard }) {
-  const tasks = dashboard.workspace?.availableTaskPreview || []
-  return (
-    <div className="exp-section">
-      <header className="exp-section-head">
-        <p className="exp-overline">AVAILABLE FOR YOU</p>
-        <h1>Open tasks</h1>
-        <p>Express interest in work that matches your expertise. SolveNest confirms assignments — there is no bidding.</p>
-      </header>
-      <AvailableForYou tasks={tasks} />
-    </div>
-  )
 }
 
 function ActivitySection({ dashboard }) {
@@ -153,7 +116,7 @@ function AccountSection({ dashboard, gate }) {
               try {
                 await signOutExpert()
               } catch {}
-              goExpert('/')
+              goExpert('/expert/login')
             }}
           >
             <LogOut size={15} />
@@ -170,12 +133,14 @@ export function ExpertDashboard() {
   const gate = useExpertAccountGate()
   const dashboard = useExpertDashboard()
   const [path, setPath] = useState(normalizePath(currentPath()))
+  const [search, setSearch] = useState(() => window.location.search)
   const [collapsed, setCollapsed] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
 
   useEffect(() => {
     const update = () => {
       setPath(normalizePath(currentPath()))
+      setSearch(window.location.search)
       setMenuOpen(false)
       window.scrollTo(0, 0)
     }
@@ -189,14 +154,18 @@ export function ExpertDashboard() {
 
   const content = useMemo(() => {
     if (!shellReady) return null
-    if (path.startsWith('/expert/assignments')) return <AssignmentsSection dashboard={dashboard} />
-    if (path.startsWith('/expert/available-tasks')) return <AvailableSection dashboard={dashboard} />
+    const detail = parseAssignmentRoute(path, search)
+    if (detail.assignmentId) {
+      return <ExpertAssignmentWorkspace assignmentId={detail.assignmentId} initialTab={detail.tab} />
+    }
+    if (path.startsWith('/expert/assignments')) return <ExpertAssignments />
+    if (path.startsWith('/expert/available')) return <ExpertAvailableForYou path={path} search={search} />
     if (path.startsWith('/expert/activity')) return <ActivitySection dashboard={dashboard} />
     if (path.startsWith('/expert/notifications')) return <NotificationsSection dashboard={dashboard} />
     if (path.startsWith('/expert/account')) return <AccountSection dashboard={dashboard} gate={gate} />
     if (path === '/expert' || path.startsWith('/expert/dashboard')) return <ExpertDashboardPage dashboard={dashboard} />
     return <ExpertDashboardPage dashboard={dashboard} />
-  }, [path, shellReady, dashboard, gate])
+  }, [path, search, shellReady, dashboard, gate])
 
   if (gateBlocked) {
     return (
@@ -210,6 +179,10 @@ export function ExpertDashboard() {
         }}
       />
     )
+  }
+
+  if (dashboard.error && !dashboard.workspace) {
+    return <ExpertGate loading={false} error={dashboard.error} accountState={null} onRetry={dashboard.reload} />
   }
 
   if (!gateReady || !shellReady) {
@@ -239,7 +212,7 @@ export function ExpertDashboard() {
         try {
           await signOutExpert()
         } catch {}
-        goExpert('/')
+        goExpert('/expert/login')
       }}
     >
       {dashboard.loading && !dashboard.workspace ? <ExpertDashboardSkeletons /> : content}

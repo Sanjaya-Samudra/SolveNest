@@ -93,7 +93,7 @@ function Field({ f, value, error, onChange, fileRef }) {
     return (
       <div className="cn-field">
         <span className="cn-label" id={id}>{f.label}</span>
-        <input ref={fileRef} type="file" className="cn-sr" aria-labelledby={id} aria-describedby={errId} aria-invalid={!!error}
+        <input ref={fileRef} type="file" className="cn-sr" accept=".pdf,.png,.jpg,.jpeg,.docx" aria-labelledby={id} aria-describedby={errId} aria-invalid={!!error}
           onChange={(e) => { const fl = e.target.files[0]; onChange(f.k, fl ? { name: fl.name, size: fl.size } : null) }} />
         {!value ? (
           <button type="button" className="cn-attach" onClick={() => fileRef.current?.click()}>
@@ -142,6 +142,7 @@ export function ConnectPage() {
   const [data, setData] = useState({})
   const [errors, setErrors] = useState({})
   const [status, setStatus] = useState('idle')
+  const [submitError, setSubmitError] = useState('')
   const fileRef = useRef(null)
   const timers = useRef([])
   useEffect(() => () => timers.current.forEach(clearTimeout), [])
@@ -170,22 +171,42 @@ export function ConnectPage() {
     setData((d) => ({ ...d, [k]: v }))
     setErrors((e) => ({ ...e, [k]: null }))
   }
-  const submit = () => {
+  const submit = async () => {
     const errs = {}
     visibleFields.forEach((f) => { const m = validateField(f, data[f.k], data); if (m) errs[f.k] = m })
+    const attachment = fileRef.current?.files?.[0]
+    if (attachment && attachment.size > 5 * 1024 * 1024) errs.attachment = 'Choose a file smaller than 5 MB.'
+    if (attachment && !/\.(pdf|png|jpe?g|docx)$/i.test(attachment.name)) errs.attachment = 'Choose a PDF, PNG, JPG or DOCX file.'
     setErrors(errs)
     if (Object.keys(errs).length) {
       const first = visibleFields.find((f) => errs[f.k])
       if (first) document.getElementById(`cn-${first.k}`)?.focus({ preventScroll: false })
       return
     }
+    setSubmitError('')
     setStatus('sending')
-    timers.current.push(setTimeout(() => setStatus('sent'), 1400))
+    const body = new FormData()
+    body.append('intent', intent)
+    Object.entries(data).forEach(([key, value]) => {
+      if (key === 'attachment' || value == null) return
+      body.append(key, String(value))
+    })
+    if (attachment) body.append('attachment', attachment)
+    try {
+      const response = await fetch('/api/contact', { method: 'POST', body })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload.message || 'Your message could not be sent. Please try again.')
+      setStatus('sent')
+    } catch (error) {
+      setSubmitError(error.message || 'Your message could not be sent. Please try again.')
+      setStatus('idle')
+    }
   }
   const resetAll = () => {
     setData({})
     setErrors({})
     setStatus('idle')
+    setSubmitError('')
     if (fileRef.current) fileRef.current.value = ''
   }
 
@@ -278,6 +299,7 @@ export function ConnectPage() {
                   {intent === 'task' && data.noTaskRef && (
                     <p className="cn-note">No task yet? <button type="button" className="cn-link" onClick={() => nav('/analyze')}>Analyze My Task →</button></p>
                   )}
+                  {submitError && <p className="cn-err" role="alert">{submitError}</p>}
                   <button className="cn-cta-primary" type="submit" disabled={status !== 'idle'}>
                     {status === 'sending' ? 'Sending…' : 'Send Message →'}
                   </button>

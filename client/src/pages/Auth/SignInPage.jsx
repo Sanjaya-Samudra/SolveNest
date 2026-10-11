@@ -5,7 +5,7 @@ import {
 } from 'framer-motion'
 import { ArrowRight, Check, FileSearch, ClipboardCheck, TrendingUp, ShieldCheck } from 'lucide-react'
 import { PolicyReader } from './PolicyReader.jsx'
-import { loginStudent } from '../../student/authData.js'
+import { loginStudent, requestPasswordReset } from '../../student/authData.js'
 
 const nav = (p) => { window.history.pushState({}, '', p); window.dispatchEvent(new PopStateEvent('popstate')) }
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -294,14 +294,22 @@ export function SignInPage() {
     setStatus('sending')
     try { await loginStudent({ email: email.trim(), password }); setStatus('granted') } catch (error) { setStatus('failed'); setErrors({ form: error.message, ...(error.fieldErrors || {}) }) }
   }
-  const sendReset = (e) => {
+  const sendReset = async (e) => {
     e.preventDefault()
     const errs = {}
     if (!email.trim()) errs.email = 'Enter your email address.'
     else if (!emailOk) errs.email = 'Enter a valid email address.'
     setErrors(errs)
     if (Object.keys(errs).length) return
-    setResetSent(true)
+    setStatus('sending')
+    try {
+      await requestPasswordReset(email.trim())
+      setResetSent(true)
+      setStatus('idle')
+    } catch (error) {
+      setStatus('idle')
+      setErrors({ form: error.message || 'A reset link could not be requested.' })
+    }
   }
 
   return (
@@ -373,6 +381,7 @@ export function SignInPage() {
                 </button>
               </form>
               <p className="sn-switch">New to SolveNest? <button onClick={() => nav('/register')}>Create Student Account →</button></p>
+              <p className="sn-switch">Working as an Expert? <button onClick={() => nav('/expert/login')}>Expert sign in →</button></p>
               <div className="sn-divider-soft" />
               <p className="sn-policy">By continuing, you acknowledge the SolveNest{' '}
                 <button onClick={() => setPolicy('terms')}>Terms of Use</button>,{' '}
@@ -398,7 +407,8 @@ export function SignInPage() {
                     </span>
                     <span className="sn-err" id="sn-email-err" role={errors.email ? 'alert' : undefined}>{errors.email || ''}</span>
                   </label>
-                  <button className="sn-cta" type="submit">Send Reset Link <ArrowRight size={15} /></button>
+                  {errors.form && <p className="sn-form-err" role="alert">{errors.form}</p>}
+                  <button className="sn-cta" type="submit" disabled={status === 'sending'}>{status === 'sending' ? 'Requesting…' : 'Send Reset Link'} <ArrowRight size={15} /></button>
                 </form>
               ) : (
                 <p className="sn-reset-done" role="status">If an account exists for this email, a reset link is on its way.</p>

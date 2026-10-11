@@ -10,12 +10,41 @@ import { authenticateUser, createSession, createUser, deleteSession, getSession,
 import { getAccountView, updatePreferences, updateProfile } from './accountStore.js'
 import { addNotification, listNotifications, markAllRead, markRead, unreadCount } from './store.js'
 import { createTicket, getCatalog, getTicket, listTickets, resolveGuidance, searchHelp } from './helpStore.js'
-import { expressInterest, getAssignment, listAssignments, listAvailableTasks, listMovement, readExpertStore, setAvailability, toExpertWorkspace } from './expertStore.js'
+import {
+  addAssignmentFile,
+  appendProgressUpdate,
+  applyQaOutcome,
+  beginAssignmentRevision,
+  deliverAssignment,
+  expressInterest,
+  findExpertFile,
+  getAssignmentDetail,
+  getAssignmentFiles,
+  getAssignmentMessages,
+  getAssignmentQa,
+  getAssignmentRequirements,
+  getAssignmentWork,
+  listAvailableTasks,
+  listMovement,
+  markAssignmentMessagesRead,
+  postAssignmentMessage,
+  provisionAssignment,
+  provisionAvailableTasks,
+  queryAssignments,
+  readExpertStore,
+  removeAssignmentFile,
+  resolveQaFeedback,
+  resubmitAssignmentForQa,
+  setAvailability,
+  submitAssignmentForQa,
+  toExpertWorkspace,
+  updateAssignmentWorkState,
+} from './expertStore.js'
 import { addActivity, buildTaskSummary, getStudentAnalysis, getStudentFiles, getStudentTask, getStudentTasks, readTaskStore, withTaskStore } from './taskStore.js'
 import { publish, subscribe } from './realtime.js'
 import { hasObjectStorage, persistUpload, removeStoredObject, signedObjectUrl } from './storage.js'
-import { sendEmail } from './email.js'
-import { hasSupabaseAuth, supabaseRefresh, supabaseSignIn, supabaseSignUp, supabaseUser } from './supabase.js'
+import { hasEmail, sendEmail } from './email.js'
+import { hasSupabaseAuth, supabaseProfile, supabaseRefresh, supabaseRequestPasswordReset, supabaseUpdatePassword, supabaseSignIn, supabaseSignUp, supabaseUser } from './supabase.js'
 
 const PORT = Number(process.env.PORT || 4174)
 const COOKIE = 'sn_sid'
@@ -119,6 +148,11 @@ function fileSignature(fileId, expiresAt) {
 function signedFileUrl(fileId) {
   const expiresAt = Date.now() + 10 * 60 * 1000
   return `/api/student/files/${encodeURIComponent(fileId)}/download?expires=${expiresAt}&token=${fileSignature(fileId, expiresAt)}`
+}
+
+function signedExpertFileUrl(fileId) {
+  const expiresAt = Date.now() + 10 * 60 * 1000
+  return `/api/expert/files/${encodeURIComponent(fileId)}/download?expires=${expiresAt}&token=${fileSignature(fileId, expiresAt)}`
 }
 
 async function ownedFile(studentId, fileId) {
@@ -577,7 +611,10 @@ async function ensureStudentSession(req, res) {
       const session = await supabaseRefresh(cookies.sn_refresh)
       if (session) { setSupabaseCookies(res, session); user = await supabaseUser(session.access_token) }
     }
-    if (user) return { id: user.id, role: 'Student', studentId: user.id, name: user.user_metadata?.name || user.email?.split('@')[0] || 'Student', email: user.email || null, device: userAgentLabel(req.headers['user-agent']) }
+    if (user) {
+      const profile = await supabaseProfile(user.id)
+      if (profile?.role === 'Student') return { id: user.id, role: 'Student', studentId: user.id, name: profile.name || user.user_metadata?.name || 'Student', email: user.email || null, device: userAgentLabel(req.headers['user-agent']) }
+    }
     const err = new Error('STUDENT_ACCESS_REQUIRED')
     err.status = 401
     throw err
@@ -654,7 +691,7 @@ function ensureExpertSession(req, res) {
     session.device = userAgentLabel(req.headers['user-agent'])
     return session
   }
-  if (process.env.STRICT_SESSION === '1') {
+  if (process.env.NODE_ENV === 'production' || process.env.STRICT_SESSION === '1') {
     throw Object.assign(new Error('EXPERT_ACCESS_REQUIRED'), { status: 401 })
   }
   const newSid = crypto.randomUUID()
@@ -675,6 +712,30 @@ function ensureExpertSession(req, res) {
   return session
 }
 
+app.post('/api/expert/auth/login', async (req, res) => {
+  const email = String(req.body?.email || '').trim()
+  const password = String(req.body?.password || '')
+  if (!email || !password) return safeError(res, 400, 'CREDENTIALS_REQUIRED', 'Enter your email and password.')
+  if (!limited(`expert-login:${req.ip}`, 10)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before trying again.')
+  if (!hasSupabaseAuth()) return safeError(res, 503, 'EXPERT_LOGIN_UNAVAILABLE', 'Expert sign-in is not configured yet.')
+  try {
+    const { data, error } = await supabaseSignIn({ email, password })
+    if (error || !data?.user) return safeError(res, 401, 'INVALID_CREDENTIALS', 'Those details did not match an account.')
+    const profile = await supabaseProfile(data.user.id)
+    if (profile?.role !== 'Expert') return safeError(res, 403, 'EXPERT_ACCESS_REQUIRED', 'This account does not have Expert access.')
+    const workspace = await expertWorkspaceView()
+    if (workspace.expert.id !== profile.id) return safeError(res, 403, 'EXPERT_WORKSPACE_UNAVAILABLE', 'No Expert workspace is assigned to this account yet.')
+    const sid = crypto.randomUUID()
+    const stamp = now()
+    expertSessions.set(sid, { id: sid, role: 'Expert', expertId: profile.id, studentId: profile.id, name: profile.name, email: profile.email, createdAt: stamp, lastActiveAt: stamp, device: userAgentLabel(req.headers['user-agent']) })
+    res.setHeader('Set-Cookie', `${EXPERT_COOKIE}=${sid}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`)
+    res.json({ user: { id: profile.id, role: 'Expert', name: profile.name, email: profile.email } })
+  } catch (error) {
+    console.error('[expert-login]', error)
+    safeError(res, 503, 'EXPERT_LOGIN_UNAVAILABLE', 'Expert sign-in could not be completed. Please try again later.')
+  }
+})
+
 function requireExpert(req, res, next) {
   try {
     req.expert = ensureExpertSession(req, res)
@@ -686,7 +747,8 @@ function requireExpert(req, res, next) {
 
 function expertRoute(handler) {
   return (req, res, next) => {
-    Promise.resolve(handler(req, res, next)).catch(() => {
+    Promise.resolve(handler(req, res, next)).catch((error) => {
+      console.error(`[expert] ${req.method} ${req.originalUrl}`, error)
       if (res.headersSent) return
       safeError(res, 500, 'EXPERT_LOAD_FAILED', 'The expert workspace could not be loaded.')
     })
@@ -724,19 +786,292 @@ app.patch('/api/expert/availability', requireExpert, expertRoute(async (req, res
   res.json({ ok: true, availability })
 }))
 
-app.get('/api/expert/assignments', requireExpert, expertRoute(async (_req, res) => {
-  res.json({ assignments: await listAssignments() })
+function publishExpert(expertId, type, payload) {
+  const listeners = expertSessions.get('__sse__')?.get(expertId)
+  if (!listeners || !listeners.size) return
+  const data = JSON.stringify({ type, ...payload })
+  for (const response of listeners) {
+    if (!response.writableEnded) response.write(`event: ${type}\ndata: ${data}\n\n`)
+  }
+}
+
+const EXPERT_ERROR_STATUS = {
+  ASSIGNMENT_NOT_FOUND: 404,
+  ASSIGNMENT_CLOSED: 409,
+  ASSIGNMENT_NOT_DELIVERED: 409,
+  UPDATE_INVALID: 400,
+  MESSAGE_INVALID: 400,
+  WORK_STATE_INVALID: 400,
+  WORK_STATE_LOCKED: 409,
+  QA_IN_REVIEW: 409,
+  QA_ALREADY_PENDING: 409,
+  QA_ALREADY_APPROVED: 409,
+  QA_FEEDBACK_OPEN: 409,
+  QA_NOT_PENDING: 409,
+  QA_APPROVAL_REQUIRED: 409,
+  QA_FILES_REQUIRED: 409,
+  QA_OUTCOME_INVALID: 400,
+  QA_FEEDBACK_REQUIRED: 400,
+  FEEDBACK_NOT_FOUND: 404,
+  FEEDBACK_ALREADY_RESOLVED: 409,
+  DELIVERY_FILES_REQUIRED: 409,
+  FILE_SECTION_INVALID: 400,
+  FILE_REQUIRED: 400,
+  FILE_NOT_FOUND: 404,
+  FILE_IMMUTABLE: 403,
+  FILE_TOO_LARGE: 400,
+  FILE_UPLOAD_REJECTED: 400,
+  TITLE_REQUIRED: 400,
+}
+
+const EXPERT_ERROR_MESSAGE = {
+  ASSIGNMENT_NOT_FOUND: 'Assignment not found.',
+  ASSIGNMENT_CLOSED: 'This assignment is closed. Start a revision to reopen it.',
+  ASSIGNMENT_NOT_DELIVERED: 'This assignment has not been delivered yet.',
+  UPDATE_INVALID: 'Progress updates must be between 1 and 4000 characters.',
+  MESSAGE_INVALID: 'Messages must be between 1 and 4000 characters.',
+  WORK_STATE_INVALID: 'That work state is not available for this assignment.',
+  WORK_STATE_LOCKED: 'The work state cannot change while the assignment is in its current stage.',
+  QA_IN_REVIEW: 'Quality review is in progress. Wait for the review outcome.',
+  QA_ALREADY_PENDING: 'This assignment is already in quality review.',
+  QA_ALREADY_APPROVED: 'Quality review is already approved. Prepare the delivery.',
+  QA_FEEDBACK_OPEN: 'Resolve every QA feedback item before resubmitting.',
+  QA_NOT_PENDING: 'No quality review is currently pending for this assignment.',
+  QA_APPROVAL_REQUIRED: 'Quality review must approve this work before delivery.',
+  QA_FILES_REQUIRED: 'Add at least one submission file before submitting for QA.',
+  QA_OUTCOME_INVALID: 'That quality review outcome is not valid.',
+  QA_FEEDBACK_REQUIRED: 'QA feedback items are required for this outcome.',
+  FEEDBACK_NOT_FOUND: 'That feedback item was not found.',
+  FEEDBACK_ALREADY_RESOLVED: 'That feedback item is already resolved.',
+  DELIVERY_FILES_REQUIRED: 'Add at least one submission file before delivering.',
+  FILE_SECTION_INVALID: 'Files can only be uploaded to the working or submission section.',
+  FILE_REQUIRED: 'Choose a file to upload.',
+  FILE_NOT_FOUND: 'File not found.',
+  FILE_IMMUTABLE: 'Files provided with the assignment cannot be removed.',
+  FILE_TOO_LARGE: 'File exceeds the 100 MB limit.',
+  FILE_UPLOAD_REJECTED: 'This file type is not supported.',
+  TITLE_REQUIRED: 'An assignment title is required.',
+}
+
+function expertMutationError(res, code) {
+  return safeError(res, EXPERT_ERROR_STATUS[code] || 400, code, EXPERT_ERROR_MESSAGE[code] || 'The request could not be completed.')
+}
+
+function expertChanged(req, result, extra = {}) {
+  publishExpert(req.expert.expertId, 'AssignmentChanged', {
+    assignmentId: req.params.assignmentId,
+    workState: result.workState || null,
+    at: result.updatedAt || now(),
+    ...extra,
+  })
+}
+
+app.get('/api/expert/assignments', requireExpert, expertRoute(async (req, res) => {
+  const result = await queryAssignments({ search: req.query.search, filter: req.query.filter, sort: req.query.sort })
+  res.json({ assignments: result.assignments, meta: { total: result.total, filtered: result.assignments.length } })
 }))
 
 app.get('/api/expert/assignments/:assignmentId', requireExpert, expertRoute(async (req, res) => {
-  const assignment = await getAssignment(req.params.assignmentId)
+  const assignment = await getAssignmentDetail(req.params.assignmentId)
   if (!assignment) return safeError(res, 404, 'ASSIGNMENT_NOT_FOUND', 'Assignment not found.')
   res.json({ assignment })
+}))
+
+app.get('/api/expert/assignments/:assignmentId/requirements', requireExpert, expertRoute(async (req, res) => {
+  const payload = await getAssignmentRequirements(req.params.assignmentId)
+  if (!payload) return safeError(res, 404, 'ASSIGNMENT_NOT_FOUND', 'Assignment not found.')
+  res.json(payload)
+}))
+
+app.get('/api/expert/assignments/:assignmentId/work', requireExpert, expertRoute(async (req, res) => {
+  const payload = await getAssignmentWork(req.params.assignmentId)
+  if (!payload) return safeError(res, 404, 'ASSIGNMENT_NOT_FOUND', 'Assignment not found.')
+  res.json(payload)
+}))
+
+app.get('/api/expert/assignments/:assignmentId/messages', requireExpert, expertRoute(async (req, res) => {
+  const payload = await getAssignmentMessages(req.params.assignmentId)
+  if (!payload) return safeError(res, 404, 'ASSIGNMENT_NOT_FOUND', 'Assignment not found.')
+  res.json(payload)
+}))
+
+app.get('/api/expert/assignments/:assignmentId/files', requireExpert, expertRoute(async (req, res) => {
+  const payload = await getAssignmentFiles(req.params.assignmentId)
+  if (!payload) return safeError(res, 404, 'ASSIGNMENT_NOT_FOUND', 'Assignment not found.')
+  res.json(payload)
+}))
+
+app.get('/api/expert/assignments/:assignmentId/qa', requireExpert, expertRoute(async (req, res) => {
+  const payload = await getAssignmentQa(req.params.assignmentId)
+  if (!payload) return safeError(res, 404, 'ASSIGNMENT_NOT_FOUND', 'Assignment not found.')
+  res.json(payload)
+}))
+
+app.post('/api/expert/assignments/:assignmentId/work/updates', requireExpert, expertRoute(async (req, res) => {
+  if (!limited(`expert-update:${req.expert.expertId}`, 30)) return safeError(res, 429, 'RATE_LIMITED', 'Too many updates. Try again shortly.')
+  const result = await appendProgressUpdate(req.params.assignmentId, req.body?.body)
+  if (!result.ok) return expertMutationError(res, result.error)
+  expertChanged(req, result)
+  res.status(201).json(result)
+}))
+
+app.post('/api/expert/assignments/:assignmentId/work/state', requireExpert, expertRoute(async (req, res) => {
+  if (!limited(`expert-state:${req.expert.expertId}`, 30)) return safeError(res, 429, 'RATE_LIMITED', 'Too many changes. Try again shortly.')
+  const result = await updateAssignmentWorkState(req.params.assignmentId, req.body?.state)
+  if (!result.ok) return expertMutationError(res, result.error)
+  expertChanged(req, result)
+  res.json(result)
+}))
+
+app.post('/api/expert/assignments/:assignmentId/messages', requireExpert, expertRoute(async (req, res) => {
+  if (!limited(`expert-message:${req.expert.expertId}`, 12)) return safeError(res, 429, 'RATE_LIMITED', 'Too many messages. Try again shortly.')
+  const result = await postAssignmentMessage(req.params.assignmentId, req.body?.body)
+  if (!result.ok) return expertMutationError(res, result.error)
+  publishExpert(req.expert.expertId, 'MessageCreated', { assignmentId: req.params.assignmentId, message: result.message })
+  expertChanged(req, { updatedAt: result.message.createdAt })
+  res.status(201).json(result)
+}))
+
+app.patch('/api/expert/assignments/:assignmentId/messages/read', requireExpert, expertRoute(async (req, res) => {
+  const result = await markAssignmentMessagesRead(req.params.assignmentId)
+  if (!result.ok) return expertMutationError(res, result.error)
+  expertChanged(req, { updatedAt: now() })
+  res.json(result)
+}))
+
+app.post('/api/expert/assignments/:assignmentId/files', requireExpert, expertRoute(async (req, res) => {
+  if (!limited(`expert-upload:${req.expert.expertId}`, 12)) return safeError(res, 429, 'RATE_LIMITED', 'Uploads are temporarily limited. Try again shortly.')
+  const uploadError = await new Promise((resolve) => upload.single('file')(req, res, (error) => resolve(error)))
+  if (uploadError) {
+    const code = uploadError.code === 'LIMIT_FILE_SIZE' ? 'FILE_TOO_LARGE' : 'FILE_UPLOAD_REJECTED'
+    return expertMutationError(res, code)
+  }
+  if (!req.file) return expertMutationError(res, 'FILE_UPLOAD_REJECTED')
+  try {
+    await persistUpload(req.file, req.file.filename)
+  } catch {
+    return safeError(res, 503, 'STORAGE_UNAVAILABLE', 'The file could not be stored securely.')
+  }
+  const result = await addAssignmentFile(req.params.assignmentId, req.body?.section, {
+    name: path.basename(req.file.originalname),
+    type: req.file.mimetype,
+    size: req.file.size,
+    storageKey: req.file.filename,
+  })
+  if (!result.ok) {
+    try { await removeStoredObject(req.file.filename) } catch {}
+    try { fs.unlinkSync(path.join(uploadDir, req.file.filename)) } catch {}
+    return expertMutationError(res, result.error)
+  }
+  expertChanged(req, result)
+  res.status(201).json(result)
+}))
+
+app.delete('/api/expert/assignments/:assignmentId/files/:fileId', requireExpert, expertRoute(async (req, res) => {
+  const result = await removeAssignmentFile(req.params.assignmentId, req.params.fileId)
+  if (!result.ok) return expertMutationError(res, result.error)
+  if (result.storageKey) {
+    try { await removeStoredObject(result.storageKey) } catch {}
+    try { fs.unlinkSync(path.join(uploadDir, result.storageKey)) } catch {}
+  }
+  expertChanged(req, result)
+  res.json({ ok: true })
+}))
+
+app.get('/api/expert/files/:fileId/access', requireExpert, expertRoute(async (req, res) => {
+  const file = await findExpertFile(req.params.fileId)
+  if (!file) return safeError(res, 404, 'FILE_NOT_FOUND', 'File not found.')
+  const objectUrl = await signedObjectUrl(file.storageKey, file.name)
+  res.json({ signedUrl: objectUrl || signedExpertFileUrl(file.id), expiresAt: Date.now() + 10 * 60 * 1000 })
+}))
+
+app.get('/api/expert/files/:fileId/download', requireExpert, expertRoute(async (req, res) => {
+  const file = await findExpertFile(req.params.fileId)
+  const expiresAt = Number(req.query.expires)
+  const providedToken = Buffer.from(String(req.query.token || ''))
+  const expectedToken = Buffer.from(file ? fileSignature(file.id, expiresAt) : '')
+  const valid = file && providedToken.length === expectedToken.length && Number.isFinite(expiresAt) && expiresAt > Date.now() && crypto.timingSafeEqual(providedToken, expectedToken)
+  if (!valid) return safeError(res, 403, 'FILE_ACCESS_DENIED', 'This file access link has expired or is invalid.')
+  if (hasObjectStorage()) return safeError(res, 409, 'OBJECT_STORAGE_REDIRECT_REQUIRED', 'Use the signed object-storage URL.')
+  const storagePath = path.join(uploadDir, file.storageKey || '')
+  if (!file.storageKey || !fs.existsSync(storagePath)) return safeError(res, 404, 'FILE_CONTENT_MISSING', 'The file is no longer available.')
+  res.download(storagePath, file.name)
+}))
+
+app.post('/api/expert/assignments/:assignmentId/qa/submit', requireExpert, expertRoute(async (req, res) => {
+  if (!limited(`expert-qa:${req.expert.expertId}`, 20)) return safeError(res, 429, 'RATE_LIMITED', 'Too many quality review actions. Try again shortly.')
+  const result = await submitAssignmentForQa(req.params.assignmentId, { note: req.body?.note })
+  if (!result.ok) return expertMutationError(res, result.error)
+  expertChanged(req, result)
+  publishExpert(req.expert.expertId, 'QaUpdated', { assignmentId: req.params.assignmentId, qa: result.qa })
+  res.json(result)
+}))
+
+app.post('/api/expert/assignments/:assignmentId/qa/feedback/:feedbackId/resolve', requireExpert, expertRoute(async (req, res) => {
+  if (!limited(`expert-qa:${req.expert.expertId}`, 20)) return safeError(res, 429, 'RATE_LIMITED', 'Too many quality review actions. Try again shortly.')
+  const result = await resolveQaFeedback(req.params.assignmentId, req.params.feedbackId)
+  if (!result.ok) return expertMutationError(res, result.error)
+  expertChanged(req, result)
+  publishExpert(req.expert.expertId, 'QaUpdated', { assignmentId: req.params.assignmentId, qa: result.qa })
+  res.json(result)
+}))
+
+app.post('/api/expert/assignments/:assignmentId/qa/resubmit', requireExpert, expertRoute(async (req, res) => {
+  if (!limited(`expert-qa:${req.expert.expertId}`, 20)) return safeError(res, 429, 'RATE_LIMITED', 'Too many quality review actions. Try again shortly.')
+  const result = await resubmitAssignmentForQa(req.params.assignmentId, { note: req.body?.note })
+  if (!result.ok) return expertMutationError(res, result.error)
+  expertChanged(req, result)
+  publishExpert(req.expert.expertId, 'QaUpdated', { assignmentId: req.params.assignmentId, qa: result.qa })
+  res.json(result)
+}))
+
+app.post('/api/expert/assignments/:assignmentId/delivery', requireExpert, expertRoute(async (req, res) => {
+  if (!limited(`expert-delivery:${req.expert.expertId}`, 12)) return safeError(res, 429, 'RATE_LIMITED', 'Too many delivery attempts. Try again shortly.')
+  const result = await deliverAssignment(req.params.assignmentId, { note: req.body?.note })
+  if (!result.ok) return expertMutationError(res, result.error)
+  expertChanged(req, result)
+  res.json(result)
+}))
+
+app.post('/api/expert/assignments/:assignmentId/revision/begin', requireExpert, expertRoute(async (req, res) => {
+  const result = await beginAssignmentRevision(req.params.assignmentId)
+  if (!result.ok) return expertMutationError(res, result.error)
+  expertChanged(req, result)
+  publishExpert(req.expert.expertId, 'QaUpdated', { assignmentId: req.params.assignmentId, qa: result.qa })
+  res.json(result)
+}))
+
+app.post('/api/expert/assignments/__provision', requireExpert, expertRoute(async (req, res) => {
+  if (process.env.NODE_ENV === 'production') return safeError(res, 404, 'NOT_FOUND', 'Not found.')
+  if (!limited(`expert-provision:${req.expert.expertId}`, 30)) return safeError(res, 429, 'RATE_LIMITED', 'Too many provisioning requests. Try again shortly.')
+  const result = await provisionAssignment(req.body || {})
+  if (!result.ok) return expertMutationError(res, result.error)
+  publishExpert(req.expert.expertId, 'AssignmentChanged', { assignmentId: result.assignment.id, workState: result.assignment.workState, at: now() })
+  res.status(201).json(result)
+}))
+
+app.post('/api/expert/assignments/:assignmentId/qa/outcome', requireExpert, expertRoute(async (req, res) => {
+  if (process.env.NODE_ENV === 'production') return safeError(res, 404, 'NOT_FOUND', 'Not found.')
+  if (!limited(`expert-qa:${req.expert.expertId}`, 20)) return safeError(res, 429, 'RATE_LIMITED', 'Too many quality review actions. Try again shortly.')
+  const result = await applyQaOutcome(req.params.assignmentId, String(req.body?.outcome || ''), Array.isArray(req.body?.feedback) ? req.body.feedback : [])
+  if (!result.ok) return expertMutationError(res, result.error)
+  expertChanged(req, result)
+  publishExpert(req.expert.expertId, 'QaUpdated', { assignmentId: req.params.assignmentId, qa: result.qa })
+  res.json(result)
 }))
 
 app.get('/api/expert/available-tasks', requireExpert, expertRoute(async (req, res) => {
   const limit = Number(req.query.limit) || 3
   res.json({ tasks: await listAvailableTasks(limit) })
+}))
+
+app.post('/api/expert/available-tasks/__provision', requireExpert, expertRoute(async (req, res) => {
+  if (process.env.NODE_ENV === 'production') return safeError(res, 404, 'NOT_FOUND', 'Not found.')
+  if (!limited(`expert-provision:${req.expert.expertId}`, 30)) return safeError(res, 429, 'RATE_LIMITED', 'Too many provisioning requests. Try again shortly.')
+  const seeds = Array.isArray(req.body?.tasks) ? req.body.tasks : [req.body || {}]
+  const result = await provisionAvailableTasks(seeds)
+  if (!result.ok) return expertMutationError(res, result.error)
+  res.status(201).json(result)
 }))
 
 app.post('/api/expert/available-tasks/:taskId/interest', requireExpert, expertRoute(async (req, res) => {
@@ -745,6 +1080,7 @@ app.post('/api/expert/available-tasks/:taskId/interest', requireExpert, expertRo
     if (result.error === 'INTEREST_ALREADY_SENT') return safeError(res, 409, 'INTEREST_ALREADY_SENT', 'Interest was already recorded for this task.')
     return safeError(res, 404, 'TASK_NOT_FOUND', 'Task not found.')
   }
+  publishExpert(req.expert.expertId, 'InterestChanged', { taskId: result.taskId, interestState: result.interestState, at: now() })
   res.status(201).json(result)
 }))
 
@@ -801,6 +1137,8 @@ app.post('/api/auth/login', async (req, res) => {
   if (hasSupabaseAuth()) {
     const { data, error } = await supabaseSignIn({ email: req.body?.email, password: req.body?.password })
     if (error || !data.session) return safeError(res, 401, 'INVALID_CREDENTIALS', 'Those details did not match an account.')
+    const profile = await supabaseProfile(data.user.id)
+    if (profile?.role !== 'Student') return safeError(res, 403, 'STUDENT_ACCESS_REQUIRED', 'This account does not have Student access.')
     setSupabaseCookies(res, data.session)
     return res.json({ user: { id: data.user.id, role: 'Student', name: data.user.user_metadata?.name || data.user.email?.split('@')[0], email: data.user.email } })
   }
@@ -809,6 +1147,50 @@ app.post('/api/auth/login', async (req, res) => {
   const session = createSession(user, userAgentLabel(req.headers['user-agent']))
   setSessionCookie(res, session.id)
   res.json({ user })
+})
+
+app.post('/api/auth/password-reset', async (req, res) => {
+  const email = String(req.body?.email || '').trim().toLowerCase()
+  if (!/^\S+@\S+\.\S+$/.test(email)) return safeError(res, 400, 'EMAIL_INVALID', 'Enter a valid email address.')
+  if (!limited(`password-reset:${req.ip}`, 5)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before trying again.')
+  if (!hasSupabaseAuth() || !process.env.PUBLIC_APP_URL) return safeError(res, 503, 'RECOVERY_UNAVAILABLE', 'Password recovery is not configured yet.')
+  try {
+    const { error } = await supabaseRequestPasswordReset(email)
+    if (error) throw error
+    res.json({ ok: true })
+  } catch {
+    safeError(res, 503, 'RECOVERY_UNAVAILABLE', 'The reset email could not be requested. Please try again later.')
+  }
+})
+
+app.post('/api/auth/password-reset/complete', async (req, res) => {
+  const { accessToken, refreshToken, password } = req.body || {}
+  if (!accessToken || !refreshToken || String(password || '').length < 8) return safeError(res, 400, 'RESET_INVALID', 'The reset link or new password is invalid.')
+  if (!limited(`password-reset-complete:${req.ip}`, 5)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before trying again.')
+  if (!hasSupabaseAuth()) return safeError(res, 503, 'RECOVERY_UNAVAILABLE', 'Password recovery is not configured yet.')
+  try {
+    const { error } = await supabaseUpdatePassword(accessToken, refreshToken, password)
+    if (error) return safeError(res, 400, 'RESET_INVALID', 'The reset link has expired or is invalid.')
+    res.json({ ok: true })
+  } catch {
+    safeError(res, 503, 'RECOVERY_UNAVAILABLE', 'Your password could not be updated. Please try again later.')
+  }
+})
+
+const contactUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 1 }, fileFilter: (_req, file, callback) => callback(null, /\.(pdf|png|jpe?g|docx)$/i.test(file.originalname)) })
+app.post('/api/contact', (req, res, next) => contactUpload.single('attachment')(req, res, (error) => error ? safeError(res, 400, 'ATTACHMENT_INVALID', 'Choose a PDF, PNG, JPG or DOCX file smaller than 5 MB.') : next()), async (req, res) => {
+  const { intent, name, email, message, ...details } = req.body || {}
+  if (!['general', 'task', 'payment', 'technical', 'business'].includes(intent) || !String(name || '').trim() || !/^\S+@\S+\.\S+$/.test(String(email || '')) || !String(message || '').trim()) return safeError(res, 400, 'CONTACT_INVALID', 'Complete the required contact fields.')
+  if (!limited(`contact:${req.ip}`, 5)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before sending another message.')
+  if (!hasEmail() || !process.env.CONTACT_EMAIL) return safeError(res, 503, 'CONTACT_UNAVAILABLE', 'Contact messages are not configured yet.')
+  const lines = [`Type: ${intent}`, `Name: ${String(name).trim()}`, `Email: ${String(email).trim()}`, ...Object.entries(details).filter(([, value]) => typeof value === 'string').map(([key, value]) => `${key}: ${value}`), '', String(message)]
+  try {
+    const result = await sendEmail({ to: process.env.CONTACT_EMAIL, subject: `SolveNest ${intent} enquiry`, text: lines.join('\n'), replyTo: String(email).trim(), attachments: req.file ? [{ filename: req.file.originalname, content: req.file.buffer }] : [] })
+    if (!result.delivered) throw new Error('CONTACT_NOT_DELIVERED')
+    res.status(202).json({ ok: true })
+  } catch {
+    safeError(res, 503, 'CONTACT_UNAVAILABLE', 'Your message could not be sent. Please try again later.')
+  }
 })
 
 app.post('/api/auth/logout', requireStudent, (req, res) => {

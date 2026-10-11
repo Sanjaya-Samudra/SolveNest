@@ -17,13 +17,14 @@ import {
   Target,
   TrendingUp,
 } from 'lucide-react'
-import { buildExpertRoute, resolveExpertDeadlinePriority, EXPERT_FOCUS_PRIORITY } from '../../expert/expertState.js'
+import { buildExpertRoute, resolveExpertDeadlinePriority, resolveExpertTaskState, EXPERT_FOCUS_PRIORITY } from '../../expert/expertState.js'
 import { toExpertSafeTaskSummary, ExpertSafeTaskSummary } from '../../expert/expertSafe.jsx'
 import { useExpertAvailabilityControl } from '../../expert/expertDashboardData.js'
 import { expressInterest } from '../../expert/expertApi.js'
 import { ExpertLoadingRow, goExpert } from './ExpertAppShell.jsx'
 
-function formatDue(value) {
+function formatDue(value, task) {
+  if (task && resolveExpertTaskState(task).closed) return 'Completed'
   if (!value) return 'No deadline'
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return 'No deadline'
@@ -48,10 +49,11 @@ function timeAgo(value) {
   return `${Math.floor(hours / 24)}d ago`
 }
 
-const PRIORITY_ORDER = ['OVERDUE', 'DUE_SOON', 'DUE_LATER', 'NO_DEADLINE']
+const PRIORITY_ORDER = ['OVERDUE', 'DUE_SOON', 'DUE_LATER', 'NO_DEADLINE', 'COMPLETED']
 
 function priorityLabel(task) {
   const tone = resolveExpertDeadlinePriority(task)
+  if (tone === 'green') return 'COMPLETED'
   if (tone === 'red') return 'OVERDUE'
   if (tone === 'amber') return 'DUE_SOON'
   if (task?.deadline) return 'DUE_LATER'
@@ -182,7 +184,7 @@ export function AssignmentLedgerRow({ assignment, selected, onSelect }) {
         {state.label}
       </span>
       <span className="exp-ledger-due" data-tone={tone}>
-        {formatDue(assignment.deadline)}
+        {formatDue(assignment.deadline, assignment)}
       </span>
       <span className="exp-ledger-next">
         <span>{assignment.next.label}</span>
@@ -302,7 +304,7 @@ export function ExpertAssignmentPulse({ assignment, onSelect }) {
           </button>
           <span className="exp-pulse-due" data-tone={resolveExpertDeadlinePriority(assignment)}>
             <CalendarClock size={14} />
-            {formatDue(assignment.deadline)}
+            {formatDue(assignment.deadline, assignment)}
           </span>
         </div>
         {assignment.latest && (
@@ -343,7 +345,7 @@ export function DeadlineRadar({ deadlines, limit = 6 }) {
               <span className="exp-radar-marker" aria-hidden="true" />
               <div>
                 <strong>{task.title}</strong>
-                <small>{priorityLabel(task)} · {formatDue(task.deadline)}</small>
+                <small>{priorityLabel(task)} · {formatDue(task.deadline, task)}</small>
               </div>
               <button
                 className="exp-radar-open"
@@ -465,7 +467,7 @@ export function AvailableForYou({ tasks, compact = false }) {
         </div>
       )}
       {compact && tasks.length > 3 && (
-        <button className="exp-panel-footer-link" onClick={() => goExpert('/expert/available-tasks')}>
+        <button className="exp-panel-footer-link" onClick={() => goExpert('/expert/available')}>
           See all open tasks
           <ArrowRight size={14} />
         </button>
@@ -585,7 +587,7 @@ export function ExpertDashboardEmptyStates({ kind }) {
       title: 'No active assignments',
       body: 'Confirmed work appears here the moment SolveNest assigns it to you.',
       cta: 'Browse available tasks',
-      route: '/expert/available-tasks',
+      route: '/expert/available',
     },
     deadlines: {
       icon: <CalendarClock size={22} />,
@@ -599,7 +601,7 @@ export function ExpertDashboardEmptyStates({ kind }) {
       title: 'No open tasks right now',
       body: 'New tasks matched to your expertise appear here. Express interest — never bid.',
       cta: 'Check again',
-      route: '/expert/available-tasks',
+      route: '/expert/available',
     },
     movement: {
       icon: <TrendingUp size={22} />,

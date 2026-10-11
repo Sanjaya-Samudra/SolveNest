@@ -5,7 +5,7 @@
 .student-sidebar nav{flex:1;display:flex;flex-direction:column;overflow-y:auto;padding:0 16px}
 .student-sidebar::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,var(--student-violet),var(--student-indigo),var(--student-cyan));opacity:0;transition:opacity .3s ease}
 .student-sidebar:hover::before{opacity:1}
-.student-sidebar.is-collapsed{width:78px;flex-basis:78px;padding:24px 0 16px}
+.student-sidebar.is-collapsed{width:78px;flex-basis:78px;padding:24px 0 20px}
 .student-sidebar.is-collapsed nav{padding:0 8px}
 .student-brand{display:flex;flex-direction:column;align-items:center;gap:0;height:auto;padding:2px 12px 16px;font-weight:700;font-size:17px;white-space:nowrap}
 .student-brand img{display:block;width:53px;height:53px;object-fit:contain;border-radius:10px}

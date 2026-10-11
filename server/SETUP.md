@@ -15,7 +15,7 @@ The API is available at `http://127.0.0.1:4174`. Never run `node index.js` from 
 
 ## 2. Environment
 
-Copy `.env.example` to `.env`. The server does not load dotenv automatically, so either export variables in the process manager or add dotenv before production deployment.
+Copy `.env.example` to `.env` for local development. The server loads dotenv automatically; production can supply variables through its process manager.
 
 Required in production:
 
@@ -25,6 +25,8 @@ Required in production:
 - `DATABASE_URL`: PostgreSQL connection string
 - `S3_BUCKET`, `S3_REGION`, and S3 credentials in the process environment
 - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`
+- `CONTACT_EMAIL` for the public Connect form
+- `PUBLIC_APP_URL` for password-recovery links; add `${PUBLIC_APP_URL}/reset-password` to Supabase Auth redirect URLs
 - `SOLVY_API_URL` and `SOLVY_API_KEY`
 - `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, and `STRIPE_CURRENCY` for real payments
 
@@ -40,6 +42,8 @@ Required in production:
 8. In **Authentication > Providers**, enable Email/password. Decide whether email confirmation is required; if enabled, configure SMTP in Supabase Auth and complete confirmation before the first Student session.
 
 The migration creates a `profiles` table linked to `auth.users`, a signup trigger, Row Level Security policies, task/file/analysis/review tables, idempotency records, and guest-transfer records. The service role is used only by the trusted server for Storage and server-side operations.
+
+Expert sign-in uses `/expert/login` and requires an existing Supabase Auth user whose `profiles.role` is `Expert` and whose profile ID matches the assigned Expert workspace ID. Local development without Supabase can still open the demo Expert workspace when `STRICT_SESSION=0`. Production always requires a signed-in Expert session.
 
 ## 4. PostgreSQL
 
@@ -63,6 +67,7 @@ Create a private Supabase Storage bucket named `student-files`. Do not enable pu
 ## 6. SMTP
 
 Create an SMTP credential with your mail provider. Set the SMTP variables. Registration sends a welcome email when SMTP is configured. Add email verification and password-reset templates/provider workflows before public launch.
+The public Connect form sends to `CONTACT_EMAIL` only when SMTP is configured. Password recovery uses Supabase Auth and redirects to `PUBLIC_APP_URL/reset-password`.
 
 ## 7. Solvy
 

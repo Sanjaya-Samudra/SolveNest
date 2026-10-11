@@ -1,3 +1,4 @@
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -84,6 +85,32 @@ export async function withExpertStore(mutator) {
   return result
 }
 
+const CLOSED_WORK_STATES = new Set(['delivered'])
+
+export function resolveAssignmentDeadlineState(deadline, workState) {
+  if (CLOSED_WORK_STATES.has(String(workState || 'assigned'))) {
+    return { key: 'completed', label: 'Completed', detail: 'Completed', tone: 'green' }
+  }
+  const time = deadline ? new Date(deadline).getTime() : NaN
+  if (!deadline || Number.isNaN(time)) return { key: 'no_deadline', label: 'No deadline', detail: 'No deadline', tone: 'neutral' }
+  const diff = time - Date.now()
+  if (diff < 0) {
+    const days = Math.max(1, Math.ceil(-diff / (24 * 60 * 60 * 1000)))
+    return { key: 'overdue', label: 'Overdue', detail: `Overdue by ${days} day${days === 1 ? '' : 's'}`, tone: 'red' }
+  }
+  const hours = Math.ceil(diff / (60 * 60 * 1000))
+  if (diff <= 48 * 60 * 60 * 1000) {
+    const detail = hours <= 24 ? `Due in ${Math.max(1, hours)}h` : `Due in ${Math.ceil(hours / 24)}d`
+    return { key: 'due_soon', label: 'Due soon', detail, tone: 'amber' }
+  }
+  return {
+    key: 'on_track',
+    label: 'On track',
+    detail: `Due ${new Date(time).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`,
+    tone: 'neutral',
+  }
+}
+
 function safeAssignment(raw) {
   if (!raw || typeof raw !== 'object') return null
   if (!raw.id || !raw.title) return null
@@ -97,6 +124,7 @@ function safeAssignment(raw) {
     deliverable: raw.deliverable ? String(raw.deliverable) : null,
     requirements: Array.isArray(raw.requirements) ? raw.requirements.map(String).slice(0, 12) : [],
     deadline: raw.deadline || null,
+    deadlineState: resolveAssignmentDeadlineState(raw.deadline, raw.workState || 'assigned'),
     workState: raw.workState || 'assigned',
     latest: raw.latest && typeof raw.latest === 'object'
       ? { kind: String(raw.latest.kind || 'update'), text: String(raw.latest.text || ''), at: raw.latest.at || null }
@@ -147,6 +175,11 @@ export function toExpertWorkspace(store) {
   const movement = normalized.movement.map(safeMovement).filter(Boolean)
   const interests = normalized.interests
   const expert = normalized.expert
+  const unreadMessages = normalized.assignments.reduce((total, raw) => {
+    if (!raw || typeof raw !== 'object') return total
+    const workspace = normalizeWorkspace(raw.workspace, raw.workState)
+    return total + workspace.messages.filter((message) => message.from !== 'expert' && !message.readAt).length
+  }, Number(normalized.unreadMessages || 0))
   return {
     expert: {
       id: expert.id,
@@ -172,11 +205,11 @@ export function toExpertWorkspace(store) {
       route: item.route || null,
     })),
     unreadNotifications: normalized.notifications.filter((item) => !item.isRead).length,
-    unreadMessages: normalized.unreadMessages,
+    unreadMessages,
     capabilities: {
       availabilityEdit: true,
       expressInterest: true,
-      messages: normalized.unreadMessages > 0,
+      messages: unreadMessages > 0,
     },
   }
 }
@@ -218,7 +251,8 @@ export async function expressInterest(taskId) {
   const store = await readExpertStore()
   const task = store.availableTasks.map(safeAvailable).find((item) => item && item.id === wanted)
   if (!task) return { ok: false, error: 'TASK_NOT_FOUND' }
-  if (store.interests[task.id] === 'sent') return { ok: false, error: 'INTEREST_ALREADY_SENT' }
+  const currentInterest = store.interests[task.id] || task.interestState
+  if (currentInterest === 'sent') return { ok: false, error: 'INTEREST_ALREADY_SENT' }
   store.interests[task.id] = 'sent'
   store.movement.unshift({
     id: `mov-${Date.now()}`,
@@ -226,10 +260,730 @@ export async function expressInterest(taskId) {
     label: 'INTEREST SENT',
     title: task.title,
     at: new Date().toISOString(),
-    route: '/expert/available-tasks',
+    route: '/expert/available',
     assignmentId: null,
   })
   store.movement = store.movement.slice(0, 40)
   await writeExpertStore(store)
   return { ok: true, taskId: task.id, interestState: 'sent' }
+}
+
+export async function provisionAvailableTasks(seeds = []) {
+  const list = (Array.isArray(seeds) ? seeds : []).filter((item) => item && typeof item === 'object')
+  if (!list.length) return { ok: false, error: 'TITLE_REQUIRED' }
+  const store = await readExpertStore()
+  const created = []
+  for (const seed of list) {
+    const title = String(seed.title || '').trim()
+    if (!title) continue
+    const normalized = {
+      id: `otp-${crypto.randomUUID()}`,
+      title,
+      domain: seed.domain ? String(seed.domain) : null,
+      type: seed.type ? String(seed.type) : null,
+      requirements: Array.isArray(seed.requirements) ? seed.requirements.map(String).slice(0, 10) : [],
+      skills: Array.isArray(seed.skills) ? seed.skills.map(String).slice(0, 10) : [],
+      deadline: seed.deadline || null,
+      complexity: seed.complexity ? String(seed.complexity) : null,
+      interestState: 'none',
+      matchHints: Array.isArray(seed.matchHints) ? seed.matchHints.map(String).slice(0, 6) : [],
+      publishedAt: seed.publishedAt || nowIso(),
+    }
+    const existingIndex = store.availableTasks.findIndex((item) => item && item.title === title)
+    if (existingIndex >= 0) {
+      const previous = store.availableTasks[existingIndex]
+      const merged = { ...previous, ...normalized, id: previous.id, interestState: store.interests[previous.id] || previous.interestState || 'none' }
+      store.availableTasks[existingIndex] = merged
+      created.push(safeAvailable(merged))
+    } else {
+      store.availableTasks.push(normalized)
+      created.push(safeAvailable(normalized))
+    }
+  }
+  if (!created.length) return { ok: false, error: 'TITLE_REQUIRED' }
+  store.availableTasks = store.availableTasks.slice(0, 60)
+  await writeExpertStore(store)
+  return { ok: true, count: created.length, tasks: created }
+}
+
+const WORK_STATE_VALUES = new Set([
+  'assigned',
+  'needs_review',
+  'working',
+  'waiting_clarification',
+  'ready_for_qa',
+  'qa_review',
+  'changes_requested',
+  'ready_to_deliver',
+  'delivered',
+])
+
+const QA_STATE_VALUES = new Set(['not_submitted', 'in_review', 'changes_requested', 'approved'])
+const FILE_SECTION_VALUES = new Set(['source', 'shared', 'working', 'submission'])
+const EXPERT_FILE_SECTIONS = new Set(['working', 'submission'])
+
+const NEXT_ACTIONS = {
+  assigned: { key: 'review', label: 'Review Assignment' },
+  needs_review: { key: 'review', label: 'Review Assignment' },
+  working: { key: 'continue', label: 'Continue' },
+  waiting_clarification: { key: 'respond', label: 'Respond' },
+  ready_for_qa: { key: 'submit', label: 'Submit for QA' },
+  qa_review: { key: 'wait', label: 'Waiting' },
+  changes_requested: { key: 'review-qa', label: 'Review QA Feedback' },
+  ready_to_deliver: { key: 'prepare', label: 'Prepare Delivery' },
+  delivered: { key: 'open', label: 'Open Assignment' },
+}
+
+const WORK_STATE_TRANSITIONS = {
+  working: new Set(['assigned', 'needs_review', 'waiting_clarification', 'changes_requested']),
+  waiting_clarification: new Set(['assigned', 'working', 'changes_requested']),
+}
+
+function nowIso() {
+  return new Date().toISOString()
+}
+
+function stamp(prefix) {
+  return `${prefix}-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`
+}
+
+function clipText(value, max = 140) {
+  const text = String(value || '').trim()
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text
+}
+
+function emptyWorkspace(workState = 'assigned') {
+  return {
+    workState: WORK_STATE_VALUES.has(workState) ? workState : 'assigned',
+    requirements: { open: [] },
+    updates: [],
+    messages: [],
+    files: { source: [], shared: [], working: [], submission: [] },
+    qa: { state: 'not_submitted', cycle: 0, submittedAt: null, reviewedAt: null, feedback: [] },
+    qaLog: [],
+    delivery: { state: 'not_delivered', version: 0, deliveredAt: null, note: null, fileIds: [] },
+    revision: { active: false, requestedAt: null },
+    updatedAt: null,
+  }
+}
+
+function normalizeUpdate(raw) {
+  if (!raw || typeof raw !== 'object' || !raw.id || !raw.body) return null
+  return { id: String(raw.id), body: String(raw.body), createdAt: raw.createdAt || null }
+}
+
+function normalizeMessage(raw) {
+  if (!raw || typeof raw !== 'object' || !raw.id || !raw.body) return null
+  return {
+    id: String(raw.id),
+    from: raw.from === 'expert' ? 'expert' : 'solvenest',
+    author: String(raw.author || 'SolveNest'),
+    role: String(raw.role || 'Support'),
+    initials: String(raw.initials || 'SN'),
+    body: String(raw.body),
+    attachments: Array.isArray(raw.attachments) ? raw.attachments.slice(0, 8) : [],
+    createdAt: raw.createdAt || null,
+    readAt: raw.readAt || null,
+  }
+}
+
+function normalizeFeedback(raw) {
+  if (!raw || typeof raw !== 'object' || !raw.id) return null
+  return {
+    id: String(raw.id),
+    title: String(raw.title || 'QA feedback'),
+    body: String(raw.body || ''),
+    severity: ['minor', 'major'].includes(raw.severity) ? raw.severity : 'minor',
+    state: raw.state === 'resolved' ? 'resolved' : 'open',
+    cycle: Number(raw.cycle || 1),
+    createdAt: raw.createdAt || null,
+    resolvedAt: raw.resolvedAt || null,
+  }
+}
+
+function normalizeOpenRequirement(raw) {
+  if (!raw || typeof raw !== 'object' || !raw.id || !raw.text) return null
+  return { id: String(raw.id), text: String(raw.text), note: raw.note ? String(raw.note) : null, createdAt: raw.createdAt || null }
+}
+
+function normalizeFileRecord(raw, section) {
+  if (!raw || typeof raw !== 'object' || !raw.id || !raw.name) return null
+  const origin = raw.origin === 'expert' ? 'expert' : 'solvenest'
+  return {
+    id: String(raw.id),
+    name: String(raw.name),
+    type: raw.type ? String(raw.type) : null,
+    size: Number(raw.size || 0),
+    section: FILE_SECTION_VALUES.has(section) ? section : 'working',
+    origin,
+    uploadedBy: raw.uploadedBy ? String(raw.uploadedBy) : origin,
+    storageKey: raw.storageKey ? String(raw.storageKey) : null,
+    state: raw.state ? String(raw.state) : 'READY',
+    uploadedAt: raw.uploadedAt || raw.createdAt || null,
+  }
+}
+
+function publicFile(raw) {
+  if (!raw) return null
+  return {
+    id: raw.id,
+    name: raw.name,
+    type: raw.type,
+    size: raw.size,
+    section: raw.section,
+    origin: raw.origin,
+    uploadedBy: raw.uploadedBy,
+    state: raw.state,
+    uploadedAt: raw.uploadedAt,
+  }
+}
+
+function safeFileList(value, section) {
+  if (!Array.isArray(value)) return []
+  return value.map((item) => normalizeFileRecord(item, section)).filter(Boolean)
+}
+
+function normalizeWorkspace(raw, workState) {
+  const base = emptyWorkspace(workState)
+  if (!raw || typeof raw !== 'object') return base
+  const qaRaw = raw.qa && typeof raw.qa === 'object' ? raw.qa : {}
+  const deliveryRaw = raw.delivery && typeof raw.delivery === 'object' ? raw.delivery : {}
+  const revisionRaw = raw.revision && typeof raw.revision === 'object' ? raw.revision : {}
+  const filesRaw = raw.files && typeof raw.files === 'object' ? raw.files : {}
+  const requirementsRaw = raw.requirements && typeof raw.requirements === 'object' ? raw.requirements : {}
+  return {
+    workState: WORK_STATE_VALUES.has(raw.workState) ? raw.workState : base.workState,
+    requirements: {
+      open: Array.isArray(requirementsRaw.open) ? requirementsRaw.open.map(normalizeOpenRequirement).filter(Boolean) : [],
+    },
+    updates: Array.isArray(raw.updates) ? raw.updates.map(normalizeUpdate).filter(Boolean) : [],
+    messages: Array.isArray(raw.messages) ? raw.messages.map(normalizeMessage).filter(Boolean) : [],
+    files: {
+      source: safeFileList(filesRaw.source, 'source'),
+      shared: safeFileList(filesRaw.shared, 'shared'),
+      working: safeFileList(filesRaw.working, 'working'),
+      submission: safeFileList(filesRaw.submission, 'submission'),
+    },
+    qa: {
+      state: QA_STATE_VALUES.has(qaRaw.state) ? qaRaw.state : 'not_submitted',
+      cycle: Number(qaRaw.cycle || 0),
+      submittedAt: qaRaw.submittedAt || null,
+      reviewedAt: qaRaw.reviewedAt || null,
+      feedback: Array.isArray(qaRaw.feedback) ? qaRaw.feedback.map(normalizeFeedback).filter(Boolean) : [],
+    },
+    qaLog: Array.isArray(raw.qaLog) ? raw.qaLog.slice(0, 10) : [],
+    delivery: {
+      state: deliveryRaw.state === 'delivered' ? 'delivered' : 'not_delivered',
+      version: Number(deliveryRaw.version || 0),
+      deliveredAt: deliveryRaw.deliveredAt || null,
+      note: deliveryRaw.note ? String(deliveryRaw.note) : null,
+      fileIds: Array.isArray(deliveryRaw.fileIds) ? deliveryRaw.fileIds.map(String) : [],
+    },
+    revision: { active: Boolean(revisionRaw.active), requestedAt: revisionRaw.requestedAt || null },
+    updatedAt: raw.updatedAt || null,
+  }
+}
+
+function ensureWorkspace(assignment) {
+  assignment.workspace = normalizeWorkspace(assignment.workspace, assignment.workState)
+  assignment.workState = assignment.workspace.workState
+  return assignment.workspace
+}
+
+function findRawAssignment(store, id) {
+  const wanted = String(id)
+  const assignment = store.assignments.find((item) => item && (String(item.id) === wanted || String(item.taskId) === wanted))
+  if (!assignment) return null
+  ensureWorkspace(assignment)
+  return assignment
+}
+
+function touchAssignment(assignment, change = {}) {
+  const stampValue = nowIso()
+  if (change.workState && WORK_STATE_VALUES.has(change.workState)) {
+    assignment.workState = change.workState
+    assignment.workspace.workState = change.workState
+  }
+  if (change.latestText) {
+    assignment.latest = { kind: change.latestKind || 'update', text: clipText(change.latestText, 160), at: stampValue }
+  }
+  const next = NEXT_ACTIONS[assignment.workState] || NEXT_ACTIONS.assigned
+  assignment.nextAction = { key: next.key, label: next.label, route: 'assignments' }
+  assignment.updatedAt = stampValue
+  assignment.workspace.updatedAt = stampValue
+  return stampValue
+}
+
+function pushMovement(store, { kind, label, title, assignmentId }) {
+  store.movement.unshift({
+    id: stamp('mov'),
+    kind,
+    label,
+    title: title ? clipText(title, 120) : null,
+    at: nowIso(),
+    route: assignmentId ? `/expert/assignments/${encodeURIComponent(assignmentId)}` : '/expert/assignments',
+    assignmentId: assignmentId ? String(assignmentId) : null,
+  })
+  store.movement = store.movement.slice(0, 40)
+}
+
+function pushExpertNotification(store, { title, body, route }) {
+  store.notifications.unshift({
+    id: stamp('ntf'),
+    title: clipText(title, 120),
+    body: body ? clipText(body, 220) : null,
+    at: nowIso(),
+    isRead: false,
+    route: route || null,
+  })
+  store.notifications = store.notifications.slice(0, 40)
+}
+
+function safeAssignmentDetail(assignment) {
+  const base = safeAssignment(assignment)
+  if (!base) return null
+  const workspace = normalizeWorkspace(assignment.workspace, base.workState)
+  const unread = workspace.messages.filter((message) => message.from !== 'expert' && !message.readAt).length
+  return {
+    ...base,
+    workState: workspace.workState,
+    deadlineState: resolveAssignmentDeadlineState(base.deadline, workspace.workState),
+    workspace: {
+      workState: workspace.workState,
+      updates: workspace.updates.slice(0, 10),
+      counts: {
+        updates: workspace.updates.length,
+        messages: workspace.messages.length,
+        unreadMessages: unread,
+        files: workspace.files.source.length + workspace.files.shared.length + workspace.files.working.length + workspace.files.submission.length,
+        submissionFiles: workspace.files.submission.length,
+        openFeedback: workspace.qa.feedback.filter((item) => item.state !== 'resolved').length,
+      },
+      requirementsOpen: workspace.requirements.open.length,
+      qa: workspace.qa,
+      delivery: workspace.delivery,
+      revision: workspace.revision,
+      updatedAt: workspace.updatedAt,
+    },
+  }
+}
+
+export async function queryAssignments({ search = '', filter = 'all', sort = 'deadline' } = {}) {
+  const store = await readExpertStore()
+  let rows = store.assignments.map(safeAssignment).filter(Boolean)
+  const total = rows.length
+  const needle = String(search || '').trim().toLowerCase()
+  if (needle) {
+    rows = rows.filter((row) => [row.reference, row.title, row.domain, row.type, row.deliverable]
+      .filter(Boolean)
+      .some((value) => String(value).toLowerCase().includes(needle)))
+  }
+  const attentionStates = new Set(['needs_review', 'waiting_clarification', 'ready_for_qa', 'changes_requested', 'ready_to_deliver'])
+  const openStates = new Set(['assigned', 'needs_review', 'working', 'waiting_clarification', 'ready_for_qa', 'qa_review', 'changes_requested', 'ready_to_deliver'])
+  const overdue = (row) => resolveAssignmentDeadlineState(row.deadline, row.workState).key === 'overdue'
+  if (filter === 'attention') rows = rows.filter((row) => attentionStates.has(row.workState) || (openStates.has(row.workState) && overdue(row)))
+  else if (filter === 'active') rows = rows.filter((row) => ['assigned', 'needs_review', 'working', 'waiting_clarification'].includes(row.workState))
+  else if (filter === 'qa') rows = rows.filter((row) => ['ready_for_qa', 'qa_review', 'changes_requested'].includes(row.workState))
+  else if (filter === 'delivered') rows = rows.filter((row) => row.workState === 'delivered')
+  const timeOf = (value) => (value ? new Date(value).getTime() : Number.POSITIVE_INFINITY)
+  const comparators = {
+    deadline: (a, b) => timeOf(a.deadline) - timeOf(b.deadline),
+    updated: (a, b) => timeOf(b.updatedAt) - timeOf(a.updatedAt),
+    reference: (a, b) => String(a.reference || '').localeCompare(String(b.reference || '')),
+    title: (a, b) => String(a.title).localeCompare(String(b.title)),
+  }
+  rows = rows.sort(comparators[sort] || comparators.deadline)
+  return { assignments: rows, total }
+}
+
+export async function getAssignmentDetail(id) {
+  const store = await readExpertStore()
+  const assignment = findRawAssignment(store, id)
+  return assignment ? safeAssignmentDetail(assignment) : null
+}
+
+export async function getAssignmentRequirements(id) {
+  const store = await readExpertStore()
+  const assignment = findRawAssignment(store, id)
+  if (!assignment) return null
+  const workspace = assignment.workspace
+  return {
+    requirements: {
+      confirmed: (Array.isArray(assignment.requirements) ? assignment.requirements : []).map((text, index) => ({
+        id: `req-${index + 1}`,
+        text: String(text),
+        state: 'confirmed',
+      })),
+      open: workspace.requirements.open,
+      deliverable: assignment.deliverable || null,
+      deadline: assignment.deadline || null,
+    },
+  }
+}
+
+export async function getAssignmentWork(id) {
+  const store = await readExpertStore()
+  const assignment = findRawAssignment(store, id)
+  if (!assignment) return null
+  const workspace = assignment.workspace
+  return {
+    work: {
+      workState: workspace.workState,
+      updates: workspace.updates,
+      qaState: workspace.qa.state,
+      qaCycle: workspace.qa.cycle,
+      revisionActive: workspace.revision.active,
+      updatedAt: workspace.updatedAt,
+    },
+  }
+}
+
+export async function getAssignmentMessages(id) {
+  const store = await readExpertStore()
+  const assignment = findRawAssignment(store, id)
+  if (!assignment) return null
+  const workspace = assignment.workspace
+  return {
+    messages: workspace.messages,
+    unread: workspace.messages.filter((message) => message.from !== 'expert' && !message.readAt).length,
+  }
+}
+
+export async function getAssignmentFiles(id) {
+  const store = await readExpertStore()
+  const assignment = findRawAssignment(store, id)
+  if (!assignment) return null
+  const workspace = assignment.workspace
+  return {
+    sections: {
+      source: workspace.files.source.map(publicFile),
+      shared: workspace.files.shared.map(publicFile),
+      working: workspace.files.working.map(publicFile),
+      submission: workspace.files.submission.map(publicFile),
+    },
+  }
+}
+
+export async function getAssignmentQa(id) {
+  const store = await readExpertStore()
+  const assignment = findRawAssignment(store, id)
+  if (!assignment) return null
+  const workspace = assignment.workspace
+  return {
+    qa: workspace.qa,
+    delivery: workspace.delivery,
+    revision: workspace.revision,
+    workState: assignment.workState,
+    submissionFiles: workspace.files.submission.map(publicFile),
+  }
+}
+
+export async function appendProgressUpdate(id, body) {
+  const text = String(body || '').trim()
+  if (!text || text.length > 4000) return { ok: false, error: 'UPDATE_INVALID' }
+  const store = await readExpertStore()
+  const assignment = findRawAssignment(store, id)
+  if (!assignment) return { ok: false, error: 'ASSIGNMENT_NOT_FOUND' }
+  const update = { id: stamp('upd'), body: text, createdAt: nowIso() }
+  assignment.workspace.updates.unshift(update)
+  assignment.workspace.updates = assignment.workspace.updates.slice(0, 100)
+  touchAssignment(assignment, { latestKind: 'progress', latestText: text })
+  await writeExpertStore(store)
+  return { ok: true, update, updatedAt: assignment.updatedAt }
+}
+
+export async function updateAssignmentWorkState(id, state) {
+  const target = String(state || '')
+  if (!WORK_STATE_TRANSITIONS[target]) return { ok: false, error: 'WORK_STATE_INVALID' }
+  const store = await readExpertStore()
+  const assignment = findRawAssignment(store, id)
+  if (!assignment) return { ok: false, error: 'ASSIGNMENT_NOT_FOUND' }
+  const workspace = assignment.workspace
+  if (assignment.workState === 'delivered' && !workspace.revision.active) return { ok: false, error: 'ASSIGNMENT_CLOSED' }
+  if (workspace.qa.state === 'in_review') return { ok: false, error: 'QA_IN_REVIEW' }
+  const source = assignment.workState
+  if (!WORK_STATE_TRANSITIONS[target].has(source)) return { ok: false, error: 'WORK_STATE_LOCKED' }
+  const latestText = target === 'waiting_clarification'
+    ? 'Waiting for clarification before continuing.'
+    : source === 'changes_requested' || source === 'waiting_clarification'
+      ? 'Work resumed on this assignment.'
+      : 'Work started on this assignment.'
+  touchAssignment(assignment, { workState: target, latestKind: 'work', latestText })
+  pushMovement(store, {
+    kind: 'work',
+    label: target === 'waiting_clarification' ? 'CLARIFICATION NEEDED' : 'WORK STARTED',
+    title: assignment.title,
+    assignmentId: assignment.id,
+  })
+  await writeExpertStore(store)
+  return { ok: true, workState: assignment.workState, updatedAt: assignment.updatedAt }
+}
+
+export async function postAssignmentMessage(id, body) {
+  const text = String(body || '').trim()
+  if (!text || text.length > 4000) return { ok: false, error: 'MESSAGE_INVALID' }
+  const store = await readExpertStore()
+  const assignment = findRawAssignment(store, id)
+  if (!assignment) return { ok: false, error: 'ASSIGNMENT_NOT_FOUND' }
+  const expertName = store.expert.name || 'Expert'
+  const message = {
+    id: stamp('msg'),
+    from: 'expert',
+    author: expertName,
+    role: 'Expert',
+    initials: expertName.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase(),
+    body: text,
+    attachments: [],
+    createdAt: nowIso(),
+    readAt: null,
+  }
+  assignment.workspace.messages.push(message)
+  assignment.workspace.messages = assignment.workspace.messages.slice(-200)
+  touchAssignment(assignment, { latestKind: 'message', latestText: `Message sent: ${text}` })
+  await writeExpertStore(store)
+  return { ok: true, message, unread: assignment.workspace.messages.filter((item) => item.from !== 'expert' && !item.readAt).length }
+}
+
+export async function markAssignmentMessagesRead(id) {
+  const store = await readExpertStore()
+  const assignment = findRawAssignment(store, id)
+  if (!assignment) return { ok: false, error: 'ASSIGNMENT_NOT_FOUND' }
+  const stampValue = nowIso()
+  for (const message of assignment.workspace.messages) {
+    if (message.from !== 'expert' && !message.readAt) message.readAt = stampValue
+  }
+  await writeExpertStore(store)
+  return { ok: true, unread: 0 }
+}
+
+export async function addAssignmentFile(id, section, meta) {
+  const target = String(section || 'working')
+  if (!EXPERT_FILE_SECTIONS.has(target)) return { ok: false, error: 'FILE_SECTION_INVALID' }
+  if (!meta || !meta.name || !meta.storageKey) return { ok: false, error: 'FILE_REQUIRED' }
+  const store = await readExpertStore()
+  const assignment = findRawAssignment(store, id)
+  if (!assignment) return { ok: false, error: 'ASSIGNMENT_NOT_FOUND' }
+  if (assignment.workState === 'delivered' && !assignment.workspace.revision.active) return { ok: false, error: 'ASSIGNMENT_CLOSED' }
+  const file = normalizeFileRecord({
+    id: crypto.randomUUID(),
+    name: meta.name,
+    type: meta.type || null,
+    size: Number(meta.size || 0),
+    section: target,
+    origin: 'expert',
+    uploadedBy: 'expert',
+    storageKey: meta.storageKey,
+    state: 'READY',
+    uploadedAt: nowIso(),
+  }, target)
+  assignment.workspace.files[target].push(file)
+  touchAssignment(assignment, { latestKind: 'file', latestText: `File uploaded: ${file.name}` })
+  await writeExpertStore(store)
+  return { ok: true, file: publicFile(file), updatedAt: assignment.updatedAt }
+}
+
+export async function removeAssignmentFile(id, fileId) {
+  const store = await readExpertStore()
+  const assignment = findRawAssignment(store, id)
+  if (!assignment) return { ok: false, error: 'ASSIGNMENT_NOT_FOUND' }
+  const wanted = String(fileId)
+  for (const section of FILE_SECTION_VALUES) {
+    const index = assignment.workspace.files[section].findIndex((file) => file.id === wanted)
+    if (index >= 0) {
+      const [file] = assignment.workspace.files[section].splice(index, 1)
+      if (file.origin !== 'expert') {
+        assignment.workspace.files[section].splice(index, 0, file)
+        return { ok: false, error: 'FILE_IMMUTABLE' }
+      }
+      touchAssignment(assignment, { latestKind: 'file', latestText: `File removed: ${file.name}` })
+      await writeExpertStore(store)
+      return { ok: true, storageKey: file.storageKey || null, fileName: file.name, updatedAt: assignment.updatedAt }
+    }
+  }
+  return { ok: false, error: 'FILE_NOT_FOUND' }
+}
+
+export async function findExpertFile(fileId) {
+  const store = await readExpertStore()
+  const wanted = String(fileId)
+  for (const raw of store.assignments) {
+    if (!raw || typeof raw !== 'object') continue
+    const workspace = normalizeWorkspace(raw.workspace, raw.workState)
+    for (const section of FILE_SECTION_VALUES) {
+      const file = workspace.files[section].find((item) => item.id === wanted)
+      if (file) return file
+    }
+  }
+  return null
+}
+
+export async function submitAssignmentForQa(id, { note } = {}) {
+  const store = await readExpertStore()
+  const assignment = findRawAssignment(store, id)
+  if (!assignment) return { ok: false, error: 'ASSIGNMENT_NOT_FOUND' }
+  const workspace = assignment.workspace
+  if (assignment.workState === 'delivered' && !workspace.revision.active) return { ok: false, error: 'ASSIGNMENT_CLOSED' }
+  if (workspace.qa.state === 'in_review') return { ok: false, error: 'QA_ALREADY_PENDING' }
+  if (workspace.qa.state === 'changes_requested') return { ok: false, error: 'QA_FEEDBACK_OPEN' }
+  if (workspace.qa.state === 'approved') return { ok: false, error: 'QA_ALREADY_APPROVED' }
+  if (!workspace.files.submission.length) return { ok: false, error: 'QA_FILES_REQUIRED' }
+  const stampValue = touchAssignment(assignment, { workState: 'qa_review', latestKind: 'qa', latestText: note ? `Submitted for QA: ${clipText(note, 100)}` : 'Submitted for quality review.' })
+  workspace.qa = {
+    state: 'in_review',
+    cycle: workspace.qa.cycle + 1,
+    submittedAt: stampValue,
+    reviewedAt: null,
+    feedback: workspace.qa.feedback,
+  }
+  pushMovement(store, { kind: 'qa', label: 'SUBMITTED FOR QA', title: assignment.title, assignmentId: assignment.id })
+  await writeExpertStore(store)
+  return { ok: true, qa: workspace.qa, workState: assignment.workState, updatedAt: assignment.updatedAt }
+}
+
+export async function resolveQaFeedback(id, feedbackId) {
+  const store = await readExpertStore()
+  const assignment = findRawAssignment(store, id)
+  if (!assignment) return { ok: false, error: 'ASSIGNMENT_NOT_FOUND' }
+  const workspace = assignment.workspace
+  if (workspace.qa.state !== 'changes_requested') return { ok: false, error: 'QA_NOT_PENDING' }
+  const feedback = workspace.qa.feedback.find((item) => item.id === String(feedbackId))
+  if (!feedback) return { ok: false, error: 'FEEDBACK_NOT_FOUND' }
+  if (feedback.state === 'resolved') return { ok: false, error: 'FEEDBACK_ALREADY_RESOLVED' }
+  feedback.state = 'resolved'
+  feedback.resolvedAt = nowIso()
+  const allResolved = workspace.qa.feedback.every((item) => item.state === 'resolved')
+  touchAssignment(assignment, { latestKind: 'qa', latestText: `QA feedback resolved: ${feedback.title}` })
+  await writeExpertStore(store)
+  return { ok: true, qa: workspace.qa, allResolved, updatedAt: assignment.updatedAt }
+}
+
+export async function resubmitAssignmentForQa(id, { note } = {}) {
+  const store = await readExpertStore()
+  const assignment = findRawAssignment(store, id)
+  if (!assignment) return { ok: false, error: 'ASSIGNMENT_NOT_FOUND' }
+  const workspace = assignment.workspace
+  if (workspace.qa.state !== 'changes_requested') return { ok: false, error: 'QA_NOT_PENDING' }
+  if (!workspace.qa.feedback.every((item) => item.state === 'resolved')) return { ok: false, error: 'QA_FEEDBACK_OPEN' }
+  if (!workspace.files.submission.length) return { ok: false, error: 'QA_FILES_REQUIRED' }
+  const stampValue = touchAssignment(assignment, { workState: 'qa_review', latestKind: 'qa', latestText: note ? `Resubmitted for QA: ${clipText(note, 100)}` : 'Work resubmitted for quality review.' })
+  workspace.qa = {
+    state: 'in_review',
+    cycle: workspace.qa.cycle + 1,
+    submittedAt: stampValue,
+    reviewedAt: null,
+    feedback: workspace.qa.feedback,
+  }
+  pushMovement(store, { kind: 'qa', label: 'RESUBMITTED FOR QA', title: assignment.title, assignmentId: assignment.id })
+  await writeExpertStore(store)
+  return { ok: true, qa: workspace.qa, workState: assignment.workState, updatedAt: assignment.updatedAt }
+}
+
+export async function applyQaOutcome(id, outcome, feedbackItems = []) {
+  const store = await readExpertStore()
+  const assignment = findRawAssignment(store, id)
+  if (!assignment) return { ok: false, error: 'ASSIGNMENT_NOT_FOUND' }
+  const workspace = assignment.workspace
+  if (workspace.qa.state !== 'in_review') return { ok: false, error: 'QA_NOT_PENDING' }
+  const stampValue = nowIso()
+  if (outcome === 'approved') {
+    workspace.qa.reviewedAt = stampValue
+    workspace.qa.state = 'approved'
+    touchAssignment(assignment, { workState: 'ready_to_deliver', latestKind: 'qa', latestText: 'Quality review approved — ready to deliver.' })
+    pushMovement(store, { kind: 'qa', label: 'QA APPROVED', title: assignment.title, assignmentId: assignment.id })
+    pushExpertNotification(store, { title: 'Quality review approved', body: assignment.title, route: `/expert/assignments/${assignment.id}` })
+    await writeExpertStore(store)
+    return { ok: true, qa: workspace.qa, workState: assignment.workState, updatedAt: assignment.updatedAt }
+  }
+  if (outcome !== 'changes_requested') return { ok: false, error: 'QA_OUTCOME_INVALID' }
+  const items = Array.isArray(feedbackItems) ? feedbackItems : []
+  if (!items.length) return { ok: false, error: 'QA_FEEDBACK_REQUIRED' }
+  workspace.qa.reviewedAt = stampValue
+  workspace.qa.state = 'changes_requested'
+  workspace.qa.feedback = items.slice(0, 20).map((item) => normalizeFeedback({
+    id: stamp('fb'),
+    title: item?.title || 'QA feedback',
+    body: item?.body || '',
+    severity: item?.severity,
+    state: 'open',
+    cycle: workspace.qa.cycle,
+    createdAt: stampValue,
+  })).filter(Boolean)
+  touchAssignment(assignment, { workState: 'changes_requested', latestKind: 'qa', latestText: 'Quality review returned feedback.' })
+  pushMovement(store, { kind: 'qa', label: 'CHANGES REQUESTED', title: assignment.title, assignmentId: assignment.id })
+  pushExpertNotification(store, { title: 'QA feedback received', body: assignment.title, route: `/expert/assignments/${assignment.id}` })
+  await writeExpertStore(store)
+  return { ok: true, qa: workspace.qa, workState: assignment.workState, updatedAt: assignment.updatedAt }
+}
+
+export async function deliverAssignment(id, { note } = {}) {
+  const store = await readExpertStore()
+  const assignment = findRawAssignment(store, id)
+  if (!assignment) return { ok: false, error: 'ASSIGNMENT_NOT_FOUND' }
+  const workspace = assignment.workspace
+  if (workspace.qa.state !== 'approved') return { ok: false, error: 'QA_APPROVAL_REQUIRED' }
+  const submission = workspace.files.submission
+  if (!submission.length) return { ok: false, error: 'DELIVERY_FILES_REQUIRED' }
+  const stampValue = touchAssignment(assignment, { workState: 'delivered', latestKind: 'delivery', latestText: note ? `Delivery submitted: ${clipText(note, 100)}` : 'Delivery submitted.' })
+  workspace.delivery = {
+    state: 'delivered',
+    version: workspace.delivery.version + 1,
+    deliveredAt: stampValue,
+    note: note ? clipText(note, 2000) : null,
+    fileIds: submission.map((file) => file.id),
+  }
+  workspace.revision = { active: false, requestedAt: null }
+  pushMovement(store, { kind: 'delivery', label: 'DELIVERED', title: assignment.title, assignmentId: assignment.id })
+  pushExpertNotification(store, { title: 'Delivery submitted', body: assignment.title, route: `/expert/assignments/${assignment.id}` })
+  await writeExpertStore(store)
+  return { ok: true, delivery: workspace.delivery, revision: workspace.revision, workState: assignment.workState, updatedAt: assignment.updatedAt }
+}
+
+export async function beginAssignmentRevision(id) {
+  const store = await readExpertStore()
+  const assignment = findRawAssignment(store, id)
+  if (!assignment) return { ok: false, error: 'ASSIGNMENT_NOT_FOUND' }
+  const workspace = assignment.workspace
+  if (assignment.workState !== 'delivered') return { ok: false, error: 'ASSIGNMENT_NOT_DELIVERED' }
+  workspace.qaLog.unshift({ ...workspace.qa, loggedAt: nowIso() })
+  workspace.qaLog = workspace.qaLog.slice(0, 10)
+  workspace.qa = { state: 'not_submitted', cycle: workspace.qa.cycle, submittedAt: null, reviewedAt: null, feedback: [] }
+  workspace.revision = { active: true, requestedAt: nowIso() }
+  touchAssignment(assignment, { workState: 'working', latestKind: 'revision', latestText: 'Revision in progress.' })
+  pushMovement(store, { kind: 'revision', label: 'REVISION STARTED', title: assignment.title, assignmentId: assignment.id })
+  await writeExpertStore(store)
+  return { ok: true, revision: workspace.revision, qa: workspace.qa, workState: assignment.workState, updatedAt: assignment.updatedAt }
+}
+
+export async function provisionAssignment(seed = {}) {
+  const title = String(seed.title || '').trim()
+  if (!title) return { ok: false, error: 'TITLE_REQUIRED' }
+  const store = await readExpertStore()
+  const stampValue = nowIso()
+  const workState = WORK_STATE_VALUES.has(seed.workState) ? seed.workState : 'assigned'
+  const id = `asg-${crypto.randomUUID()}`
+  const assignment = {
+    id,
+    taskId: seed.taskId ? String(seed.taskId) : id,
+    reference: seed.reference ? String(seed.reference) : `SN-${String(store.assignments.length + 1).padStart(4, '0')}`,
+    title,
+    domain: seed.domain ? String(seed.domain) : null,
+    type: seed.type ? String(seed.type) : null,
+    deliverable: seed.deliverable ? String(seed.deliverable) : null,
+    requirements: Array.isArray(seed.requirements) ? seed.requirements.map(String).slice(0, 12) : [],
+    deadline: seed.deadline || null,
+    workState,
+    latest: { kind: 'assignment', text: 'Assignment confirmed by SolveNest.', at: stampValue },
+    nextAction: { ...NEXT_ACTIONS[workState], route: 'assignments' },
+    createdAt: stampValue,
+    updatedAt: stampValue,
+    workspace: emptyWorkspace(workState),
+  }
+  if (seed.workspace && typeof seed.workspace === 'object') {
+    assignment.workspace = normalizeWorkspace({ ...seed.workspace, workState }, workState)
+  }
+  store.assignments.unshift(assignment)
+  pushMovement(store, { kind: 'assignment', label: 'ASSIGNED', title, assignmentId: id })
+  pushExpertNotification(store, { title: 'New assignment confirmed', body: title, route: `/expert/assignments/${id}` })
+  await writeExpertStore(store)
+  return { ok: true, assignment: safeAssignmentDetail(assignment) }
 }

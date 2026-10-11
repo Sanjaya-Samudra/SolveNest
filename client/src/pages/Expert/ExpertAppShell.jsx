@@ -27,7 +27,7 @@ export const goExpert = (path) => {
 const workspaceItems = [
   ['Dashboard', '/expert/dashboard', Home],
   ['Assignments', '/expert/assignments', Briefcase],
-  ['Available for You', '/expert/available-tasks', Compass],
+  ['Available for You', '/expert/available', Compass],
   ['Activity', '/expert/activity', Activity],
 ]
 
@@ -36,8 +36,10 @@ const systemItems = [
   ['Account', '/expert/account', Settings],
 ]
 
+const isActivePath = (path, target) => path === target || path.startsWith(`${target}/`)
+
 function labelOfPath(path) {
-  const found = [...workspaceItems, ...systemItems].find(([, target]) => target === path)
+  const found = [...workspaceItems, ...systemItems].find(([, target]) => isActivePath(path, target))
   return found ? found[0] : 'Dashboard'
 }
 
@@ -59,7 +61,7 @@ export function ExpertSidebar({ collapsed, setCollapsed, path, expert, unreadNot
         {workspaceItems.map(([label, target, Icon]) => (
           <button
             key={target}
-            className={`exp-nav-item ${path === target ? 'is-active' : ''}`}
+            className={`exp-nav-item ${isActivePath(path, target) ? 'is-active' : ''}`}
             onClick={() => goExpert(target)}
             title={collapsed ? label : undefined}
           >
@@ -71,7 +73,7 @@ export function ExpertSidebar({ collapsed, setCollapsed, path, expert, unreadNot
         {systemItems.map(([label, target, Icon]) => (
           <button
             key={target}
-            className={`exp-nav-item ${path === target ? 'is-active' : ''}`}
+            className={`exp-nav-item ${isActivePath(path, target) ? 'is-active' : ''}`}
             onClick={() => goExpert(target)}
             title={collapsed ? label : undefined}
           >
@@ -81,12 +83,14 @@ export function ExpertSidebar({ collapsed, setCollapsed, path, expert, unreadNot
           </button>
         ))}
       </nav>
-      {!collapsed && (
-        <div className="exp-availability-chip" data-status={availability}>
-          <span className="exp-availability-dot" aria-hidden="true" />
-          {availability === 'limited' ? 'Limited' : availability === 'unavailable' ? 'Unavailable' : 'Available'}
-        </div>
-      )}
+      <div className="exp-availability-chip" data-status={availability}>
+        <span className="exp-availability-dot" aria-hidden="true" />
+        {!collapsed && (
+          <span>
+            {availability === 'limited' ? 'Limited' : availability === 'unavailable' ? 'Unavailable' : 'Available'}
+          </span>
+        )}
+      </div>
       <button
         className="exp-collapse"
         onClick={() => setCollapsed((value) => !value)}
@@ -202,7 +206,7 @@ export function ExpertMobileNav({ open, onClose, path, expert, availability, unr
           {workspaceItems.map(([label, target, Icon]) => (
             <button
               key={target}
-              className={`exp-nav-item ${path === target ? 'is-active' : ''}`}
+              className={`exp-nav-item ${isActivePath(path, target) ? 'is-active' : ''}`}
               onClick={() => {
                 onClose()
                 goExpert(target)
@@ -216,7 +220,7 @@ export function ExpertMobileNav({ open, onClose, path, expert, availability, unr
           {systemItems.map(([label, target, Icon]) => (
             <button
               key={target}
-              className={`exp-nav-item ${path === target ? 'is-active' : ''}`}
+              className={`exp-nav-item ${isActivePath(path, target) ? 'is-active' : ''}`}
               onClick={() => {
                 onClose()
                 goExpert(target)
@@ -275,7 +279,7 @@ export function ExpertAppShell({ path, expert, availability, unreadNotifications
       </AnimatePresence>
       <nav className="exp-bottom-nav" aria-label="Expert quick navigation">
         {workspaceItems.slice(0, 4).map(([label, target, Icon]) => (
-          <button key={target} className={path === target ? 'is-active' : ''} onClick={() => goExpert(target)}>
+          <button key={target} className={isActivePath(path, target) ? 'is-active' : ''} onClick={() => goExpert(target)}>
             <Icon size={18} />
             <span>{label === 'Available for You' ? 'Available' : label}</span>
           </button>
@@ -303,16 +307,17 @@ export function ExpertGate({ loading, error, accountState, onRetry }) {
   }
 
   const access = error?.message === 'EXPERT_ACCESS_REQUIRED' || error?.code === 401 || error?.code === 403
+  const apiUnavailable = error?.code === 'API_UNAVAILABLE'
 
   if (error) {
     return (
       <div className="expert-app expert-app--gate">
         <div className="exp-gate-card">
           <span className="exp-gate-icon" aria-hidden="true">{access ? <Settings size={22} /> : <Clock3 size={22} />}</span>
-          <p className="exp-overline">{access ? 'ACCESS REQUIRED' : 'COULD NOT LOAD'}</p>
-          <h1>{access ? 'Sign in to open your expert workspace.' : 'We could not load your workspace.'}</h1>
-          <p>{access ? 'Your expert session is missing or has expired.' : 'We could not retrieve the current workspace data.'}</p>
-          <button className="exp-button" onClick={access ? () => goExpert('/login') : onRetry}>
+          <p className="exp-overline">{access ? 'ACCESS REQUIRED' : apiUnavailable ? 'API OFFLINE' : 'COULD NOT LOAD'}</p>
+          <h1>{access ? 'Sign in to open your expert workspace.' : apiUnavailable ? 'The SolveNest server is not running.' : 'We could not load your workspace.'}</h1>
+          <p>{access ? 'Your expert session is missing or has expired.' : apiUnavailable ? 'Start the app with npm run dev from the SolveNest project folder, then try again.' : 'We could not retrieve the current workspace data.'}</p>
+          <button className="exp-button" onClick={access ? () => goExpert('/expert/login') : onRetry}>
             {access ? 'Sign in' : 'Try again'}
             <ChevronRight size={15} />
           </button>
