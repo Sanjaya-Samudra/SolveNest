@@ -683,13 +683,17 @@ app.post('/api/student/payments/checkout', requireStudent, async (req, res) => {
       }
       if (session.status !== 'expired') return res.json({ paymentId: active.id, checkoutUrl: session.url, status: active.status, provider: 'stripe' })
       await recordPaymentStatus(active.providerId, 'canceled')
+      return safeError(res, 409, 'PAYMENT_RETRY_REQUIRED', 'This checkout expired. Start a new payment attempt.')
     } else {
       const intent = await stripe.paymentIntents.retrieve(active.providerId)
-      if (['canceled', 'requires_payment_method'].includes(intent.status)) await recordPaymentStatus(active.providerId, 'failed')
-      else return safeError(res, 409, 'PAYMENT_RETRY_REQUIRED', 'A previous payment attempt must be resolved before starting hosted checkout.')
+      if (['canceled', 'requires_payment_method'].includes(intent.status)) {
+        await recordPaymentStatus(active.providerId, 'failed')
+        return safeError(res, 409, 'PAYMENT_RETRY_REQUIRED', 'Start a new payment attempt for this plan.')
+      }
+      return safeError(res, 409, 'PAYMENT_RETRY_REQUIRED', 'A previous payment attempt must be resolved before starting hosted checkout.')
     }
   }
-  const attempt = payments.filter((payment) => ['failed', 'canceled'].includes(payment.status)).length + (active?.providerId ? 1 : 0)
+  const attempt = payments.filter((payment) => ['failed', 'canceled'].includes(payment.status)).length
   const origin = process.env.PUBLIC_APP_URL || 'http://localhost:5173'
   const session = await stripe.checkout.sessions.create({
     mode: 'payment',
