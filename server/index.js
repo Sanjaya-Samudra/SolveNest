@@ -151,11 +151,16 @@ function normalizeAnalysis(files) {
 }
 
 async function analyzeWithSolvy(files) {
-  if (!process.env.SOLVY_API_URL) return { ...normalizeAnalysis(files), provider: 'local-intake', provisional: true }
+  if (!process.env.SOLVY_API_URL) {
+    if (process.env.NODE_ENV === 'production') throw new Error('SOLVY_NOT_CONFIGURED')
+    return { ...normalizeAnalysis(files), provider: 'local-intake', provisional: true }
+  }
+  const inputs = await Promise.all(files.map(async (file) => ({ id: file.id, role: file.role, name: file.originalName, mimeType: file.mimeType, size: file.size, url: await signedObjectUrl(file.storageKey, file.originalName) })))
+  if (process.env.NODE_ENV === 'production' && inputs.some((file) => !file.url)) throw new Error('ANALYSIS_FILE_ACCESS_UNAVAILABLE')
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 30_000)
   try {
-    const response = await fetch(process.env.SOLVY_API_URL, { method: 'POST', signal: controller.signal, headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...(process.env.SOLVY_API_KEY ? { Authorization: `Bearer ${process.env.SOLVY_API_KEY}` } : {}) }, body: JSON.stringify({ fileIds: files.map((file) => file.id), files: files.map((file) => ({ id: file.id, role: file.role, name: file.originalName, mimeType: file.mimeType, size: file.size })) }) })
+    const response = await fetch(process.env.SOLVY_API_URL, { method: 'POST', signal: controller.signal, headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...(process.env.SOLVY_API_KEY ? { Authorization: `Bearer ${process.env.SOLVY_API_KEY}` } : {}) }, body: JSON.stringify({ fileIds: files.map((file) => file.id), files: inputs }) })
     if (!response.ok) throw new Error(`SOLVY_${response.status}`)
     const payload = await response.json()
     const result = payload.analysis || payload.result || payload
@@ -261,11 +266,13 @@ app.get('/api/student/task-creation/session/:sessionId', requireStudent, async (
 })
 
 app.post('/api/guest/analysis-transfer', async (req, res) => {
+  if (!limited(`guest-transfer:${req.ip}`, 10)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before creating another transfer.')
   const analysis = req.body?.analysis
-  if (!analysis || typeof analysis !== 'object') return safeError(res, 400, 'ANALYSIS_REQUIRED', 'A structured analysis is required.')
+  if (!analysis || typeof analysis !== 'object' || Array.isArray(analysis)) return safeError(res, 400, 'ANALYSIS_REQUIRED', 'A structured analysis is required.')
   const token = crypto.randomBytes(32).toString('base64url')
-  const transfer = { tokenHash: hashTransferToken(token), analysis, expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), claimedBy: null, createdAt: now() }
-  await withTaskStore((store) => store.guestTransfers.push(transfer))
+  const preview = { title: String(analysis.title || '').slice(0, 200), subject: String(analysis.subject || '').slice(0, 160), taskType: String(analysis.taskType || '').slice(0, 160), provider: 'guest-preview', provisional: true, verified: false }
+  const transfer = { tokenHash: hashTransferToken(token), analysis: preview, expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), claimedBy: null, createdAt: now() }
+  await withTaskStore((store) => { store.guestTransfers = store.guestTransfers.filter((item) => new Date(item.expiresAt).getTime() > Date.now()); store.guestTransfers.push(transfer) })
   res.status(201).json({ transferToken: token, expiresAt: transfer.expiresAt })
 })
 
@@ -401,9 +408,12 @@ app.post('/api/student/task-creation/analyze', requireStudent, async (req, res) 
   const fileIds = Array.isArray(req.body?.fileIds) ? req.body.fileIds.map(String) : []
   const files = (await getStudentFiles(req.student.studentId)).filter((file) => fileIds.includes(file.id) && !file.taskId)
   if (!files.some((file) => file.role === 'BRIEF')) return safeError(res, 400, 'BRIEF_REQUIRED', 'Upload an assignment brief before analysis.', { files: 'An assignment brief is required.' })
+  const sessionId = String(req.body?.sessionId || '')
+  const draft = (await readTaskStore()).drafts.find((item) => item.id === sessionId && item.studentId === req.student.studentId && item.status === 'ACTIVE' && new Date(item.expiresAt).getTime() > Date.now())
+  if (!draft || files.some((file) => file.analysisSessionId !== draft.id)) return safeError(res, 409, 'SESSION_INVALID', 'Start a new task setup session and upload the files again.')
   let result
   try { result = await analyzeWithSolvy(files) } catch (error) { return safeError(res, 502, 'ANALYSIS_FAILED', 'Solvy could not analyze these files. Your uploads are preserved; please retry.', {}, error) }
-  const analysis = { id: crypto.randomUUID(), studentId: req.student.studentId, fileIds: files.map((file) => file.id), status: 'COMPLETED', result, createdAt: now(), updatedAt: now() }
+  const analysis = { id: crypto.randomUUID(), studentId: req.student.studentId, sessionId, fileIds: files.map((file) => file.id), status: 'COMPLETED', result, createdAt: now(), updatedAt: now() }
   await withTaskStore((store) => { store.analyses.push(analysis); addActivity(store, { id: crypto.randomUUID(), studentId: req.student.studentId, type: 'AnalysisCompleted', text: 'Task analysis completed.', createdAt: analysis.createdAt }) })
   publish(req.student.studentId, { type: 'AnalysisCompleted', analysisId: analysis.id, status: analysis.status })
   res.status(201).json({ analysis: { ...analysis.result, id: analysis.id, status: analysis.status } })
@@ -418,7 +428,10 @@ app.post('/api/student/task-creation/tasks', requireStudent, async (req, res) =>
   const fileIds = Array.isArray(req.body?.fileIds) ? req.body.fileIds.map(String) : []
   const files = (await getStudentFiles(req.student.studentId)).filter((file) => fileIds.includes(file.id) && !file.taskId)
   if (!files.some((file) => file.role === 'BRIEF')) return safeError(res, 400, 'BRIEF_REQUIRED', 'An assignment brief is required.', { fileIds: 'Select an assignment brief.' })
-  const analysis = req.body?.analysis || {}
+  const analysisId = String(req.body?.analysisId || '')
+  const record = state.analyses.find((item) => item.id === analysisId && item.studentId === req.student.studentId && item.status === 'COMPLETED')
+  if (!record || record.fileIds.length !== files.length || !record.fileIds.every((id) => fileIds.includes(id))) return safeError(res, 409, 'ANALYSIS_REQUIRED', 'Analyze these exact files before creating the task.')
+  const analysis = record.result
   const createdAt = now()
   const task = { id: crypto.randomUUID(), studentId: req.student.studentId, title: String(analysis.title || 'New academic task').slice(0, 200), type: analysis.taskType || 'Academic task', subject: analysis.subject || null, deadline: analysis.deadline || null, status: 'FEASIBILITY_REVIEW', createdAt, updatedAt: createdAt, latestUpdate: { text: 'Your task has been submitted for SolveNest review.', createdAt }, analysis: { ...analysis, provisional: true }, review: { status: 'QUEUED', reviewerId: null, reviewedAt: null, decision: null }, nextAction: null }
   await withTaskStore((store) => {
