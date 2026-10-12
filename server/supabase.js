@@ -44,8 +44,30 @@ export async function supabaseChangeStaffRole(actorId, targetId, expectedRole, n
   if (error) throw error
   return data
 }
-export async function supabaseReadState() { if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED'); const { data, error } = await adminClient.from('app_state').select('state').eq('id', 'default').maybeSingle(); if (error) throw error; return data?.state || { tasks: [], files: [], analyses: [], reviews: [], drafts: [], guestTransfers: [], conversations: [], messages: [], payments: [], plans: [], scopeChanges: [], explainSessions: [], explainArtifacts: [], supportTickets: [], idempotency: {}, activity: [], notifications: [] } }
-export async function supabaseWriteState(state) { if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED'); const { error } = await adminClient.from('app_state').upsert({ id: 'default', state, updated_at: new Date().toISOString() }); if (error) throw error; return state }
+export async function supabaseReadState() {
+  if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED')
+  const { data, error } = await adminClient.from('app_state').select('state, revision').eq('id', 'default').maybeSingle()
+  if (error) throw error
+  const state = data?.state || { tasks: [], files: [], analyses: [], reviews: [], drafts: [], guestTransfers: [], conversations: [], messages: [], payments: [], plans: [], scopeChanges: [], explainSessions: [], explainArtifacts: [], supportTickets: [], idempotency: {}, activity: [], notifications: [] }
+  Object.defineProperty(state, '__revision', { value: data ? Number(data.revision) : null, configurable: true })
+  return state
+}
+export async function supabaseWriteState(state) {
+  if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED')
+  const revision = state.__revision
+  const updated_at = new Date().toISOString()
+  if (revision === null) {
+    const { error } = await adminClient.from('app_state').insert({ id: 'default', state, revision: 1, updated_at })
+    if (error) throw error.code === '23505' ? new Error('APP_STATE_CONFLICT') : error
+    return state
+  }
+  if (!Number.isSafeInteger(revision)) throw new Error('APP_STATE_REVISION_REQUIRED')
+  const { data, error } = await adminClient.from('app_state').update({ state, revision: revision + 1, updated_at }).eq('id', 'default').eq('revision', revision).select('revision').maybeSingle()
+  if (error) throw error
+  if (!data) throw new Error('APP_STATE_CONFLICT')
+  Object.defineProperty(state, '__revision', { value: data.revision, configurable: true })
+  return state
+}
 export async function supabaseReadStudentAccount(studentId) { if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED'); const { data, error } = await adminClient.from('student_accounts').select('account').eq('student_id', studentId).maybeSingle(); if (error) throw error; return data?.account || null }
 export async function supabaseWriteStudentAccount(studentId, account) { if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED'); const { error } = await adminClient.from('student_accounts').upsert({ student_id: studentId, account, updated_at: new Date().toISOString() }); if (error) throw error; return account }
 export async function supabaseSignUp({ email, password, name }) { if (!authClient) throw new Error('SUPABASE_NOT_CONFIGURED'); return authClient.auth.signUp({ email, password, options: { data: { name, role: 'Student' } } }) }
