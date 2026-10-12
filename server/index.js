@@ -48,7 +48,7 @@ import { addActivity, buildTaskSummary, getStudentAnalysis, getStudentFiles, get
 import { publish, subscribe } from './realtime.js'
 import { hasObjectStorage, persistUpload, removeStoredObject, signedObjectUrl } from './storage.js'
 import { hasEmail, sendEmail } from './email.js'
-import { hasSupabase, hasSupabaseAuth, supabaseChangeStaffRole, supabaseCreateAppSession, supabaseDeleteAppSession, supabaseExpertProfiles, supabaseFindProfileByEmail, supabaseGetAppSession, supabaseProfile, supabaseRefresh, supabaseRequestPasswordReset, supabaseTeam, supabaseUpdatePassword, supabaseSignIn, supabaseSignUp, supabaseUser } from './supabase.js'
+import { hasSupabase, hasSupabaseAuth, supabaseChangeStaffRole, supabaseConsumeRateLimit, supabaseCreateAppSession, supabaseDeleteAppSession, supabaseExpertProfiles, supabaseFindProfileByEmail, supabaseGetAppSession, supabaseProfile, supabaseRefresh, supabaseRequestPasswordReset, supabaseTeam, supabaseUpdatePassword, supabaseSignIn, supabaseSignUp, supabaseUser } from './supabase.js'
 import { getAdminCase, getAdminOverview, getAdminQaCase, issueAdminPlan, listAdminQaAssignments, recordAdminReview } from './adminStore.js'
 import { getSuperadminActivity, getSuperadminOverview } from './superadminStore.js'
 
@@ -94,6 +94,8 @@ const upload = multer({
 })
 
 const app = express()
+const trustedProxyHops = Number(process.env.TRUST_PROXY_HOPS || 0)
+if (Number.isSafeInteger(trustedProxyHops) && trustedProxyHops > 0 && trustedProxyHops <= 3) app.set('trust proxy', trustedProxyHops)
 async function recordPaymentStatus(providerId, status) {
   return withTaskStore((store) => {
     const payment = store.payments.find((item) => item.providerId === providerId)
@@ -140,7 +142,11 @@ function safeError(res, status, code, message, fieldErrors = {}) {
   res.status(status).json({ error: code, code, message, fieldErrors, retryable: status >= 500 })
 }
 
-function limited(key, max = 10) {
+async function limited(key, max = 10) {
+  if (process.env.NODE_ENV === 'production') {
+    try { return await supabaseConsumeRateLimit(key, max) }
+    catch (error) { console.error('[rate-limit] unavailable', error); return false }
+  }
   const stamp = Date.now()
   if (requestWindows.size > 5000) for (const [name, window] of requestWindows) if (stamp - window.startedAt >= 60_000) requestWindows.delete(name)
   const current = requestWindows.get(key) || { count: 0, startedAt: stamp }
@@ -286,7 +292,7 @@ app.get('/api/student/task-creation/session/:sessionId', requireStudent, async (
 })
 
 app.post('/api/guest/analysis-transfer', async (req, res) => {
-  if (!limited(`guest-transfer:${req.ip}`, 10)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before creating another transfer.')
+  if (!await limited(`guest-transfer:${req.ip}`, 10)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before creating another transfer.')
   const analysis = req.body?.analysis
   if (!analysis || typeof analysis !== 'object' || Array.isArray(analysis)) return safeError(res, 400, 'ANALYSIS_REQUIRED', 'A structured analysis is required.')
   const token = crypto.randomBytes(32).toString('base64url')
@@ -427,7 +433,7 @@ app.put('/api/student/files/:fileId/replace', requireStudent, async (req, res, n
 })
 
 app.post('/api/student/task-creation/analyze', requireStudent, async (req, res) => {
-  if (!limited(`analysis:${req.student.studentId}`, 5)) return safeError(res, 429, 'ANALYSIS_RATE_LIMITED', 'Analysis requests are temporarily limited. Please try again shortly.')
+  if (!await limited(`analysis:${req.student.studentId}`, 5)) return safeError(res, 429, 'ANALYSIS_RATE_LIMITED', 'Analysis requests are temporarily limited. Please try again shortly.')
   const fileIds = Array.isArray(req.body?.fileIds) ? req.body.fileIds.map(String) : []
   const files = (await getStudentFiles(req.student.studentId)).filter((file) => fileIds.includes(file.id) && !file.taskId)
   if (!files.some((file) => file.role === 'BRIEF')) return safeError(res, 400, 'BRIEF_REQUIRED', 'Upload an assignment brief before analysis.', { files: 'An assignment brief is required.' })
@@ -739,7 +745,7 @@ app.post('/api/student/explain/tasks/:taskId/explain', requireStudent, async (re
   const since = Date.now() - 24 * 60 * 60 * 1000
   const used = ((await readTaskStore()).explainRequests || []).filter((item) => item.studentId === req.student.studentId && new Date(item.createdAt).getTime() > since).length
   if (used >= limit) return safeError(res, 429, 'EXPLAIN_DAILY_LIMIT', 'The daily Explain & Defend limit has been reached.')
-  if (!limited(`explain:${req.student.studentId}`, 30)) return safeError(res, 429, 'EXPLAIN_RATE_LIMITED', 'Explain requests are temporarily limited.')
+  if (!await limited(`explain:${req.student.studentId}`, 30)) return safeError(res, 429, 'EXPLAIN_RATE_LIMITED', 'Explain requests are temporarily limited.')
   if (req.body?.artifactId) {
     const artifact = await ownedFile(req.student.studentId, String(req.body.artifactId))
     if (!artifact || artifact.taskId !== task.id) return safeError(res, 404, 'ARTIFACT_NOT_FOUND', 'Choose a file from this task.')
@@ -959,7 +965,7 @@ app.post('/api/expert/auth/login', async (req, res) => {
   const email = String(req.body?.email || '').trim()
   const password = String(req.body?.password || '')
   if (!email || !password) return safeError(res, 400, 'CREDENTIALS_REQUIRED', 'Enter your email and password.')
-  if (!limited(`expert-login:${req.ip}`, 10)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before trying again.')
+  if (!await limited(`expert-login:${req.ip}`, 10)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before trying again.')
   if (!hasSupabaseAuth()) return safeError(res, 503, 'EXPERT_LOGIN_UNAVAILABLE', 'Expert sign-in is not configured yet.')
   try {
     const { data, error } = await supabaseSignIn({ email, password })
@@ -1158,7 +1164,7 @@ app.get('/api/expert/assignments/:assignmentId/qa', requireExpert, expertRoute(a
 }))
 
 app.post('/api/expert/assignments/:assignmentId/work/updates', requireExpert, expertRoute(async (req, res) => {
-  if (!limited(`expert-update:${req.expert.expertId}`, 30)) return safeError(res, 429, 'RATE_LIMITED', 'Too many updates. Try again shortly.')
+  if (!await limited(`expert-update:${req.expert.expertId}`, 30)) return safeError(res, 429, 'RATE_LIMITED', 'Too many updates. Try again shortly.')
   const result = await appendProgressUpdate(req.params.assignmentId, req.body?.body)
   if (!result.ok) return expertMutationError(res, result.error)
   expertChanged(req, result)
@@ -1166,7 +1172,7 @@ app.post('/api/expert/assignments/:assignmentId/work/updates', requireExpert, ex
 }))
 
 app.post('/api/expert/assignments/:assignmentId/work/state', requireExpert, expertRoute(async (req, res) => {
-  if (!limited(`expert-state:${req.expert.expertId}`, 30)) return safeError(res, 429, 'RATE_LIMITED', 'Too many changes. Try again shortly.')
+  if (!await limited(`expert-state:${req.expert.expertId}`, 30)) return safeError(res, 429, 'RATE_LIMITED', 'Too many changes. Try again shortly.')
   const result = await updateAssignmentWorkState(req.params.assignmentId, req.body?.state)
   if (!result.ok) return expertMutationError(res, result.error)
   expertChanged(req, result)
@@ -1174,7 +1180,7 @@ app.post('/api/expert/assignments/:assignmentId/work/state', requireExpert, expe
 }))
 
 app.post('/api/expert/assignments/:assignmentId/messages', requireExpert, expertRoute(async (req, res) => {
-  if (!limited(`expert-message:${req.expert.expertId}`, 12)) return safeError(res, 429, 'RATE_LIMITED', 'Too many messages. Try again shortly.')
+  if (!await limited(`expert-message:${req.expert.expertId}`, 12)) return safeError(res, 429, 'RATE_LIMITED', 'Too many messages. Try again shortly.')
   const result = await postAssignmentMessage(req.params.assignmentId, req.body?.body)
   if (!result.ok) return expertMutationError(res, result.error)
   publishExpert(req.expert.expertId, 'MessageCreated', { assignmentId: req.params.assignmentId, message: result.message })
@@ -1190,7 +1196,7 @@ app.patch('/api/expert/assignments/:assignmentId/messages/read', requireExpert, 
 }))
 
 app.post('/api/expert/assignments/:assignmentId/files', requireExpert, expertRoute(async (req, res) => {
-  if (!limited(`expert-upload:${req.expert.expertId}`, 12)) return safeError(res, 429, 'RATE_LIMITED', 'Uploads are temporarily limited. Try again shortly.')
+  if (!await limited(`expert-upload:${req.expert.expertId}`, 12)) return safeError(res, 429, 'RATE_LIMITED', 'Uploads are temporarily limited. Try again shortly.')
   const uploadError = await new Promise((resolve) => upload.single('file')(req, res, (error) => resolve(error)))
   if (uploadError) {
     const code = uploadError.code === 'LIMIT_FILE_SIZE' ? 'FILE_TOO_LARGE' : 'FILE_UPLOAD_REJECTED'
@@ -1250,7 +1256,7 @@ app.get('/api/expert/files/:fileId/download', requireExpert, expertRoute(async (
 }))
 
 app.post('/api/expert/assignments/:assignmentId/qa/submit', requireExpert, expertRoute(async (req, res) => {
-  if (!limited(`expert-qa:${req.expert.expertId}`, 20)) return safeError(res, 429, 'RATE_LIMITED', 'Too many quality review actions. Try again shortly.')
+  if (!await limited(`expert-qa:${req.expert.expertId}`, 20)) return safeError(res, 429, 'RATE_LIMITED', 'Too many quality review actions. Try again shortly.')
   const result = await submitAssignmentForQa(req.params.assignmentId, { note: req.body?.note })
   if (!result.ok) return expertMutationError(res, result.error)
   expertChanged(req, result)
@@ -1259,7 +1265,7 @@ app.post('/api/expert/assignments/:assignmentId/qa/submit', requireExpert, exper
 }))
 
 app.post('/api/expert/assignments/:assignmentId/qa/feedback/:feedbackId/resolve', requireExpert, expertRoute(async (req, res) => {
-  if (!limited(`expert-qa:${req.expert.expertId}`, 20)) return safeError(res, 429, 'RATE_LIMITED', 'Too many quality review actions. Try again shortly.')
+  if (!await limited(`expert-qa:${req.expert.expertId}`, 20)) return safeError(res, 429, 'RATE_LIMITED', 'Too many quality review actions. Try again shortly.')
   const result = await resolveQaFeedback(req.params.assignmentId, req.params.feedbackId)
   if (!result.ok) return expertMutationError(res, result.error)
   expertChanged(req, result)
@@ -1268,7 +1274,7 @@ app.post('/api/expert/assignments/:assignmentId/qa/feedback/:feedbackId/resolve'
 }))
 
 app.post('/api/expert/assignments/:assignmentId/qa/resubmit', requireExpert, expertRoute(async (req, res) => {
-  if (!limited(`expert-qa:${req.expert.expertId}`, 20)) return safeError(res, 429, 'RATE_LIMITED', 'Too many quality review actions. Try again shortly.')
+  if (!await limited(`expert-qa:${req.expert.expertId}`, 20)) return safeError(res, 429, 'RATE_LIMITED', 'Too many quality review actions. Try again shortly.')
   const result = await resubmitAssignmentForQa(req.params.assignmentId, { note: req.body?.note })
   if (!result.ok) return expertMutationError(res, result.error)
   expertChanged(req, result)
@@ -1277,7 +1283,7 @@ app.post('/api/expert/assignments/:assignmentId/qa/resubmit', requireExpert, exp
 }))
 
 app.post('/api/expert/assignments/:assignmentId/delivery', requireExpert, expertRoute(async (req, res) => {
-  if (!limited(`expert-delivery:${req.expert.expertId}`, 12)) return safeError(res, 429, 'RATE_LIMITED', 'Too many delivery attempts. Try again shortly.')
+  if (!await limited(`expert-delivery:${req.expert.expertId}`, 12)) return safeError(res, 429, 'RATE_LIMITED', 'Too many delivery attempts. Try again shortly.')
   const result = await deliverAssignment(req.params.assignmentId, { note: req.body?.note })
   if (!result.ok) return expertMutationError(res, result.error)
   const studentDelivery = await syncStudentDelivery(req.expert.expertId, req.params.assignmentId)
@@ -1314,7 +1320,7 @@ app.post('/api/expert/assignments/:assignmentId/revision/begin', requireExpert, 
 
 app.post('/api/expert/assignments/__provision', requireExpert, expertRoute(async (req, res) => {
   if (process.env.NODE_ENV === 'production') return safeError(res, 404, 'NOT_FOUND', 'Not found.')
-  if (!limited(`expert-provision:${req.expert.expertId}`, 30)) return safeError(res, 429, 'RATE_LIMITED', 'Too many provisioning requests. Try again shortly.')
+  if (!await limited(`expert-provision:${req.expert.expertId}`, 30)) return safeError(res, 429, 'RATE_LIMITED', 'Too many provisioning requests. Try again shortly.')
   const result = await provisionAssignment(req.body || {})
   if (!result.ok) return expertMutationError(res, result.error)
   publishExpert(req.expert.expertId, 'AssignmentChanged', { assignmentId: result.assignment.id, workState: result.assignment.workState, at: now() })
@@ -1323,7 +1329,7 @@ app.post('/api/expert/assignments/__provision', requireExpert, expertRoute(async
 
 app.post('/api/expert/assignments/:assignmentId/qa/outcome', requireExpert, expertRoute(async (req, res) => {
   if (process.env.NODE_ENV === 'production') return safeError(res, 404, 'NOT_FOUND', 'Not found.')
-  if (!limited(`expert-qa:${req.expert.expertId}`, 20)) return safeError(res, 429, 'RATE_LIMITED', 'Too many quality review actions. Try again shortly.')
+  if (!await limited(`expert-qa:${req.expert.expertId}`, 20)) return safeError(res, 429, 'RATE_LIMITED', 'Too many quality review actions. Try again shortly.')
   const result = await applyQaOutcome(req.params.assignmentId, String(req.body?.outcome || ''), Array.isArray(req.body?.feedback) ? req.body.feedback : [])
   if (!result.ok) return expertMutationError(res, result.error)
   expertChanged(req, result)
@@ -1338,7 +1344,7 @@ app.get('/api/expert/available-tasks', requireExpert, expertRoute(async (req, re
 
 app.post('/api/expert/available-tasks/__provision', requireExpert, expertRoute(async (req, res) => {
   if (process.env.NODE_ENV === 'production') return safeError(res, 404, 'NOT_FOUND', 'Not found.')
-  if (!limited(`expert-provision:${req.expert.expertId}`, 30)) return safeError(res, 429, 'RATE_LIMITED', 'Too many provisioning requests. Try again shortly.')
+  if (!await limited(`expert-provision:${req.expert.expertId}`, 30)) return safeError(res, 429, 'RATE_LIMITED', 'Too many provisioning requests. Try again shortly.')
   const seeds = Array.isArray(req.body?.tasks) ? req.body.tasks : [req.body || {}]
   const result = await provisionAvailableTasks(seeds)
   if (!result.ok) return expertMutationError(res, result.error)
@@ -1387,7 +1393,7 @@ app.get('/api/health', (req, res) => {
 })
 
 app.post('/api/auth/register', async (req, res) => {
-  if (!limited(`student-register:${req.ip}`, 5)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before creating another account.')
+  if (!await limited(`student-register:${req.ip}`, 5)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before creating another account.')
   const { name, email, password } = req.body || {}
   if (String(name || '').trim().length < 2) return safeError(res, 400, 'NAME_REQUIRED', 'Enter your full name.', { name: 'Enter your full name.' })
   if (!/^\S+@\S+\.\S+$/.test(String(email || ''))) return safeError(res, 400, 'EMAIL_INVALID', 'Enter a valid email address.', { email: 'Enter a valid email address.' })
@@ -1407,7 +1413,7 @@ app.post('/api/auth/register', async (req, res) => {
 })
 
 app.post('/api/auth/login', async (req, res) => {
-  if (!limited(`student-login:${req.ip}`, 10)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before trying to sign in again.')
+  if (!await limited(`student-login:${req.ip}`, 10)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before trying to sign in again.')
   if (hasSupabaseAuth()) {
     const { data, error } = await supabaseSignIn({ email: req.body?.email, password: req.body?.password })
     if (error || !data.session) return safeError(res, 401, 'INVALID_CREDENTIALS', 'Those details did not match an account.')
@@ -1426,7 +1432,7 @@ app.post('/api/auth/login', async (req, res) => {
 app.post('/api/auth/password-reset', async (req, res) => {
   const email = String(req.body?.email || '').trim().toLowerCase()
   if (!/^\S+@\S+\.\S+$/.test(email)) return safeError(res, 400, 'EMAIL_INVALID', 'Enter a valid email address.')
-  if (!limited(`password-reset:${req.ip}`, 5)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before trying again.')
+  if (!await limited(`password-reset:${req.ip}`, 5)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before trying again.')
   if (!hasSupabaseAuth() || !process.env.PUBLIC_APP_URL) return safeError(res, 503, 'RECOVERY_UNAVAILABLE', 'Password recovery is not configured yet.')
   try {
     const { error } = await supabaseRequestPasswordReset(email)
@@ -1440,7 +1446,7 @@ app.post('/api/auth/password-reset', async (req, res) => {
 app.post('/api/auth/password-reset/complete', async (req, res) => {
   const { accessToken, refreshToken, password } = req.body || {}
   if (!accessToken || !refreshToken || String(password || '').length < 8) return safeError(res, 400, 'RESET_INVALID', 'The reset link or new password is invalid.')
-  if (!limited(`password-reset-complete:${req.ip}`, 5)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before trying again.')
+  if (!await limited(`password-reset-complete:${req.ip}`, 5)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before trying again.')
   if (!hasSupabaseAuth()) return safeError(res, 503, 'RECOVERY_UNAVAILABLE', 'Password recovery is not configured yet.')
   try {
     const { error } = await supabaseUpdatePassword(accessToken, refreshToken, password)
@@ -1456,7 +1462,7 @@ app.post('/api/contact', (req, res, next) => contactUpload.single('attachment')(
   if (req.file && rejectInvalidUpload(res, req.file)) return
   const { intent, name, email, message, ...details } = req.body || {}
   if (!['general', 'task', 'payment', 'technical', 'business'].includes(intent) || !String(name || '').trim() || !/^\S+@\S+\.\S+$/.test(String(email || '')) || !String(message || '').trim()) return safeError(res, 400, 'CONTACT_INVALID', 'Complete the required contact fields.')
-  if (!limited(`contact:${req.ip}`, 5)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before sending another message.')
+  if (!await limited(`contact:${req.ip}`, 5)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before sending another message.')
   if (!hasEmail() || !process.env.CONTACT_EMAIL) return safeError(res, 503, 'CONTACT_UNAVAILABLE', 'Contact messages are not configured yet.')
   const lines = [`Type: ${intent}`, `Name: ${String(name).trim()}`, `Email: ${String(email).trim()}`, ...Object.entries(details).filter(([, value]) => typeof value === 'string').map(([key, value]) => `${key}: ${value}`), '', String(message)]
   try {
@@ -1670,7 +1676,7 @@ function staffRoute(handler) {
 
 app.post('/api/admin/login', staffRoute(async (req, res) => {
   if (!hasSupabaseAuth()) return safeError(res, 503, 'STAFF_LOGIN_UNAVAILABLE', 'Staff sign-in is not configured yet.')
-  if (!limited(`staff-login:${req.ip}`, 10)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before trying again.')
+  if (!await limited(`staff-login:${req.ip}`, 10)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before trying again.')
   const { data, error } = await supabaseSignIn({ email: req.body?.email, password: req.body?.password })
   if (error || !data?.user) return safeError(res, 401, 'INVALID_CREDENTIALS', 'Those details did not match an account.')
   const profile = await supabaseProfile(data.user.id)
@@ -1705,7 +1711,7 @@ app.get('/api/admin/conversations/:conversationId/messages', requireStaff, staff
   res.json({ conversation, messages: state.messages.filter((item) => item.conversationId === conversation.id) })
 }))
 app.post('/api/admin/conversations/:conversationId/messages', requireStaff, staffRoute(async (req, res) => {
-  if (!limited(`staff-message:${req.staff.id}`, 30)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before sending another message.')
+  if (!await limited(`staff-message:${req.staff.id}`, 30)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before sending another message.')
   const body = String(req.body?.body || '').trim()
   if (!body || body.length > 4000) return safeError(res, 400, 'MESSAGE_INVALID', 'Message must be between 1 and 4000 characters.')
   const result = await withTaskStore((store) => {
@@ -1755,14 +1761,14 @@ app.get('/api/admin/tasks/:taskId/files/:fileId/download', requireStaff, staffRo
   res.download(storagePath, file.originalName)
 }))
 app.post('/api/admin/tasks/:taskId/review', requireStaff, staffRoute(async (req, res) => {
-  if (!limited(`admin-review:${req.staff.id}`, 30)) return safeError(res, 429, 'RATE_LIMITED', 'Too many review actions. Please wait a moment.')
+  if (!await limited(`admin-review:${req.staff.id}`, 30)) return safeError(res, 429, 'RATE_LIMITED', 'Too many review actions. Please wait a moment.')
   const result = await recordAdminReview(req.params.taskId, req.staff.id, req.body?.action, req.body?.note)
   if (result.error) return safeError(res, result.error === 'TASK_NOT_FOUND' ? 404 : result.error === 'NOTE_REQUIRED' || result.error === 'INVALID_ACTION' ? 400 : 409, result.error, result.error === 'NOTE_REQUIRED' ? 'Add an internal note of at least 10 characters.' : 'This review cannot be changed from its current state.')
   res.json(result)
 }))
 
 app.post('/api/admin/tasks/:taskId/plan', requireStaff, staffRoute(async (req, res) => {
-  if (!limited(`admin-plan:${req.staff.id}`, 20)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before issuing another plan.')
+  if (!await limited(`admin-plan:${req.staff.id}`, 20)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before issuing another plan.')
   const result = await issueAdminPlan(req.params.taskId, req.staff.id, req.body)
   if (result.error) return safeError(res, result.error === 'TASK_NOT_FOUND' ? 404 : result.error === 'PLAN_INVALID' ? 400 : 409, result.error, result.error === 'PLAN_INVALID' ? 'Enter a scope of at least 20 characters, a positive whole-number price, a future delivery date, and a valid revision allowance.' : 'This task is not ready for a new plan.')
   await addNotification({ id: crypto.randomUUID(), studentId: result.studentId, title: 'Official plan ready', body: 'Review the scope, delivery date, and price before accepting.', task: { title: result.title, ref: req.params.taskId }, route: `/student/payments?task=${req.params.taskId}&section=plan`, isRead: false, requiresAction: true, createdAt: result.plan.issuedAt })
@@ -1780,7 +1786,7 @@ app.get('/api/admin/experts', requireStaff, staffRoute(async (req, res) => {
 }))
 
 app.post('/api/admin/tasks/:taskId/assign', requireStaff, staffRoute(async (req, res) => {
-  if (!limited(`admin-assign:${req.staff.id}`, 20)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before assigning another task.')
+  if (!await limited(`admin-assign:${req.staff.id}`, 20)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before assigning another task.')
   const expertId = String(req.body?.expertId || '')
   const profile = req.staff.demo && expertId === 'demo-expert' ? { id: expertId, name: 'Alex Morgan', role: 'Expert' } : req.staff.demo ? null : await supabaseProfile(expertId)
   if (profile?.role !== 'Expert') return safeError(res, 404, 'EXPERT_NOT_FOUND', 'Choose an active Expert account.')
@@ -1839,7 +1845,7 @@ app.get('/api/admin/support/:ticketId', requireStaff, staffRoute(async (req, res
   res.json({ ticket })
 }))
 app.post('/api/admin/support/:ticketId/status', requireStaff, staffRoute(async (req, res) => {
-  if (!limited(`admin-support:${req.staff.id}`, 30)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before updating another request.')
+  if (!await limited(`admin-support:${req.staff.id}`, 30)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before updating another request.')
   const result = await updateSupportTicket(req.params.ticketId, req.staff.id, req.body?.status, req.body?.note, req.body?.studentMessage)
   if (result.error) return safeError(res, result.error === 'TICKET_NOT_FOUND' ? 404 : result.error === 'STATUS_UNCHANGED' ? 409 : 400, result.error, result.error === 'NOTE_REQUIRED' ? 'Add an internal note of at least 10 characters.' : result.error === 'STUDENT_MESSAGE_REQUIRED' ? 'Explain what the Student needs to provide.' : 'This support request could not be updated.')
   const studentId = result.ticket.context?.studentId
@@ -1877,7 +1883,7 @@ app.get('/api/admin/qa/:assignmentId/files/:fileId/download', requireStaff, staf
   res.download(storagePath, file.name)
 }))
 app.post('/api/admin/qa/:assignmentId/outcome', requireStaff, staffRoute(async (req, res) => {
-  if (!limited(`admin-qa:${req.staff.id}`, 20)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before recording another quality decision.')
+  if (!await limited(`admin-qa:${req.staff.id}`, 20)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before recording another quality decision.')
   const outcome = String(req.body?.outcome || '')
   if (!['approved', 'changes_requested'].includes(outcome)) return safeError(res, 400, 'QA_OUTCOME_INVALID', 'Choose a valid quality decision.')
   const note = String(req.body?.note || '').trim().slice(0, 2000)
@@ -1909,7 +1915,7 @@ app.get('/api/superadmin/team', requireStaff, requireSuperadmin, staffRoute(asyn
 }))
 app.get('/api/superadmin/team/lookup', requireStaff, requireSuperadmin, staffRoute(async (req, res) => {
   if (req.staff.demo || !hasSupabase()) return safeError(res, 503, 'TEAM_LOOKUP_UNAVAILABLE', 'Team lookup requires a real Super Admin account and Supabase.')
-  if (!limited(`staff-lookup:${req.staff.id}`, 30)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before looking up another account.')
+  if (!await limited(`staff-lookup:${req.staff.id}`, 30)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before looking up another account.')
   const email = String(req.query.email || '').trim().toLowerCase()
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 320) return safeError(res, 400, 'INVALID_EMAIL', 'Enter a valid account email.')
   res.json({ person: await supabaseFindProfileByEmail(email) })
@@ -1919,7 +1925,7 @@ app.get('/api/superadmin/activity', requireStaff, requireSuperadmin, staffRoute(
 }))
 app.post('/api/superadmin/team/:profileId/role', requireStaff, requireSuperadmin, staffRoute(async (req, res) => {
   if (req.staff.demo || !hasSupabase()) return safeError(res, 503, 'ROLE_MANAGEMENT_UNAVAILABLE', 'Role management requires a real Super Admin account and Supabase.')
-  if (!limited(`staff-role:${req.staff.id}`, 20)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before changing another role.')
+  if (!await limited(`staff-role:${req.staff.id}`, 20)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before changing another role.')
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(req.params.profileId)) return safeError(res, 400, 'INVALID_PROFILE', 'Choose a valid account.')
   const { role, expectedRole, note } = req.body || {}
   if (!['Student', 'Expert', 'Admin', 'Superadmin'].includes(role) || !['Student', 'Expert', 'Admin', 'Superadmin'].includes(expectedRole)) return safeError(res, 400, 'INVALID_ROLE', 'Choose a valid account role.')

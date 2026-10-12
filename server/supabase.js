@@ -34,6 +34,13 @@ export async function supabaseDeleteAppSession(token) {
   const { error } = await adminClient.from('app_sessions').delete().eq('id', appSessionId(token))
   if (error) throw error
 }
+export async function supabaseConsumeRateLimit(key, max) {
+  if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED')
+  const keyHash = crypto.createHash('sha256').update(key).digest('hex')
+  const { data, error } = await adminClient.rpc('consume_rate_limit', { p_key_hash: keyHash, p_max: max })
+  if (error) throw error
+  return data === true
+}
 export async function supabaseProfile(userId) { if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED'); const { data, error } = await adminClient.from('profiles').select('id, role, name, email').eq('id', userId).maybeSingle(); if (error) throw error; return data }
 export async function supabaseExpertProfiles() { if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED'); const { data, error } = await adminClient.from('profiles').select('id, name, email, role').eq('role', 'Expert').order('name', { ascending: true }); if (error) throw error; return data || [] }
 export async function supabaseTeam({ page = 1, search = '' } = {}) {
