@@ -48,7 +48,7 @@ export async function supabaseReadState() {
   if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED')
   const { data, error } = await adminClient.from('app_state').select('state, revision').eq('id', 'default').maybeSingle()
   if (error) throw error
-  const state = data?.state || { tasks: [], files: [], deliveryFiles: [], analyses: [], reviews: [], drafts: [], guestTransfers: [], conversations: [], messages: [], payments: [], plans: [], scopeChanges: [], explainSessions: [], explainArtifacts: [], supportTickets: [], idempotency: {}, activity: [], notifications: [] }
+  const state = data?.state || { tasks: [], files: [], deliveryFiles: [], analyses: [], reviews: [], drafts: [], guestTransfers: [], conversations: [], messages: [], payments: [], plans: [], scopeChanges: [], explainSessions: [], explainArtifacts: [], explainRequests: [], supportTickets: [], idempotency: {}, activity: [], notifications: [] }
   Object.defineProperty(state, '__revision', { value: data ? Number(data.revision) : null, configurable: true })
   return state
 }

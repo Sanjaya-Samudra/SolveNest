@@ -112,7 +112,7 @@ function formatWhen(iso) {
   return date.toISOString()
 }
 
-export async function getAccountView({ student, sessions = [], activeSessionId = null, activeTasks = 0 }) {
+export async function getAccountView({ student, sessions = [], activeSessionId = null, activeTasks = 0, sessionRevoke = true }) {
   const account = await readAccount(student?.studentId || 'demo-student')
   const name = account.profile.fullName || student?.name || ''
   const memberSince = formatWhen(account.createdAt)
@@ -168,7 +168,7 @@ export async function getAccountView({ student, sessions = [], activeSessionId =
       twoStepSetup: false,
       dataExport: Boolean(account.privacyControls.dataExport),
       accountClosure: Boolean(account.privacyControls.accountClosure),
-      sessionRevoke: true,
+      sessionRevoke,
       logout: true,
     },
   }

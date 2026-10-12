@@ -222,7 +222,7 @@ async function syncStudentDelivery(expertId, assignmentId) {
       if (!file.storageKey) continue
       if (!store.deliveryFiles.some((item) => item.id === file.id && item.studentId === task.studentId)) store.deliveryFiles.push({ id: file.id, studentId: task.studentId, taskId: task.id, role: 'DELIVERY', originalName: file.name, storageKey: file.storageKey, mimeType: file.type, size: file.size, state: 'READY', createdAt: latest.deliveredAt })
     }
-    const delivery = { id: `${assignmentId}-v${latest.version}`, version: latest.version, deliveredAt: latest.deliveredAt, status: 'ready_to_review', files, note: latest.note, qa: { state: 'approved' }, revision: { status: remaining ? 'available' : 'limit_reached', remaining } }
+    const delivery = { id: `${assignmentId}-v${latest.version}`, version: latest.version, deliveredAt: latest.deliveredAt, status: 'ready_to_review', files, note: latest.note, qa: { state: 'approved' }, revision: { status: remaining ? 'available' : 'limit_reached', remaining }, explainAndDefend: process.env.SOLVY_API_URL ? { eligible: true } : { eligible: false, reason: 'Explain & Defend is not configured yet.' } }
     task.deliveryVersions.push(delivery)
     task.status = 'DELIVERED'
     task.hasNewDelivery = true
@@ -695,13 +695,22 @@ app.post('/api/student/payments/scope-changes/:scopeChangeId/accept', requireStu
 app.post('/api/student/explain/tasks/:taskId/explain', requireStudent, async (req, res) => {
   const task = await getStudentTask(req.student.studentId, req.params.taskId)
   if (!task) return safeError(res, 404, 'TASK_NOT_FOUND', 'Task not found.')
+  if (!task.deliveryVersions?.length) return safeError(res, 409, 'DELIVERY_REQUIRED', 'Explain & Defend becomes available after delivery.')
+  const limit = Math.max(1, Number(process.env.EXPLAIN_DAILY_LIMIT || 30))
+  const since = Date.now() - 24 * 60 * 60 * 1000
+  const used = ((await readTaskStore()).explainRequests || []).filter((item) => item.studentId === req.student.studentId && new Date(item.createdAt).getTime() > since).length
+  if (used >= limit) return safeError(res, 429, 'EXPLAIN_DAILY_LIMIT', 'The daily Explain & Defend limit has been reached.')
   if (!limited(`explain:${req.student.studentId}`, 30)) return safeError(res, 429, 'EXPLAIN_RATE_LIMITED', 'Explain requests are temporarily limited.')
+  if (req.body?.artifactId) {
+    const artifact = await ownedFile(req.student.studentId, String(req.body.artifactId))
+    if (!artifact || artifact.taskId !== task.id) return safeError(res, 404, 'ARTIFACT_NOT_FOUND', 'Choose a file from this task.')
+  }
   const state = await readTaskStore()
-  let session = state.explainSessions.find((item) => item.id === req.body?.sessionId && item.studentId === req.student.studentId)
+  let session = state.explainSessions.find((item) => item.id === req.body?.sessionId && item.studentId === req.student.studentId && item.taskId === task.id)
   if (!session) { session = { id: crypto.randomUUID(), studentId: req.student.studentId, taskId: task.id, mode: req.body?.mode || 'explain', title: task.title, artifactId: req.body?.artifactId || null, trail: [], createdAt: now(), updatedAt: now() }; await withTaskStore((store) => store.explainSessions.push(session)) }
   try {
     const result = await solvyOperation('explain', { taskId: task.id, sessionId: session.id, artifactId: req.body?.artifactId || null, mode: req.body?.mode || 'explain', selection: req.body?.selection || null, question: req.body?.question || null, prompt: req.body?.prompt || null, answers: req.body?.answers || null, scope: req.body?.scope || null, round: req.body?.round || null })
-    await withTaskStore((store) => { const item = store.explainSessions.find((entry) => entry.id === session.id); if (item) Object.assign(item, { updatedAt: now(), lastResult: result }) })
+    await withTaskStore((store) => { const stamp = now(); const item = store.explainSessions.find((entry) => entry.id === session.id); if (item) Object.assign(item, { updatedAt: stamp, lastResult: result }); store.explainRequests = (store.explainRequests || []).filter((entry) => new Date(entry.createdAt).getTime() > since); store.explainRequests.push({ studentId: req.student.studentId, taskId: task.id, createdAt: stamp }); addActivity(store, { id: crypto.randomUUID(), studentId: req.student.studentId, taskId: task.id, type: 'ExplainRequest', text: 'Explain & Defend request completed.', createdAt: stamp }) })
     res.json({ ...result, sessionId: session.id })
   } catch (error) { safeError(res, 503, 'EXPLAIN_UNAVAILABLE', 'Explain & Defend is not configured or temporarily unavailable.') }
 })
@@ -726,7 +735,23 @@ app.get('/api/student/explain/sessions/:sessionId', requireStudent, async (req, 
 })
 
 app.patch('/api/student/explain/sessions/:sessionId', requireStudent, async (req, res) => {
-  const session = await withTaskStore((store) => { const item = store.explainSessions.find((candidate) => candidate.id === req.params.sessionId && candidate.studentId === req.student.studentId); if (item) Object.assign(item, { ...req.body, id: item.id, studentId: item.studentId, taskId: item.taskId, updatedAt: now() }); return item || null })
+  const patch = req.body || {}
+  if (patch.artifactId) {
+    const artifact = await ownedFile(req.student.studentId, String(patch.artifactId))
+    const original = (await readTaskStore()).explainSessions.find((item) => item.id === req.params.sessionId && item.studentId === req.student.studentId)
+    if (!artifact || !original || artifact.taskId !== original.taskId) return safeError(res, 400, 'ARTIFACT_INVALID', 'Choose a file from this task.')
+  }
+  const session = await withTaskStore((store) => {
+    const item = store.explainSessions.find((candidate) => candidate.id === req.params.sessionId && candidate.studentId === req.student.studentId)
+    if (!item) return null
+    if (typeof patch.title === 'string') item.title = patch.title.trim().slice(0, 160)
+    if (typeof patch.mode === 'string' && ['explain', 'why', 'quiz', 'lecturer', 'defend'].includes(patch.mode)) item.mode = patch.mode
+    if (typeof patch.anchor === 'string') item.anchor = patch.anchor.slice(0, 300)
+    if (typeof patch.artifactId === 'string') item.artifactId = patch.artifactId
+    if (Array.isArray(patch.trail)) item.trail = patch.trail.slice(0, 50).map((entry) => ({ key: String(entry?.key || '').slice(0, 100), label: String(entry?.label || '').slice(0, 160), status: String(entry?.status || 'complete').slice(0, 30) }))
+    item.updatedAt = now()
+    return item
+  })
   if (!session) return safeError(res, 404, 'EXPLAIN_SESSION_NOT_FOUND', 'Explain session not found.')
   res.json({ session })
 })
@@ -734,7 +759,7 @@ app.patch('/api/student/explain/sessions/:sessionId', requireStudent, async (req
 app.get('/api/student/explain/usage', requireStudent, async (req, res) => {
   const state = await readTaskStore()
   const since = Date.now() - 24 * 60 * 60 * 1000
-  const used = state.activity.filter((item) => item.studentId === req.student.studentId && item.type === 'ExplainRequest' && new Date(item.createdAt).getTime() > since).length
+  const used = (state.explainRequests || []).filter((item) => item.studentId === req.student.studentId && new Date(item.createdAt).getTime() > since).length
   const limit = Number(process.env.EXPLAIN_DAILY_LIMIT || 30)
   res.json({ remaining: Math.max(0, limit - used), limit, periodLabel: 'Today' })
 })
@@ -768,9 +793,14 @@ function setSupabaseCookies(res, session) {
   res.setHeader('Set-Cookie', [`sn_access=${encodeURIComponent(session.access_token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${session.expires_in || 3600}${secure}`, `sn_refresh=${encodeURIComponent(session.refresh_token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000${secure}`])
 }
 
-function clearSupabaseCookies(res) {
-  res.append('Set-Cookie', 'sn_access=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0')
-  res.append('Set-Cookie', 'sn_refresh=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0')
+function clearStudentCookies(res) {
+  const expired = 'Path=/; HttpOnly; SameSite=Lax; Max-Age=0'
+  res.setHeader('Set-Cookie', [`sn_access=; ${expired}`, `sn_refresh=; ${expired}`, `${COOKIE}=; ${expired}`])
+}
+
+function accountSessions(req) {
+  if (hasSupabaseAuth()) return { sessions: [{ id: 'current-browser', device: req.student.device, createdAt: now(), lastActiveAt: now() }], activeSessionId: 'current-browser', sessionRevoke: false }
+  return { sessions: studentSessionList(req.student.studentId, req.student.id), activeSessionId: req.student.id, sessionRevoke: true }
 }
 
 async function ensureStudentSession(req, res) {
@@ -1392,8 +1422,7 @@ app.post('/api/contact', (req, res, next) => contactUpload.single('attachment')(
 
 app.post('/api/auth/logout', requireStudent, (req, res) => {
   deleteSession(req.student.id)
-  clearSupabaseCookies(res)
-  res.setHeader('Set-Cookie', `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`)
+  clearStudentCookies(res)
   res.json({ ok: true })
 })
 
@@ -1430,8 +1459,7 @@ app.get('/api/student/account', requireStudent, accountRoute(async (req, res) =>
   res.json({
     account: await getAccountView({
       student: req.student,
-      sessions: studentSessionList(req.student.studentId, req.student.id),
-      activeSessionId: req.student.id,
+      ...accountSessions(req),
       activeTasks,
     }),
   })
@@ -1452,8 +1480,7 @@ app.patch('/api/student/account', requireStudent, accountRoute(async (req, res) 
   res.json({
     account: await getAccountView({
       student: req.student,
-      sessions: studentSessionList(req.student.studentId, req.student.id),
-      activeSessionId: req.student.id,
+      ...accountSessions(req),
       activeTasks,
     }),
   })
@@ -1461,17 +1488,18 @@ app.patch('/api/student/account', requireStudent, accountRoute(async (req, res) 
 
 app.post('/api/student/account/logout', requireStudent, (req, res) => {
   deleteSession(req.student.id)
-  res.setHeader('Set-Cookie', `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`)
+  clearStudentCookies(res)
   res.json({ ok: true })
 })
 
 app.delete('/api/student/account/sessions/current', requireStudent, (req, res) => {
   deleteSession(req.student.id)
-  res.setHeader('Set-Cookie', `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`)
+  clearStudentCookies(res)
   res.json({ ok: true, signedOut: true })
 })
 
 app.delete('/api/student/account/sessions/:sessionId', requireStudent, (req, res) => {
+  if (hasSupabaseAuth()) return safeError(res, 501, 'SESSION_REVOKE_UNAVAILABLE', 'Remote session management is not available for this account.')
   const sessionId = String(req.params.sessionId || '')
   const target = getSession(sessionId)
   if (!target || target.studentId !== req.student.studentId) {
@@ -1480,7 +1508,7 @@ app.delete('/api/student/account/sessions/:sessionId', requireStudent, (req, res
   }
   if (sessionId === req.student.id) {
     deleteSession(sessionId)
-    res.setHeader('Set-Cookie', `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`)
+    clearStudentCookies(res)
     res.json({ ok: true, signedOut: true })
     return
   }
