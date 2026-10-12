@@ -35,10 +35,12 @@ export async function writeTaskStore(store) {
 }
 
 export async function withTaskStore(mutator) {
-  const store = await readTaskStore()
-  const result = mutator(store)
-  await writeTaskStore(store)
-  return result
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const store = await readTaskStore()
+    const result = mutator(store)
+    try { await writeTaskStore(store); return result }
+    catch (error) { if (error.message !== 'APP_STATE_CONFLICT' || attempt === 2) throw error }
+  }
 }
 
 export async function getStudentTasks(studentId) {

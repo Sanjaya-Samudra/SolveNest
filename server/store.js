@@ -37,6 +37,16 @@ export function writeStore(store) {
   fs.writeFileSync(storePath, JSON.stringify(store, null, 2))
 }
 
+async function updateNotifications(mutator) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const state = await supabaseReadState()
+    state.notifications = state.notifications || []
+    const result = mutator(state.notifications)
+    try { await supabaseWriteState(state); return result }
+    catch (error) { if (error.message !== 'APP_STATE_CONFLICT' || attempt === 2) throw error }
+  }
+}
+
 export async function listNotifications(studentId = null) {
   if (hasSupabase()) { const state = await supabaseReadState(); return (state.notifications || []).filter((notification) => !studentId || notification.studentId === studentId) }
   const store = readStore()
@@ -44,7 +54,7 @@ export async function listNotifications(studentId = null) {
 }
 
 export async function addNotification(notification) {
-  if (hasSupabase()) { const state = await supabaseReadState(); state.notifications = state.notifications || []; state.notifications.unshift(notification); await supabaseWriteState(state); return notification }
+  if (hasSupabase()) return updateNotifications((notifications) => { if (!notifications.some((item) => item.id === notification.id)) notifications.unshift(notification); return notification })
   const store = readStore()
   store.notifications.unshift(notification)
   writeStore(store)
@@ -52,7 +62,7 @@ export async function addNotification(notification) {
 }
 
 export async function markRead(id, studentId = null) {
-  if (hasSupabase()) { const state = await supabaseReadState(); const item = (state.notifications || []).find((n) => String(n.id) === String(id) && n.studentId === studentId); if (!item) return null; item.isRead = true; await supabaseWriteState(state); return item }
+  if (hasSupabase()) return updateNotifications((notifications) => { const item = notifications.find((n) => String(n.id) === String(id) && n.studentId === studentId); if (item) item.isRead = true; return item || null })
   const store = readStore()
   const item = store.notifications.find((n) => String(n.id) === String(id) && (!studentId || n.studentId === studentId))
   if (!item) return null
@@ -62,7 +72,7 @@ export async function markRead(id, studentId = null) {
 }
 
 export async function markAllRead(studentId = null) {
-  if (hasSupabase()) { const state = await supabaseReadState(); state.notifications = (state.notifications || []).map((n) => n.studentId === studentId ? { ...n, isRead: true } : n); await supabaseWriteState(state); return state.notifications }
+  if (hasSupabase()) return updateNotifications((notifications) => { for (const item of notifications) if (item.studentId === studentId) item.isRead = true; return notifications })
   const store = readStore()
   store.notifications = store.notifications.map((n) => (!studentId || n.studentId === studentId) ? { ...n, isRead: true } : n)
   writeStore(store)
