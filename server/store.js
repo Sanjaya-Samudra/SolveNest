@@ -40,7 +40,7 @@ export function writeStore(store) {
 export async function listNotifications(studentId = null) {
   if (hasSupabase()) { const state = await supabaseReadState(); return (state.notifications || []).filter((notification) => !studentId || notification.studentId === studentId) }
   const store = readStore()
-  return store.notifications.filter((notification) => !studentId || !notification.studentId || notification.studentId === studentId)
+  return store.notifications.filter((notification) => !studentId || notification.studentId === studentId)
 }
 
 export async function addNotification(notification) {
@@ -54,7 +54,7 @@ export async function addNotification(notification) {
 export async function markRead(id, studentId = null) {
   if (hasSupabase()) { const state = await supabaseReadState(); const item = (state.notifications || []).find((n) => String(n.id) === String(id) && n.studentId === studentId); if (!item) return null; item.isRead = true; await supabaseWriteState(state); return item }
   const store = readStore()
-  const item = store.notifications.find((n) => String(n.id) === String(id) && (!studentId || n.studentId === studentId || !n.studentId))
+  const item = store.notifications.find((n) => String(n.id) === String(id) && (!studentId || n.studentId === studentId))
   if (!item) return null
   item.isRead = true
   writeStore(store)
@@ -64,7 +64,7 @@ export async function markRead(id, studentId = null) {
 export async function markAllRead(studentId = null) {
   if (hasSupabase()) { const state = await supabaseReadState(); state.notifications = (state.notifications || []).map((n) => n.studentId === studentId ? { ...n, isRead: true } : n); await supabaseWriteState(state); return state.notifications }
   const store = readStore()
-  store.notifications = store.notifications.map((n) => (!studentId || n.studentId === studentId || !n.studentId) ? { ...n, isRead: true } : n)
+  store.notifications = store.notifications.map((n) => (!studentId || n.studentId === studentId) ? { ...n, isRead: true } : n)
   writeStore(store)
   return store.notifications
 }

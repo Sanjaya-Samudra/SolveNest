@@ -1,10 +1,13 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import crypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
+import { hasSupabase, supabaseReadStudentAccount, supabaseWriteStudentAccount } from './supabase.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const dataDir = path.join(__dirname, 'data')
 const storePath = path.join(dataDir, 'account.json')
+const accountsDir = path.join(dataDir, 'accounts')
 
 const DEFAULT_PREFERENCES = {
   inApp: true,
@@ -44,38 +47,55 @@ function emptyAccount(studentId) {
 
 function ensureStore() {
   if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true })
-  if (!fs.existsSync(storePath)) {
-    fs.writeFileSync(storePath, JSON.stringify(emptyAccount('demo-student'), null, 2))
-  }
+  if (!fs.existsSync(accountsDir)) fs.mkdirSync(accountsDir, { recursive: true })
 }
 
-function readAccount(studentId) {
+function accountPath(studentId) {
+  return path.join(accountsDir, `${crypto.createHash('sha256').update(String(studentId)).digest('hex')}.json`)
+}
+
+async function readAccount(studentId) {
+  const remote = hasSupabase()
+  if (remote) {
+    const parsed = await supabaseReadStudentAccount(studentId)
+    if (!parsed) return emptyAccount(studentId)
+    if (parsed.studentId !== studentId) throw new Error('ACCOUNT_OWNER_MISMATCH')
+    return mergeAccount(studentId, parsed)
+  }
   ensureStore()
+  const target = accountPath(studentId)
   try {
-    const raw = fs.readFileSync(storePath, 'utf8')
-    const parsed = JSON.parse(raw)
-    if (!parsed || typeof parsed !== 'object') throw new Error('invalid')
-    const base = emptyAccount(studentId)
-    return {
-      ...base,
-      ...parsed,
-      studentId: parsed.studentId || studentId,
-      profile: { ...base.profile, ...(parsed.profile || {}) },
-      security: { ...base.security, ...(parsed.security || {}) },
-      preferences: { ...base.preferences, ...(parsed.preferences || {}) },
-      privacyControls: { ...base.privacyControls, ...(parsed.privacyControls || {}) },
-      policyConsents: Array.isArray(parsed.policyConsents) ? parsed.policyConsents : [],
-    }
+    // Only the original demo account may inherit the legacy single-account file.
+    const source = !fs.existsSync(target) && studentId === 'demo-student' && fs.existsSync(storePath) ? storePath : target
+    const parsed = JSON.parse(fs.readFileSync(source, 'utf8'))
+    if (!parsed || typeof parsed !== 'object' || (source === target && parsed.studentId !== studentId)) throw new Error('invalid')
+    return mergeAccount(studentId, parsed)
   } catch {
-    const fresh = emptyAccount(studentId)
-    fs.writeFileSync(storePath, JSON.stringify(fresh, null, 2))
-    return fresh
+    return emptyAccount(studentId)
   }
 }
 
-function writeAccount(account) {
+function mergeAccount(studentId, parsed) {
+  const base = emptyAccount(studentId)
+  return {
+    ...base,
+    ...parsed,
+    studentId,
+    profile: { ...base.profile, ...(parsed.profile || {}) },
+    security: { ...base.security, ...(parsed.security || {}) },
+    preferences: { ...base.preferences, ...(parsed.preferences || {}) },
+    privacyControls: { ...base.privacyControls, ...(parsed.privacyControls || {}) },
+    policyConsents: Array.isArray(parsed.policyConsents) ? parsed.policyConsents : [],
+  }
+}
+
+async function writeAccount(account) {
+  if (hasSupabase()) return supabaseWriteStudentAccount(account.studentId, account)
   ensureStore()
-  fs.writeFileSync(storePath, JSON.stringify(account, null, 2))
+  const target = accountPath(account.studentId)
+  const temporary = `${target}.${crypto.randomUUID()}.tmp`
+  fs.writeFileSync(temporary, JSON.stringify(account, null, 2))
+  fs.renameSync(temporary, target)
 }
 
 function cleanString(value, max = 160) {
@@ -92,8 +112,8 @@ function formatWhen(iso) {
   return date.toISOString()
 }
 
-export function getAccountView({ student, sessions = [], activeSessionId = null, activeTasks = 0 }) {
-  const account = readAccount(student?.studentId || 'demo-student')
+export async function getAccountView({ student, sessions = [], activeSessionId = null, activeTasks = 0 }) {
+  const account = await readAccount(student?.studentId || 'demo-student')
   const name = account.profile.fullName || student?.name || ''
   const memberSince = formatWhen(account.createdAt)
 
@@ -154,23 +174,23 @@ export function getAccountView({ student, sessions = [], activeSessionId = null,
   }
 }
 
-export function updateProfile(studentId, patch = {}) {
-  const account = readAccount(studentId)
+export async function updateProfile(studentId, patch = {}) {
+  const account = await readAccount(studentId)
   if ('fullName' in patch) account.profile.fullName = cleanString(patch.fullName) ?? account.profile.fullName
   if ('preferredName' in patch) account.profile.preferredName = cleanString(patch.preferredName) ?? account.profile.preferredName
   if ('institution' in patch) account.profile.institution = cleanString(patch.institution) ?? account.profile.institution
   if ('program' in patch) account.profile.program = cleanString(patch.program) ?? account.profile.program
-  writeAccount(account)
+  await writeAccount(account)
   return account
 }
 
-export function updatePreferences(studentId, patch = {}) {
-  const account = readAccount(studentId)
+export async function updatePreferences(studentId, patch = {}) {
+  const account = await readAccount(studentId)
   for (const key of PREFERENCE_KEYS) {
     if (key in patch && typeof patch[key] === 'boolean') {
       account.preferences[key] = patch[key]
     }
   }
-  writeAccount(account)
+  await writeAccount(account)
   return account
 }

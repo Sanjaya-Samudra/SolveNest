@@ -685,7 +685,7 @@ async function ensureStudentSession(req, res) {
     }
   }
 
-  if (process.env.DEV_DEMO_SESSION !== '1') {
+  if (process.env.NODE_ENV === 'production' || process.env.DEV_DEMO_SESSION !== '1') {
     const err = new Error('STUDENT_ACCESS_REQUIRED')
     err.status = 401
     throw err
@@ -1291,39 +1291,40 @@ app.post('/api/student/notifications/read-all', requireStudent, async (req, res)
   res.json({ ok: true, notifications, unreadCount: 0 })
 })
 
-app.get('/api/student/account', requireStudent, (req, res) => {
-  const catalog = getCatalog()
+const accountRoute = (handler) => (req, res, next) => Promise.resolve(handler(req, res)).catch(next)
+app.get('/api/student/account', requireStudent, accountRoute(async (req, res) => {
+  const activeTasks = (await getStudentTasks(req.student.studentId)).filter((task) => !['COMPLETED', 'DECLINED'].includes(task.status)).length
   res.json({
-    account: getAccountView({
+    account: await getAccountView({
       student: req.student,
       sessions: studentSessionList(req.student.studentId, req.student.id),
       activeSessionId: req.student.id,
-      activeTasks: Array.isArray(catalog.tasks) ? catalog.tasks.length : 0,
+      activeTasks,
     }),
   })
-})
+}))
 
-app.patch('/api/student/account', requireStudent, (req, res) => {
+app.patch('/api/student/account', requireStudent, accountRoute(async (req, res) => {
   const body = req.body || {}
   const section = body.section ? String(body.section) : null
   if (section === 'profile') {
-    updateProfile(req.student.studentId, body.profile || {})
+    await updateProfile(req.student.studentId, body.profile || {})
   } else if (section === 'preferences') {
-    updatePreferences(req.student.studentId, body.preferences || {})
+    await updatePreferences(req.student.studentId, body.preferences || {})
   } else {
     res.status(400).json({ error: 'ACCOUNT_SECTION_REQUIRED' })
     return
   }
-  const catalog = getCatalog()
+  const activeTasks = (await getStudentTasks(req.student.studentId)).filter((task) => !['COMPLETED', 'DECLINED'].includes(task.status)).length
   res.json({
-    account: getAccountView({
+    account: await getAccountView({
       student: req.student,
       sessions: studentSessionList(req.student.studentId, req.student.id),
       activeSessionId: req.student.id,
-      activeTasks: Array.isArray(catalog.tasks) ? catalog.tasks.length : 0,
+      activeTasks,
     }),
   })
-})
+}))
 
 app.post('/api/student/account/logout', requireStudent, (req, res) => {
   deleteSession(req.student.id)
