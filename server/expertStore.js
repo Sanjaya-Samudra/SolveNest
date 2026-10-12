@@ -1079,3 +1079,16 @@ export async function provisionAssignment(seed = {}) {
   await writeExpertStore(store)
   return { ok: true, assignment: safeAssignmentDetail(assignment) }
 }
+
+export async function cancelProvisionedAssignment(id, taskId) {
+  const store = await readExpertStore()
+  const index = store.assignments.findIndex((item) => item.id === id && item.taskId === taskId)
+  if (index < 0) return false
+  const assignment = store.assignments[index]
+  if (assignment.workState !== 'assigned' || assignment.workspace?.updates?.length || assignment.workspace?.messages?.length) return false
+  store.assignments.splice(index, 1)
+  store.movement = store.movement.filter((item) => item.assignmentId !== id)
+  store.notifications = store.notifications.filter((item) => item.route !== `/expert/assignments/${id}`)
+  await writeExpertStore(store)
+  return true
+}

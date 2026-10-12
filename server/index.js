@@ -16,6 +16,7 @@ import {
   appendProgressUpdate,
   applyQaOutcome,
   beginAssignmentRevision,
+  cancelProvisionedAssignment,
   deliverAssignment,
   expressInterest,
   findExpertFile,
@@ -1759,7 +1760,8 @@ app.post('/api/admin/tasks/:taskId/assign', requireStaff, staffRoute(async (req,
   const requirements = [plan.scope, ...(Array.isArray(task.analysis?.deliverables) ? task.analysis.deliverables.map((item) => typeof item === 'string' ? item : item.title || item.name).filter(Boolean) : [])].slice(0, 12)
   const created = await runForExpert(profile, () => provisionAssignment({ taskId: task.id, title: task.title, reference: plan.reference, domain: task.subject, type: task.type, deliverable: plan.scope, requirements, deadline: plan.delivery, workspace: { files: { source: sourceFiles } } }))
   if (!created.ok) return expertMutationError(res, created.error)
-  const updated = await withTaskStore((store) => {
+  let updated
+  try { updated = await withTaskStore((store) => {
     const current = store.tasks.find((item) => item.id === task.id)
     if (!current || current.assignedExpertId || current.status !== 'PAID') return false
     const stamp = now()
@@ -1773,9 +1775,21 @@ app.post('/api/admin/tasks/:taskId/assign', requireStaff, staffRoute(async (req,
     store.adminAudit.unshift({ id: crypto.randomUUID(), taskId: task.id, actorId: req.staff.id, action: 'assign_expert', note: `Assigned ${profile.name} (${profile.id}).`, at: stamp })
     addActivity(store, { id: crypto.randomUUID(), studentId: task.studentId, taskId: task.id, type: 'ExpertAssigned', text: current.latestUpdate.text, createdAt: stamp })
     return true
-  })
-  if (!updated) return safeError(res, 409, 'TASK_ASSIGNMENT_CHANGED', 'The task changed while it was being assigned. Reload the case.')
-  await addNotification({ id: crypto.randomUUID(), studentId: task.studentId, title: 'Expert assigned', body: 'Your task has moved to the Expert workspace.', task: { title: task.title, ref: task.id }, route: `/student/tasks?task=${task.id}`, isRead: false, requiresAction: false, createdAt: now() })
+  }) } catch (error) {
+    if (!created.replayed) {
+      const latest = (await readTaskStore()).tasks.find((item) => item.id === task.id)
+      if (latest?.assignmentId !== created.assignment.id) await runForExpert(profile, () => cancelProvisionedAssignment(created.assignment.id, task.id)).catch((rollbackError) => console.error('[assignment] rollback failed', rollbackError))
+    }
+    throw error
+  }
+  if (!updated) {
+    const latest = (await readTaskStore()).tasks.find((item) => item.id === task.id)
+    if (latest?.assignmentId === created.assignment.id) return res.status(200).json({ assignmentId: created.assignment.id, expert: { id: profile.id, name: profile.name }, replayed: true })
+    if (!created.replayed) await runForExpert(profile, () => cancelProvisionedAssignment(created.assignment.id, task.id)).catch((error) => console.error('[assignment] rollback failed', error))
+    return safeError(res, 409, 'TASK_ASSIGNMENT_CHANGED', 'The task changed while it was being assigned. Reload the case.')
+  }
+  try { await addNotification({ id: crypto.randomUUID(), studentId: task.studentId, title: 'Expert assigned', body: 'Your task has moved to the Expert workspace.', task: { title: task.title, ref: task.id }, route: `/student/tasks?task=${task.id}`, isRead: false, requiresAction: false, createdAt: now() }) }
+  catch (error) { console.error('[assignment] student notification failed', error) }
   publish(task.studentId, { type: 'ExpertAssigned', taskId: task.id })
   publishExpert(profile.id, 'AssignmentChanged', { assignmentId: created.assignment.id, at: now() })
   res.status(201).json({ assignmentId: created.assignment.id, expert: { id: profile.id, name: profile.name } })
