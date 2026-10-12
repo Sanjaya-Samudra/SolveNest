@@ -93,15 +93,17 @@ Set the Stripe server variables, configure a Stripe webhook for `/api/payments/s
 
 ## 9. HTTPS and process management
 
-Terminate TLS at a reverse proxy, forward only `/api` to the Node server, set secure cookies, and run one process per instance behind a load balancer only after moving sessions/domain data to PostgreSQL. Allow SSE connections through the proxy with buffering disabled.
+Serve the built `client/dist` site over HTTPS. Route `/api` on that same origin to the Node API, because browser requests use relative `/api` paths and session cookies are scoped to the site. Terminate TLS at a trusted reverse proxy, set `TRUST_PROXY_HOPS` to its exact hop count, and keep the API private behind that proxy. Allow SSE connections through it with buffering disabled. Start with one API instance: sessions and rate limits are shared, but domain records still live in the single `app_state` JSON document and concurrent edits can return a conflict.
 
-## 10. Smoke checks
+## 10. Release sequence and remaining gates
 
-```powershell
-Set-Location server
-npm test
-Set-Location ..\client
-npm run build
-```
+1. Choose a production host for the static React build and Node API, and connect an HTTPS domain with same-origin `/api` routing.
+2. Create Supabase, run all six migrations, create the private bucket, enable Email/password Auth, and make the first Superadmin through a trusted administrator.
+3. Configure an SMTP provider and the Supabase Auth email templates and redirect allowlist.
+4. Provide a real Solvy endpoint matching the documented analysis and Explain & Defend requests. The API cannot manufacture or configure that service.
+5. Create a Stripe account, configure PaymentIntent keys and the signed webhook, and verify that the chosen account supports the configured currency.
+6. Set every production environment variable in the host secret manager. Keep the service-role, Stripe, Solvy, SMTP, and file-signing secrets out of the client build and Git.
+7. Build the client with `npm --prefix client run build`, start the API with `npm --prefix server start`, and confirm `/api/health` responds through the public HTTPS domain.
+8. Manually register and sign in a Student, upload a brief and rubric, run analysis, create a task, issue and accept a plan, complete a real payment, assign an Expert, submit for Admin QA, deliver, and request a revision. Confirm password recovery and signed file downloads.
 
-Then manually register a Student, upload a brief and rubric, run analysis, create the task, and verify the task appears in Dashboard, My Tasks, Files & Deliveries, and Notifications.
+Do not open a public launch yet: the active domain model remains one `app_state` JSON document; scope-change billing is intentionally unavailable; upload validation checks file signatures but does not scan malware or archive contents; provider connectivity, email delivery, and live payment behavior cannot be verified until accounts and credentials exist. Complete these gates and repeat the manual flow before launch.
