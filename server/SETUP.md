@@ -91,6 +91,8 @@ Expose a server-to-server Solvy endpoint that accepts authorized file metadata a
 
 Set the Stripe server variables, configure a Stripe webhook for `/api/payments/stripe/webhook`, and subscribe it to `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, and `checkout.session.expired`. Existing PaymentIntent events remain accepted for older payment records. The browser receives a short-lived hosted Checkout URL; Stripe secrets remain server-side. The return URL only brings the Student back to the app. Funding is recorded after a signed webhook or a provider status lookup confirms payment.
 
+An Admin can issue either a full-payment plan or a two-milestone plan. The first milestone unlocks Expert assignment; the second must be paid before an approved delivery is released. The Admin chooses the first milestone percentage when issuing the quote. The plan shown to the Student lists both amounts before acceptance. Each milestone uses a separate Checkout Session and payment record.
+
 ## 9. HTTPS and process management
 
 Serve the built `client/dist` site over HTTPS. Route `/api` on that same origin to the Node API, because browser requests use relative `/api` paths and session cookies are scoped to the site. Terminate TLS at a trusted reverse proxy, set `TRUST_PROXY_HOPS` to its exact hop count, and keep the API private behind that proxy. Allow SSE connections through it with buffering disabled. Start with one API instance: sessions and rate limits are shared, but domain records still live in the single `app_state` JSON document and concurrent edits can return a conflict.

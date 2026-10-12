@@ -351,6 +351,7 @@ function OfficialPlanDocument({ plan, displayState, onAccept, accepting, canAcce
           <dt>Plan price</dt>
           <dd className="sn-pay-plan__price">{formatCurrency(plan.price, plan.currency)}</dd>
         </div>
+        {plan.paymentModel === 'milestone' ? <div><dt>Payment schedule</dt><dd>{plan.milestones.map((milestone) => `${milestone.name}: ${formatCurrency(milestone.amount, plan.currency)}`).join(' · ')}. The final milestone is due before delivery.</dd></div> : null}
         {plan.expiresAt ? (
           <div>
             <dt>Valid until</dt>
@@ -974,12 +975,12 @@ export default function StudentPaymentsPage() {
     const result = await checkout.start({
       taskId,
       milestoneId: milestoneId || currentMs?.id || null,
-      planId: planQuery.data?.id || null,
+      planId: planQuery.data?.id || selectedTask?.plan?.id || focusQuery.data?.plan?.id || null,
     })
     if (result?.checkoutUrl) {
       window.location.assign(result.checkoutUrl)
     }
-  }, [viewState.taskId, focusQuery.data, currentMs, planQuery.data, checkout])
+  }, [viewState.taskId, selectedTask, focusQuery.data, currentMs, planQuery.data, checkout])
 
   const onPrimaryAct = useCallback(async () => {
     const target = selectedTask || focusQuery.data
@@ -1134,7 +1135,7 @@ export default function StudentPaymentsPage() {
           <ErrorBanner message="Could not load funding structure." onRetry={structureQuery.reload} />
         ) : !structure ? (
           <PaymentsEmptyStates type="unavailable" />
-        ) : structure.model === 'milestone' && section === 'milestones' ? (
+        ) : structure.model === 'milestone' ? (
           <MilestoneFundingTrack
             structure={structure}
             currency={structure.currency}

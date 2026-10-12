@@ -66,8 +66,11 @@ export async function issueAdminPlan(taskId, actorId, input) {
   const price = Number(input?.price)
   const delivery = String(input?.delivery || '').trim()
   const revisionAllowance = Number(input?.revisionAllowance)
+  const paymentModel = input?.paymentModel === 'milestone' ? 'milestone' : 'full'
+  const firstMilestonePercent = Number(input?.firstMilestonePercent)
+  const firstMilestoneAmount = Math.round(price * firstMilestonePercent / 100)
   const parsedDelivery = new Date(delivery)
-  if (scope.length < 20 || !Number.isSafeInteger(price) || price <= 0 || price > 100000000 || !delivery || Number.isNaN(parsedDelivery.getTime()) || parsedDelivery.getTime() <= Date.now() || !Number.isSafeInteger(revisionAllowance) || revisionAllowance < 0 || revisionAllowance > 20) return { error: 'PLAN_INVALID' }
+  if (scope.length < 20 || !Number.isSafeInteger(price) || price <= 0 || price > 100000000 || !delivery || Number.isNaN(parsedDelivery.getTime()) || parsedDelivery.getTime() <= Date.now() || !Number.isSafeInteger(revisionAllowance) || revisionAllowance < 0 || revisionAllowance > 20 || (paymentModel === 'milestone' && (!Number.isSafeInteger(firstMilestonePercent) || firstMilestonePercent < 10 || firstMilestonePercent > 90 || firstMilestoneAmount < 1 || firstMilestoneAmount >= price))) return { error: 'PLAN_INVALID' }
   return withTaskStore((store) => {
     const task = store.tasks.find((item) => item.id === taskId)
     if (!task) return { error: 'TASK_NOT_FOUND' }
@@ -75,7 +78,12 @@ export async function issueAdminPlan(taskId, actorId, input) {
     if (store.plans.some((item) => item.taskId === taskId && item.status === 'ACCEPTED')) return { error: 'PLAN_ALREADY_ACCEPTED' }
     const stamp = new Date().toISOString()
     for (const old of store.plans.filter((item) => item.taskId === taskId && item.status === 'READY')) old.status = 'SUPERSEDED'
-    const plan = { id: crypto.randomUUID(), taskId, studentId: task.studentId, taskTitle: task.title, reference: `SN-${task.id.slice(0, 8).toUpperCase()}`, scope, excluded, delivery: parsedDelivery.toISOString(), revisionAllowance, price, amount: price, currency: 'LKR', status: 'READY', issuedAt: stamp, issuedBy: actorId, canAccept: true, milestones: [] }
+    const firstAmount = paymentModel === 'milestone' ? firstMilestoneAmount : 0
+    const milestones = paymentModel === 'milestone' ? [
+      { id: crypto.randomUUID(), sequence: 1, name: 'Start work', scope: 'Funds Expert assignment and project work.', amount: firstAmount, currency: 'LKR', fundingState: 'payment_required' },
+      { id: crypto.randomUUID(), sequence: 2, name: 'Release delivery', scope: 'Due before the approved delivery is released.', amount: price - firstAmount, currency: 'LKR', fundingState: 'locked' },
+    ] : []
+    const plan = { id: crypto.randomUUID(), taskId, studentId: task.studentId, taskTitle: task.title, reference: `SN-${task.id.slice(0, 8).toUpperCase()}`, scope, excluded, delivery: parsedDelivery.toISOString(), revisionAllowance, price, amount: price, currency: 'LKR', paymentModel, status: 'READY', issuedAt: stamp, issuedBy: actorId, canAccept: true, milestones }
     store.plans.unshift(plan)
     task.status = 'QUOTE_READY'
     task.amountDue = price

@@ -100,12 +100,33 @@ async function recordPaymentStatus(providerId, status) {
   return withTaskStore((store) => {
     const payment = store.payments.find((item) => item.providerId === providerId)
     if (!payment) return null
+    if (payment.status === 'succeeded') return null
     payment.status = status
     if (status !== 'succeeded') return null
     const task = store.tasks.find((item) => item.id === payment.taskId && item.studentId === payment.studentId)
     const plan = store.plans.find((item) => item.id === payment.planId && item.status === 'ACCEPTED')
-    if (!task || !plan || task.status !== 'PAYMENT_PENDING') return null
+    if (!task || !plan) return null
     const stamp = now()
+    if (payment.milestoneId) {
+      const milestone = plan.milestones?.find((item) => item.id === payment.milestoneId)
+      if (!milestone || milestone.fundingState === 'funded') return null
+      milestone.fundingState = 'funded'
+      milestone.paidAt = stamp
+      milestone.paymentId = payment.id
+      const amountFunded = plan.milestones.filter((item) => item.fundingState === 'funded').reduce((total, item) => total + item.amount, 0)
+      const next = plan.milestones.find((item) => item.fundingState !== 'funded')
+      if (next) next.fundingState = 'payment_required'
+      task.amountDue = Math.max(0, plan.amount - amountFunded)
+      task.funding = { model: 'milestone', state: next ? 'payment_required' : 'funded', amountTotal: plan.amount, amountFunded, amountDue: task.amountDue, milestones: plan.milestones }
+      if (task.status === 'PAYMENT_PENDING') task.status = 'PAID'
+      task.latestUpdate = { text: next ? 'The first milestone is funded. Expert work can begin; the final milestone is due before delivery.' : 'All milestones are funded. The approved delivery can be released.', createdAt: stamp }
+      if (next) task.nextAction = { label: 'Fund final milestone', route: `/student/payments?task=${task.id}&section=milestones` }
+      else if (task.nextAction?.label === 'Fund final milestone') task.nextAction = null
+      task.updatedAt = stamp
+      addActivity(store, { id: crypto.randomUUID(), studentId: task.studentId, taskId: task.id, type: 'MilestoneFunded', text: task.latestUpdate.text, createdAt: stamp })
+      return { id: task.id, studentId: task.studentId, title: task.title, at: stamp, milestoneName: milestone.name, remaining: task.amountDue }
+    }
+    if (task.status !== 'PAYMENT_PENDING') return null
     task.status = 'PAID'
     task.amountDue = 0
     task.funding = { state: 'funded', amountTotal: plan.amount, amountDue: 0 }
@@ -119,7 +140,7 @@ async function recordPaymentStatus(providerId, status) {
 
 async function announceFundedTask(task) {
   if (!task) return
-  try { await addNotification({ id: crypto.randomUUID(), studentId: task.studentId, title: 'Task funded', body: 'Your task is ready for Expert assignment.', task: { title: task.title, ref: task.id }, route: `/student/tasks?task=${task.id}`, isRead: false, requiresAction: false, createdAt: task.at }) }
+  try { await addNotification({ id: crypto.randomUUID(), studentId: task.studentId, title: task.milestoneName ? `${task.milestoneName} funded` : 'Task funded', body: task.milestoneName ? task.remaining ? 'Expert work can begin. The final milestone is due before delivery.' : 'All milestones are funded and delivery can be released.' : 'Your task is ready for Expert assignment.', task: { title: task.title, ref: task.id }, route: `/student/payments?task=${task.id}&section=${task.milestoneName ? 'milestones' : 'funding'}`, isRead: false, requiresAction: false, createdAt: task.at }) }
   catch (error) { console.error('[payment] notification failed', error) }
   publish(task.studentId, { type: 'TaskFunded', taskId: task.id })
 }
@@ -616,7 +637,7 @@ app.post('/api/student/conversations/:conversationId/files', requireStudent, (re
 app.get('/api/student/payments/tasks', requireStudent, async (req, res) => {
   const tasks = await getStudentTasks(req.student.studentId)
   const state = await readTaskStore()
-  const rows = tasks.map((task) => ({ id: task.id, taskId: task.id, title: task.title, status: task.status, amountDue: task.amountDue || null, funding: task.funding || null, plan: state.plans.find((plan) => plan.taskId === task.id && plan.studentId === req.student.studentId) || null, paymentStatus: state.payments.find((payment) => payment.taskId === task.id && payment.studentId === req.student.studentId)?.status || null }))
+  const rows = tasks.map((task) => { const plan = state.plans.find((item) => item.taskId === task.id && item.studentId === req.student.studentId) || null; return { id: task.id, taskId: task.id, title: task.title, status: task.status, amountDue: task.amountDue ?? null, funding: task.funding || null, plan, milestones: plan?.milestones || [], paymentModel: plan?.paymentModel || 'full', paymentStatus: state.payments.find((payment) => payment.taskId === task.id && payment.studentId === req.student.studentId)?.status || null } })
   res.json({ tasks: rows })
 })
 
@@ -640,6 +661,8 @@ app.post('/api/student/payments/plans/:planId/accept', requireStudent, async (re
     plan.acceptedAt = stamp
     plan.canAccept = false
     task.status = 'PAYMENT_PENDING'
+    task.amountDue = plan.amount
+    task.funding = { model: plan.paymentModel || 'full', state: 'payment_required', amountTotal: plan.amount, amountFunded: 0, amountDue: plan.amount, milestones: plan.milestones || [] }
     task.latestUpdate = { text: 'You accepted the official plan. Funding is the next step.', createdAt: stamp }
     task.nextAction = { label: 'Fund your task', route: `/student/payments?task=${task.id}&section=funding` }
     task.updatedAt = stamp
@@ -657,7 +680,11 @@ app.get('/api/student/payments/tasks/:taskId/funding', requireStudent, async (re
   const task = await getStudentTask(req.student.studentId, req.params.taskId)
   const state = await readTaskStore()
   if (!task) return safeError(res, 404, 'TASK_NOT_FOUND', 'Task not found.')
-  res.json({ taskId: task.id, milestones: state.plans.find((plan) => plan.taskId === task.id)?.milestones || [], providerAvailable: Boolean(stripe) })
+  const plan = state.plans.find((item) => item.taskId === task.id && item.studentId === req.student.studentId && item.status === 'ACCEPTED')
+  const milestones = plan?.milestones || []
+  const next = milestones.find((item) => item.fundingState === 'payment_required')
+  const amountFunded = milestones.length ? milestones.filter((item) => item.fundingState === 'funded').reduce((total, item) => total + item.amount, 0) : Number(task.funding?.amountFunded || 0)
+  res.json({ taskId: task.id, model: plan?.paymentModel || 'full', currency: plan?.currency || 'LKR', amountTotal: plan?.amount || 0, amountFunded, amountDue: next?.amount ?? task.amountDue ?? 0, planConfirmed: plan?.status === 'ACCEPTED', workLocked: task.status === 'PAYMENT_PENDING', milestones, providerAvailable: Boolean(stripe), afterFunding: next?.sequence === 2 ? 'The approved delivery is released after this milestone is paid.' : null })
 })
 
 app.post('/api/student/payments/checkout', requireStudent, async (req, res) => {
@@ -665,11 +692,15 @@ app.post('/api/student/payments/checkout', requireStudent, async (req, res) => {
   const task = await getStudentTask(req.student.studentId, req.body?.taskId)
   const plan = (await readTaskStore()).plans.find((item) => item.id === req.body?.planId && item.studentId === req.student.studentId)
   if (!task || !plan || plan.taskId !== task.id || plan.status !== 'ACCEPTED') return safeError(res, 409, 'PLAN_NOT_ACCEPTED', 'Accept the current official plan before funding this task.')
-  if (task.status !== 'PAYMENT_PENDING') return safeError(res, 409, 'TASK_NOT_PAYABLE', 'This task is not awaiting payment.')
-  const amount = Number(plan.amount)
+  const nextMilestone = plan.paymentModel === 'milestone' ? plan.milestones?.find((item) => item.fundingState === 'payment_required') : null
+  if (plan.paymentModel === 'milestone' && (!nextMilestone || nextMilestone.id !== req.body?.milestoneId)) return safeError(res, 409, 'MILESTONE_NOT_PAYABLE', 'Choose the next unpaid milestone.')
+  if (plan.paymentModel !== 'milestone' && req.body?.milestoneId) return safeError(res, 400, 'MILESTONE_NOT_APPLICABLE', 'This plan requires one full payment.')
+  if (plan.paymentModel !== 'milestone' && task.status !== 'PAYMENT_PENDING') return safeError(res, 409, 'TASK_NOT_PAYABLE', 'This task is not awaiting payment.')
+  if (plan.paymentModel === 'milestone' && !['PAYMENT_PENDING', 'PAID', 'ASSIGNMENT_PENDING', 'REVISION_REQUESTED', 'REVISION_IN_PROGRESS'].includes(task.status)) return safeError(res, 409, 'TASK_NOT_PAYABLE', 'This task cannot receive a milestone payment now.')
+  const amount = Number(nextMilestone?.amount ?? plan.amount)
   if (!Number.isSafeInteger(amount) || amount <= 0) return safeError(res, 400, 'PAYMENT_AMOUNT_REQUIRED', 'There is no payable official plan for this task.')
   const key = String(req.body?.idempotencyKey || crypto.randomUUID())
-  const payments = (await readTaskStore()).payments.filter((payment) => payment.studentId === req.student.studentId && payment.planId === plan.id)
+  const payments = (await readTaskStore()).payments.filter((payment) => payment.studentId === req.student.studentId && payment.planId === plan.id && (payment.milestoneId || null) === (nextMilestone?.id || null))
   const existing = payments.find((payment) => payment.idempotencyKey === key)
   if (payments.some((payment) => payment.status === 'succeeded')) return safeError(res, 409, 'PLAN_ALREADY_FUNDED', 'This plan has already been funded.')
   if (existing && ['failed', 'canceled'].includes(existing.status)) return safeError(res, 409, 'PAYMENT_RETRY_REQUIRED', 'Start a new payment attempt for this plan.')
@@ -699,13 +730,13 @@ app.post('/api/student/payments/checkout', requireStudent, async (req, res) => {
     mode: 'payment',
     client_reference_id: task.id,
     customer_email: req.student.email || undefined,
-    line_items: [{ price_data: { currency: process.env.STRIPE_CURRENCY || 'lkr', unit_amount: Math.round(amount * 100), product_data: { name: `SolveNest plan ${plan.reference || task.id}` } }, quantity: 1 }],
+    line_items: [{ price_data: { currency: process.env.STRIPE_CURRENCY || 'lkr', unit_amount: Math.round(amount * 100), product_data: { name: nextMilestone ? `SolveNest ${nextMilestone.name} · ${plan.reference}` : `SolveNest plan ${plan.reference || task.id}` } }, quantity: 1 }],
     success_url: `${origin.replace(/\/$/, '')}/student/payments?task=${encodeURIComponent(task.id)}&section=history`,
     cancel_url: `${origin.replace(/\/$/, '')}/student/payments?task=${encodeURIComponent(task.id)}&section=funding`,
-    metadata: { taskId: task.id, studentId: req.student.studentId, planId: plan.id },
-    payment_intent_data: { metadata: { taskId: task.id, studentId: req.student.studentId, planId: plan.id } },
-  }, { idempotencyKey: `plan-${plan.id}-attempt-${attempt}` })
-  const payment = { id: crypto.randomUUID(), providerId: session.id, studentId: req.student.studentId, taskId: task.id, planId: plan.id, amount, currency: process.env.STRIPE_CURRENCY || 'lkr', status: 'pending', idempotencyKey: key, createdAt: now() }
+    metadata: { taskId: task.id, studentId: req.student.studentId, planId: plan.id, milestoneId: nextMilestone?.id || '' },
+    payment_intent_data: { metadata: { taskId: task.id, studentId: req.student.studentId, planId: plan.id, milestoneId: nextMilestone?.id || '' } },
+  }, { idempotencyKey: `plan-${plan.id}-${nextMilestone?.id || 'full'}-attempt-${attempt}` })
+  const payment = { id: crypto.randomUUID(), providerId: session.id, studentId: req.student.studentId, taskId: task.id, planId: plan.id, milestoneId: nextMilestone?.id || null, milestoneName: nextMilestone?.name || null, amount, currency: process.env.STRIPE_CURRENCY || 'lkr', status: 'pending', idempotencyKey: key, createdAt: now() }
   let stored
   try {
     stored = await withTaskStore((store) => {
@@ -1318,6 +1349,8 @@ app.post('/api/expert/assignments/:assignmentId/qa/resubmit', requireExpert, exp
 
 app.post('/api/expert/assignments/:assignmentId/delivery', requireExpert, expertRoute(async (req, res) => {
   if (!await limited(`expert-delivery:${req.expert.expertId}`, 12)) return safeError(res, 429, 'RATE_LIMITED', 'Too many delivery attempts. Try again shortly.')
+  const fundedTask = (await readTaskStore()).tasks.find((item) => item.assignmentId === req.params.assignmentId && item.assignedExpertId === req.expert.expertId)
+  if (fundedTask?.funding?.model === 'milestone' && Number(fundedTask.amountDue || 0) > 0) return safeError(res, 409, 'FINAL_MILESTONE_DUE', 'The final milestone must be paid before delivery is released.')
   const result = await deliverAssignment(req.params.assignmentId, { note: req.body?.note })
   if (!result.ok) return expertMutationError(res, result.error)
   const studentDelivery = await syncStudentDelivery(req.expert.expertId, req.params.assignmentId)

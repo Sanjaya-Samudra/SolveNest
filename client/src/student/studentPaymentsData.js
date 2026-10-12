@@ -217,6 +217,8 @@ export function mapOfficialPlan(raw) {
     price: plan.price != null ? Number(plan.price) : plan.total != null ? Number(plan.total) : plan.amount != null ? Number(plan.amount) : null,
     currency: plan.currency || 'LKR',
     paymentStructure: plan.paymentStructure || plan.payment_structure || plan.structure || null,
+    paymentModel: plan.paymentModel || (Array.isArray(plan.milestones) && plan.milestones.length > 1 ? 'milestone' : 'full'),
+    milestones: Array.isArray(plan.milestones) ? plan.milestones.map(mapMilestone) : [],
     revisionAllowance: plan.revisionAllowance ?? plan.revisions ?? plan.revisionAllowanceText ?? null,
     estimate: estimate
       ? {
