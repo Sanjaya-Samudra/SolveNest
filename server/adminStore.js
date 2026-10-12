@@ -52,7 +52,37 @@ export async function getAdminCase(taskId) {
     files: store.files.filter((file) => file.taskId === taskId).map(({ id, originalName, role, mimeType, size, createdAt, state }) => ({ id, name: originalName, role, mimeType, size, createdAt, state })),
     activity: store.activity.filter((item) => item.taskId === taskId).slice(0, 20),
     audit: (store.adminAudit || []).filter((item) => item.taskId === taskId).slice(0, 20),
+    plan: store.plans.find((item) => item.taskId === taskId && !['superseded', 'revised'].includes(String(item.status).toLowerCase())) || null,
   }
+}
+
+export async function issueAdminPlan(taskId, actorId, input) {
+  const scope = String(input?.scope || '').trim().slice(0, 4000)
+  const excluded = String(input?.excluded || '').trim().slice(0, 2000)
+  const price = Number(input?.price)
+  const delivery = String(input?.delivery || '').trim()
+  const revisionAllowance = Number(input?.revisionAllowance)
+  const parsedDelivery = new Date(delivery)
+  if (scope.length < 20 || !Number.isSafeInteger(price) || price <= 0 || price > 100000000 || !delivery || Number.isNaN(parsedDelivery.getTime()) || parsedDelivery.getTime() <= Date.now() || !Number.isSafeInteger(revisionAllowance) || revisionAllowance < 0 || revisionAllowance > 20) return { error: 'PLAN_INVALID' }
+  return withTaskStore((store) => {
+    const task = store.tasks.find((item) => item.id === taskId)
+    if (!task) return { error: 'TASK_NOT_FOUND' }
+    if (reviewOf(store, task).status !== 'APPROVED') return { error: 'REVIEW_NOT_APPROVED' }
+    if (store.plans.some((item) => item.taskId === taskId && item.status === 'ACCEPTED')) return { error: 'PLAN_ALREADY_ACCEPTED' }
+    const stamp = new Date().toISOString()
+    for (const old of store.plans.filter((item) => item.taskId === taskId && item.status === 'READY')) old.status = 'SUPERSEDED'
+    const plan = { id: crypto.randomUUID(), taskId, studentId: task.studentId, taskTitle: task.title, reference: `SN-${task.id.slice(0, 8).toUpperCase()}`, scope, excluded, delivery: parsedDelivery.toISOString(), revisionAllowance, price, amount: price, currency: 'LKR', status: 'READY', issuedAt: stamp, issuedBy: actorId, canAccept: true, milestones: [] }
+    store.plans.unshift(plan)
+    task.status = 'QUOTE_READY'
+    task.amountDue = price
+    task.latestUpdate = { text: 'Your official plan is ready to review.', createdAt: stamp }
+    task.nextAction = { label: 'Review official plan', route: `/student/payments?task=${task.id}&section=plan` }
+    task.updatedAt = stamp
+    store.adminAudit = store.adminAudit || []
+    store.adminAudit.unshift({ id: crypto.randomUUID(), taskId, actorId, action: 'issue_plan', note: `Official plan issued for LKR ${price}.`, at: stamp })
+    store.activity.unshift({ id: crypto.randomUUID(), studentId: task.studentId, taskId, type: 'PlanIssued', text: 'Your official plan is ready to review.', createdAt: stamp })
+    return { ok: true, plan, studentId: task.studentId, title: task.title }
+  })
 }
 
 export async function recordAdminReview(taskId, actorId, action, note) {

@@ -46,7 +46,7 @@ import { publish, subscribe } from './realtime.js'
 import { hasObjectStorage, persistUpload, removeStoredObject, signedObjectUrl } from './storage.js'
 import { hasEmail, sendEmail } from './email.js'
 import { hasSupabase, hasSupabaseAuth, supabaseChangeStaffRole, supabaseFindProfileByEmail, supabaseProfile, supabaseRefresh, supabaseRequestPasswordReset, supabaseTeam, supabaseUpdatePassword, supabaseSignIn, supabaseSignUp, supabaseUser } from './supabase.js'
-import { getAdminCase, getAdminOverview, getAdminQaCase, listAdminQaAssignments, recordAdminReview } from './adminStore.js'
+import { getAdminCase, getAdminOverview, getAdminQaCase, issueAdminPlan, listAdminQaAssignments, recordAdminReview } from './adminStore.js'
 import { getSuperadminActivity, getSuperadminOverview } from './superadminStore.js'
 
 const PORT = Number(process.env.PORT || 4174)
@@ -457,15 +457,35 @@ app.get('/api/student/payments/tasks', requireStudent, async (req, res) => {
 
 app.get('/api/student/payments/tasks/:taskId/plan', requireStudent, async (req, res) => {
   const task = await getStudentTask(req.student.studentId, req.params.taskId)
-  const plan = (await readTaskStore()).plans.find((item) => item.taskId === req.params.taskId && item.studentId === req.student.studentId)
+  const plan = (await readTaskStore()).plans.find((item) => item.taskId === req.params.taskId && item.studentId === req.student.studentId && !['SUPERSEDED', 'REVISED'].includes(item.status))
   if (!task || !plan) return safeError(res, 404, 'PLAN_NOT_FOUND', 'No official plan is available yet.')
   res.json({ plan })
 })
 
 app.post('/api/student/payments/plans/:planId/accept', requireStudent, async (req, res) => {
-  const plan = await withTaskStore((store) => { const item = store.plans.find((candidate) => candidate.id === req.params.planId && candidate.studentId === req.student.studentId); if (item) item.status = 'ACCEPTED'; return item || null })
-  if (!plan) return safeError(res, 404, 'PLAN_NOT_FOUND', 'Plan not found.')
-  res.json({ plan })
+  const result = await withTaskStore((store) => {
+    const plan = store.plans.find((candidate) => candidate.id === req.params.planId && candidate.studentId === req.student.studentId)
+    if (!plan) return { error: 'PLAN_NOT_FOUND' }
+    if (plan.status === 'ACCEPTED') return { plan, replayed: true }
+    if (plan.status !== 'READY') return { error: 'PLAN_NOT_READY' }
+    const task = store.tasks.find((item) => item.id === plan.taskId && item.studentId === req.student.studentId)
+    if (!task) return { error: 'TASK_NOT_FOUND' }
+    const stamp = now()
+    plan.status = 'ACCEPTED'
+    plan.acceptedAt = stamp
+    plan.canAccept = false
+    task.status = 'PAYMENT_PENDING'
+    task.latestUpdate = { text: 'You accepted the official plan. Funding is the next step.', createdAt: stamp }
+    task.nextAction = { label: 'Fund your task', route: `/student/payments?task=${task.id}&section=funding` }
+    task.updatedAt = stamp
+    addActivity(store, { id: crypto.randomUUID(), studentId: task.studentId, taskId: task.id, type: 'PlanAccepted', text: task.latestUpdate.text, createdAt: stamp })
+    return { plan, task }
+  })
+  if (result.error) return safeError(res, result.error === 'PLAN_NOT_FOUND' || result.error === 'TASK_NOT_FOUND' ? 404 : 409, result.error, result.error === 'PLAN_NOT_READY' ? 'This plan is no longer available for acceptance.' : 'Plan not found.')
+  if (!result.replayed) {
+    publish(req.student.studentId, { type: 'PlanAccepted', task: await studentTaskPayload(result.task, req.student.studentId) })
+  }
+  res.json({ plan: result.plan })
 })
 
 app.get('/api/student/payments/tasks/:taskId/funding', requireStudent, async (req, res) => {
@@ -479,8 +499,9 @@ app.post('/api/student/payments/checkout', requireStudent, async (req, res) => {
   if (!stripe) return safeError(res, 503, 'PROVIDER_UNAVAILABLE', 'Payments are not configured yet.')
   const task = await getStudentTask(req.student.studentId, req.body?.taskId)
   const plan = (await readTaskStore()).plans.find((item) => item.id === req.body?.planId && item.studentId === req.student.studentId)
-  const amount = Number(plan?.amount || task?.amountDue || 0)
-  if (!task || !amount) return safeError(res, 400, 'PAYMENT_AMOUNT_REQUIRED', 'There is no payable official plan for this task.')
+  if (!task || !plan || plan.taskId !== task.id || plan.status !== 'ACCEPTED') return safeError(res, 409, 'PLAN_NOT_ACCEPTED', 'Accept the current official plan before funding this task.')
+  const amount = Number(plan.amount)
+  if (!Number.isSafeInteger(amount) || amount <= 0) return safeError(res, 400, 'PAYMENT_AMOUNT_REQUIRED', 'There is no payable official plan for this task.')
   const key = String(req.body?.idempotencyKey || crypto.randomUUID())
   const existing = (await readTaskStore()).payments.find((payment) => payment.studentId === req.student.studentId && payment.idempotencyKey === key)
   if (existing) return res.json({ paymentId: existing.id, status: existing.status, provider: 'stripe' })
@@ -1442,6 +1463,15 @@ app.post('/api/admin/tasks/:taskId/review', requireStaff, staffRoute(async (req,
   const result = await recordAdminReview(req.params.taskId, req.staff.id, req.body?.action, req.body?.note)
   if (result.error) return safeError(res, result.error === 'TASK_NOT_FOUND' ? 404 : result.error === 'NOTE_REQUIRED' || result.error === 'INVALID_ACTION' ? 400 : 409, result.error, result.error === 'NOTE_REQUIRED' ? 'Add an internal note of at least 10 characters.' : 'This review cannot be changed from its current state.')
   res.json(result)
+}))
+
+app.post('/api/admin/tasks/:taskId/plan', requireStaff, staffRoute(async (req, res) => {
+  if (!limited(`admin-plan:${req.staff.id}`, 20)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before issuing another plan.')
+  const result = await issueAdminPlan(req.params.taskId, req.staff.id, req.body)
+  if (result.error) return safeError(res, result.error === 'TASK_NOT_FOUND' ? 404 : result.error === 'PLAN_INVALID' ? 400 : 409, result.error, result.error === 'PLAN_INVALID' ? 'Enter a scope of at least 20 characters, a positive whole-number price, a future delivery date, and a valid revision allowance.' : 'This task is not ready for a new plan.')
+  await addNotification({ id: crypto.randomUUID(), studentId: result.studentId, title: 'Official plan ready', body: 'Review the scope, delivery date, and price before accepting.', task: { title: result.title, ref: req.params.taskId }, route: `/student/payments?task=${req.params.taskId}&section=plan`, isRead: false, requiresAction: true, createdAt: result.plan.issuedAt })
+  publish(result.studentId, { type: 'PlanIssued', taskId: req.params.taskId })
+  res.status(201).json({ plan: result.plan })
 }))
 
 app.get('/api/admin/support', requireStaff, staffRoute(async (_req, res) => res.json({ tickets: await listSupportTickets() })))

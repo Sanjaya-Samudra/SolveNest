@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, ArrowRight, Bell, CheckCircle2, ChevronDown, ClipboardList, Clock3, Download, FileText, LayoutDashboard, LifeBuoy, LogOut, Menu, Search, ShieldCheck, X } from 'lucide-react'
-import { getCase, getOverview, getQaCase, getQaQueue, getStaff, getSupportCase, getSupportQueue, loginStaff, logoutStaff, recordQaOutcome, recordReview, updateSupportStatus } from '../../admin/adminApi.js'
+import { getCase, getOverview, getQaCase, getQaQueue, getStaff, getSupportCase, getSupportQueue, issuePlan, loginStaff, logoutStaff, recordQaOutcome, recordReview, updateSupportStatus } from '../../admin/adminApi.js'
 import './admin-workspace.css'
 
 const pathFor = (id) => id ? `/admin/tasks/${encodeURIComponent(id)}` : '/admin'
@@ -93,7 +93,7 @@ function Queue({ overview, filter, setFilter, onOpen }) {
       <div className="adm-filters">{filters.map(([key, label]) => <button key={key} className={filter === key ? 'is-active' : ''} onClick={() => setFilter(key)}>{label}</button>)}</div>
       {list.length ? <div className="adm-table-wrap"><table><thead><tr><th>Task</th><th>Student</th><th>Submitted</th><th>Deadline</th><th>Review</th><th><span className="adm-sr">Open</span></th></tr></thead><tbody>{list.map((task) => <tr key={task.id}><td><button className="adm-task-link" onClick={() => onOpen(task.id)}><strong>{task.title}</strong><small>{task.type} · {shortId(task.id)}</small></button></td><td>{shortId(task.studentId)}</td><td>{fmtDate(task.createdAt)}</td><td>{fmtDate(task.deadline)}</td><td><ReviewPill status={task.reviewStatus} /></td><td><button className="adm-icon" onClick={() => onOpen(task.id)} aria-label={`Open ${task.title}`}><ArrowRight size={17} /></button></td></tr>)}</tbody></table></div> : <div className="adm-empty"><ClipboardList size={28} /><h3>No tasks in this view</h3><p>{search ? 'Try another search term.' : 'Tasks will appear here when they reach this review stage.'}</p></div>}
     </section>
-    <div className="adm-footnote"><ShieldCheck size={17} /><span>Review decisions are internal. Official quotes, Expert assignment, and student updates follow their own workflows.</span></div>
+    <div className="adm-footnote"><ShieldCheck size={17} /><span>Approve feasibility, then issue an official plan from the task case.</span></div>
   </>
 }
 
@@ -101,6 +101,9 @@ function CaseDetail({ detail, reload, onBack }) {
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(null)
   const [error, setError] = useState('')
+  const [plan, setPlan] = useState({ scope: '', excluded: '', delivery: '', price: '', revisionAllowance: '1' })
+  const [planBusy, setPlanBusy] = useState(false)
+  const [planError, setPlanError] = useState('')
   const task = detail.task
   const review = detail.review || {}
   const canDecide = ['QUEUED', 'IN_REVIEW'].includes(review.status || 'QUEUED')
@@ -115,6 +118,14 @@ function CaseDetail({ detail, reload, onBack }) {
     catch (issue) { setError(issue.message) }
     finally { setBusy(null) }
   }
+  const submitPlan = async (event) => {
+    event.preventDefault()
+    setPlanBusy(true)
+    setPlanError('')
+    try { await issuePlan(task.id, { ...plan, price: Number(plan.price), revisionAllowance: Number(plan.revisionAllowance) }); await reload() }
+    catch (issue) { setPlanError(issue.message) }
+    finally { setPlanBusy(false) }
+  }
   return <>
     <button className="adm-back" onClick={onBack}><ArrowLeft size={16} /> Back to queue</button>
     <header className="adm-case-head"><div><p className="adm-kicker">TASK CASE / {shortId(task.id)}</p><h1>{task.title}</h1><p>{task.type}{task.subject ? ` · ${task.subject}` : ''}</p></div><ReviewPill status={review.status} /></header>
@@ -122,7 +133,7 @@ function CaseDetail({ detail, reload, onBack }) {
       <section className="adm-panel"><div className="adm-panel-head"><div><p className="adm-kicker">INTAKE</p><h2>What was submitted</h2></div><FileText size={20} /></div><dl className="adm-facts"><div><dt>Student ID</dt><dd>{task.studentId}</dd></div><div><dt>Submitted</dt><dd>{fmtTime(task.createdAt)}</dd></div><div><dt>Deadline</dt><dd>{fmtDate(task.deadline)}</dd></div><div><dt>Task status</dt><dd>{task.status}</dd></div></dl>{detail.analysis?.missingInformation?.length > 0 && <div className="adm-callout"><strong>Information to clarify</strong><p>{detail.analysis.missingInformation.join(', ')}</p></div>}{detail.analysis?.deliverables?.length > 0 && <div className="adm-list-block"><h3>Expected deliverables</h3><ul>{detail.analysis.deliverables.map((item, index) => <li key={index}>{typeof item === 'string' ? item : item.title || item.name || 'Deliverable'}</li>)}</ul></div>}</section>
       <section className="adm-panel"><div className="adm-panel-head"><div><p className="adm-kicker">FILES</p><h2>Source materials</h2></div><span>{detail.files.length}</span></div>{detail.files.length ? <ul className="adm-files">{detail.files.map((file) => <li key={file.id}><FileText size={18} /><span><strong>{file.name}</strong><small>{file.role} · {Math.ceil((file.size || 0) / 1024)} KB</small></span><button className="adm-icon" onClick={() => window.open(`/api/admin/tasks/${encodeURIComponent(task.id)}/files/${encodeURIComponent(file.id)}/download`, '_blank', 'noopener,noreferrer')} aria-label={`Open ${file.name}`}><Download size={17} /></button></li>)}</ul> : <p className="adm-muted">No files are attached to this task.</p>}</section>
       <section className="adm-panel"><div className="adm-panel-head"><div><p className="adm-kicker">CASE HISTORY</p><h2>Review activity</h2></div></div>{detail.audit.length ? <ol className="adm-timeline">{detail.audit.map((item) => <li key={item.id}><span className="adm-timeline-dot" /><div><strong>{item.action.replace('_', ' ')}</strong><small>{fmtTime(item.at)} · {item.actorId}</small>{item.note && <p>{item.note}</p>}</div></li>)}</ol> : <p className="adm-muted">No Admin decisions have been recorded yet.</p>}</section>
-    </div><aside className="adm-case-side"><section className="adm-panel adm-decision"><p className="adm-kicker">ADMIN DECISION</p><h2>Review this request</h2><p>Record an internal feasibility decision. This does not send a quote or change the Student’s task status.</p>{canDecide ? <><label>Internal note<textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="Record your reasoning or the information needed…" rows={5} maxLength={2000} /></label>{error && <div className="adm-alert" role="alert">{error}</div>}<div className="adm-action-stack">{review.status === 'QUEUED' && <button className="adm-secondary" disabled={Boolean(busy)} onClick={() => action('start')}>Start review</button>}<button className="adm-primary" disabled={Boolean(busy)} onClick={() => action('approve')}>Approve feasibility <ArrowRight size={15} /></button><button className="adm-secondary" disabled={Boolean(busy)} onClick={() => action('request_info')}>Needs information</button><button className="adm-danger" disabled={Boolean(busy)} onClick={() => action('decline')}>Decline request</button></div></> : <><ReviewPill status={review.status} />{review.internalNotes && <p className="adm-decision-note">{review.internalNotes}</p>}</>}</section></aside></div>
+    </div><aside className="adm-case-side"><section className="adm-panel adm-decision"><p className="adm-kicker">ADMIN DECISION</p><h2>Review this request</h2><p>Record the feasibility decision before issuing an official plan.</p>{canDecide ? <><label>Internal note<textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="Record your reasoning or the information needed…" rows={5} maxLength={2000} /></label>{error && <div className="adm-alert" role="alert">{error}</div>}<div className="adm-action-stack">{review.status === 'QUEUED' && <button className="adm-secondary" disabled={Boolean(busy)} onClick={() => action('start')}>Start review</button>}<button className="adm-primary" disabled={Boolean(busy)} onClick={() => action('approve')}>Approve feasibility <ArrowRight size={15} /></button><button className="adm-secondary" disabled={Boolean(busy)} onClick={() => action('request_info')}>Needs information</button><button className="adm-danger" disabled={Boolean(busy)} onClick={() => action('decline')}>Decline request</button></div></> : <><ReviewPill status={review.status} />{review.internalNotes && <p className="adm-decision-note">{review.internalNotes}</p>}</>}</section>{review.status === 'APPROVED' && <form className="adm-panel adm-decision" onSubmit={submitPlan}><p className="adm-kicker">OFFICIAL PLAN</p><h2>{detail.plan ? 'Plan issued' : 'Issue a plan'}</h2>{detail.plan && <p>Current plan: {detail.plan.status} · LKR {Number(detail.plan.price).toLocaleString()}</p>}{detail.plan?.status !== 'ACCEPTED' && <><label>Scope<textarea required minLength={20} maxLength={4000} rows={5} value={plan.scope} onChange={(event) => setPlan({ ...plan, scope: event.target.value })} placeholder="Describe the work and deliverables…" /></label><label>Not included<textarea maxLength={2000} rows={3} value={plan.excluded} onChange={(event) => setPlan({ ...plan, excluded: event.target.value })} placeholder="Optional exclusions…" /></label><label>Delivery date<input type="date" required value={plan.delivery} onChange={(event) => setPlan({ ...plan, delivery: event.target.value })} /></label><label>Price in LKR<input type="number" min="1" step="1" required value={plan.price} onChange={(event) => setPlan({ ...plan, price: event.target.value })} /></label><label>Included revisions<input type="number" min="0" max="20" step="1" required value={plan.revisionAllowance} onChange={(event) => setPlan({ ...plan, revisionAllowance: event.target.value })} /></label>{planError && <div className="adm-alert" role="alert">{planError}</div>}<button className="adm-primary" disabled={planBusy}>{planBusy ? 'Issuing…' : detail.plan ? 'Issue revised plan' : 'Issue official plan'} <ArrowRight size={15} /></button></>}</form>}</aside></div>
   </>
 }
 
