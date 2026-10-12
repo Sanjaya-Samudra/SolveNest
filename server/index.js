@@ -64,6 +64,23 @@ const requestWindows = new Map()
 const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null
 fs.mkdirSync(uploadDir, { recursive: true })
 const allowedExtensions = new Set(['pdf', 'docx', 'pptx', 'jpg', 'jpeg', 'png'])
+function validUploadContent(file) {
+  if (!file) return false
+  const extension = path.extname(file.originalname).slice(1).toLowerCase()
+  if (!allowedExtensions.has(extension)) return false
+  const header = file.buffer ? file.buffer.subarray(0, 8) : (() => { const buffer = Buffer.alloc(8); const handle = fs.openSync(file.path, 'r'); try { fs.readSync(handle, buffer, 0, 8, 0) } finally { fs.closeSync(handle) }; return buffer })()
+  const starts = (bytes) => Buffer.from(bytes).every((value, index) => header[index] === value)
+  if (extension === 'pdf') return starts([0x25, 0x50, 0x44, 0x46, 0x2d])
+  if (extension === 'jpg' || extension === 'jpeg') return starts([0xff, 0xd8, 0xff])
+  if (extension === 'png') return starts([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+  return starts([0x50, 0x4b, 0x03, 0x04]) || starts([0x50, 0x4b, 0x05, 0x06])
+}
+function rejectInvalidUpload(res, file) {
+  if (validUploadContent(file)) return false
+  if (file?.path) try { fs.unlinkSync(file.path) } catch {}
+  safeError(res, 400, 'FILE_CONTENT_INVALID', 'The file content does not match a supported PDF, Office document, or image.')
+  return true
+}
 const upload = multer({
   storage: multer.diskStorage({
     destination: uploadDir,
@@ -124,8 +141,10 @@ function safeError(res, status, code, message, fieldErrors = {}) {
 }
 
 function limited(key, max = 10) {
-  const current = requestWindows.get(key) || { count: 0, startedAt: Date.now() }
-  if (Date.now() - current.startedAt >= 60_000) { current.count = 0; current.startedAt = Date.now() }
+  const stamp = Date.now()
+  if (requestWindows.size > 5000) for (const [name, window] of requestWindows) if (stamp - window.startedAt >= 60_000) requestWindows.delete(name)
+  const current = requestWindows.get(key) || { count: 0, startedAt: stamp }
+  if (stamp - current.startedAt >= 60_000) { current.count = 0; current.startedAt = stamp }
   current.count += 1
   requestWindows.set(key, current)
   return current.count <= max
@@ -299,6 +318,7 @@ app.post('/api/student/task-creation/files', requireStudent, (req, res, next) =>
   })
 }, async (req, res) => {
   if (!req.file) return safeError(res, 400, 'FILE_REQUIRED', 'Choose a file to upload.')
+  if (rejectInvalidUpload(res, req.file)) return
   const role = String(req.body.kind || '').toLowerCase() === 'brief' ? 'BRIEF' : 'SUPPORTING'
   const file = {
     id: crypto.randomUUID(),
@@ -375,6 +395,7 @@ app.post('/api/student/dossiers/:taskId/files', requireStudent, async (req, res,
     next()
   })
 }, async (req, res) => {
+  if (rejectInvalidUpload(res, req.file)) return
   const file = { id: crypto.randomUUID(), studentId: req.student.studentId, taskId: req.params.taskId, role: 'SUPPORTING', originalName: path.basename(req.file.originalname), storageKey: req.file.filename, mimeType: req.file.mimetype, size: req.file.size, state: 'READY', createdAt: now() }
   try { await persistUpload(req.file, file.storageKey) } catch { return safeError(res, 503, 'STORAGE_UNAVAILABLE', 'The file could not be stored securely.') }
   await withTaskStore((store) => store.files.push(file))
@@ -391,6 +412,7 @@ app.put('/api/student/files/:fileId/replace', requireStudent, async (req, res, n
     next()
   })
 }, async (req, res) => {
+  if (rejectInvalidUpload(res, req.file)) return
   try { await persistUpload(req.file, req.file.filename) } catch { return safeError(res, 503, 'STORAGE_UNAVAILABLE', 'The replacement file could not be stored securely.') }
   const replacement = await withTaskStore((store) => {
     const file = store.files.find((item) => item.id === req.params.fileId && item.studentId === req.student.studentId)
@@ -568,6 +590,7 @@ app.patch('/api/student/conversations/:conversationId/read', requireStudent, asy
 app.post('/api/student/conversations/:conversationId/files', requireStudent, (req, res, next) => {
   upload.single('file')(req, res, async (error) => {
     if (error || !req.file) return safeError(res, 400, 'FILE_UPLOAD_REJECTED', 'This file could not be uploaded.')
+    if (rejectInvalidUpload(res, req.file)) return
     const state = await readTaskStore()
     const conversation = state.conversations.find((item) => item.id === req.params.conversationId && item.studentId === req.student.studentId)
     if (!conversation) return safeError(res, 404, 'CONVERSATION_NOT_FOUND', 'Conversation not found.')
@@ -1170,6 +1193,7 @@ app.post('/api/expert/assignments/:assignmentId/files', requireExpert, expertRou
     return expertMutationError(res, code)
   }
   if (!req.file) return expertMutationError(res, 'FILE_UPLOAD_REJECTED')
+  if (rejectInvalidUpload(res, req.file)) return
   try {
     await persistUpload(req.file, req.file.filename)
   } catch {
@@ -1358,6 +1382,7 @@ app.get('/api/health', (req, res) => {
 })
 
 app.post('/api/auth/register', async (req, res) => {
+  if (!limited(`student-register:${req.ip}`, 5)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before creating another account.')
   const { name, email, password } = req.body || {}
   if (String(name || '').trim().length < 2) return safeError(res, 400, 'NAME_REQUIRED', 'Enter your full name.', { name: 'Enter your full name.' })
   if (!/^\S+@\S+\.\S+$/.test(String(email || ''))) return safeError(res, 400, 'EMAIL_INVALID', 'Enter a valid email address.', { email: 'Enter a valid email address.' })
@@ -1377,6 +1402,7 @@ app.post('/api/auth/register', async (req, res) => {
 })
 
 app.post('/api/auth/login', async (req, res) => {
+  if (!limited(`student-login:${req.ip}`, 10)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before trying to sign in again.')
   if (hasSupabaseAuth()) {
     const { data, error } = await supabaseSignIn({ email: req.body?.email, password: req.body?.password })
     if (error || !data.session) return safeError(res, 401, 'INVALID_CREDENTIALS', 'Those details did not match an account.')
@@ -1422,6 +1448,7 @@ app.post('/api/auth/password-reset/complete', async (req, res) => {
 
 const contactUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 1 }, fileFilter: (_req, file, callback) => callback(null, /\.(pdf|png|jpe?g|docx)$/i.test(file.originalname)) })
 app.post('/api/contact', (req, res, next) => contactUpload.single('attachment')(req, res, (error) => error ? safeError(res, 400, 'ATTACHMENT_INVALID', 'Choose a PDF, PNG, JPG or DOCX file smaller than 5 MB.') : next()), async (req, res) => {
+  if (req.file && rejectInvalidUpload(res, req.file)) return
   const { intent, name, email, message, ...details } = req.body || {}
   if (!['general', 'task', 'payment', 'technical', 'business'].includes(intent) || !String(name || '').trim() || !/^\S+@\S+\.\S+$/.test(String(email || '')) || !String(message || '').trim()) return safeError(res, 400, 'CONTACT_INVALID', 'Complete the required contact fields.')
   if (!limited(`contact:${req.ip}`, 5)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before sending another message.')
@@ -1904,6 +1931,18 @@ app.use((error, _req, res, _next) => {
   console.error('[api]', error.message)
   safeError(res, 500, 'INTERNAL_ERROR', 'The request could not be completed.')
 })
+
+if (process.env.NODE_ENV === 'production') {
+  const missing = []
+  if (!hasSupabase()) missing.push('Supabase Auth and service role')
+  if (!hasObjectStorage()) missing.push('private object storage')
+  if (String(process.env.FILE_SIGNING_SECRET || '').length < 32) missing.push('FILE_SIGNING_SECRET (32+ characters)')
+  if (!process.env.SOLVY_API_URL || !process.env.SOLVY_API_KEY) missing.push('Solvy endpoint and key')
+  if (!stripe || !process.env.STRIPE_WEBHOOK_SECRET) missing.push('Stripe key and webhook secret')
+  if (!hasEmail() || !process.env.CONTACT_EMAIL) missing.push('SMTP and contact email')
+  if (!/^https:\/\//i.test(process.env.PUBLIC_APP_URL || '')) missing.push('HTTPS PUBLIC_APP_URL')
+  if (missing.length) throw new Error(`Production configuration incomplete: ${missing.join(', ')}`)
+}
 
 const server = app.listen(PORT, () => {
   console.log(`SolveNest API listening on http://127.0.0.1:${server.address().port}`)

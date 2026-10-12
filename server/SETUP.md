@@ -7,7 +7,6 @@ From the repository root:
 ```powershell
 Set-Location server
 npm install
-npm test
 npm start
 ```
 
@@ -22,8 +21,8 @@ Required in production:
 - `NODE_ENV=production`
 - `DEV_DEMO_SESSION=0`
 - `FILE_SIGNING_SECRET`: long random secret
-- `DATABASE_URL`: PostgreSQL connection string
-- `S3_BUCKET`, `S3_REGION`, and S3 credentials in the process environment
+- `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY`
+- a private Supabase Storage bucket, or configured S3-compatible private storage
 - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`
 - `CONTACT_EMAIL` for the public Connect form
 - `PUBLIC_APP_URL` for password-recovery links; add `${PUBLIC_APP_URL}/reset-password` to Supabase Auth redirect URLs
@@ -38,7 +37,7 @@ Required in production:
 4. Put the server-only service role key in `SUPABASE_SERVICE_ROLE_KEY`. Never add this key to `client/.env` or browser code.
 5. Set `SUPABASE_STORAGE_BUCKET=student-files`.
 6. Create a private Storage bucket with that name.
-7. In the Supabase SQL Editor, run `server/migrations/001_initial.sql`, then `server/migrations/002_staff_governance.sql`.
+7. In the Supabase SQL Editor, run `server/migrations/001_initial.sql`, `002_staff_governance.sql`, `003_student_accounts.sql`, and `004_app_state_revision.sql` in order.
 8. In **Authentication > Providers**, enable Email/password. Decide whether email confirmation is required; if enabled, configure SMTP in Supabase Auth and complete confirmation before the first Student session.
 
 The migration creates a `profiles` table linked to `auth.users`, a signup trigger, Row Level Security policies, task/file/analysis/review tables, idempotency records, and guest-transfer records. The service role is used only by the trusted server for Storage and server-side operations.
@@ -81,7 +80,7 @@ The public Connect form sends to `CONTACT_EMAIL` only when SMTP is configured. P
 
 ## 7. Solvy
 
-Expose a server-to-server Solvy endpoint that accepts the authorized file metadata payload and returns JSON analysis. Set `SOLVY_API_URL` and `SOLVY_API_KEY`. The browser never receives the key. Without these variables, development uses the explicitly marked `local-intake` fallback.
+Expose a server-to-server Solvy endpoint that accepts authorized file metadata and short-lived signed file URLs, then returns JSON analysis. Set `SOLVY_API_URL` and `SOLVY_API_KEY`. The browser never receives the key. Without these variables, development uses the explicitly marked `local-intake` fallback; production refuses to start.
 
 ## 8. Payments
 
