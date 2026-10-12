@@ -38,7 +38,7 @@ Required in production:
 4. Put the server-only service role key in `SUPABASE_SERVICE_ROLE_KEY`. Never add this key to `client/.env` or browser code.
 5. Set `SUPABASE_STORAGE_BUCKET=student-files`.
 6. Create a private Storage bucket with that name.
-7. In the Supabase SQL Editor, run `server/migrations/001_initial.sql`, `002_staff_governance.sql`, `003_student_accounts.sql`, `004_app_state_revision.sql`, `005_private_app_sessions.sql`, and `006_shared_rate_limits.sql` in order.
+7. In the Supabase SQL Editor, run `server/migrations/001_initial.sql` through `007_expert_workspaces.sql` in numeric order.
 8. In **Authentication > Providers**, enable Email/password. Decide whether email confirmation is required; if enabled, configure SMTP in Supabase Auth and complete confirmation before the first Student session.
 
 The migration creates a `profiles` table linked to `auth.users`, a signup trigger, Row Level Security policies, task/file/analysis/review tables, idempotency records, and guest-transfer records. The service role is used only by the trusted server for Storage and server-side operations.
@@ -49,7 +49,7 @@ Expert and staff sessions are stored in the private `app_sessions` table, so API
 
 Production rate limits use the `consume_rate_limit` database function so all API instances share the same counters. If the database is unavailable, limited actions are denied. Local development keeps the lightweight in-memory limiter.
 
-Each real Expert now has an account-scoped workspace. An Expert account can sign in before receiving its first assignment. The Admin can assign a Student task after the Student accepts the official plan and Stripe confirms payment. The assignment includes the Student's source files and appears only in the chosen Expert's workspace. Staff QA searches all Expert workspaces. Existing single-Expert data is read for its matching account and copied into that account's workspace on its next update. Local demo data stays separate from a real Expert's legacy workspace. Production workspaces are keyed by Expert profile ID in `app_state` until domain records are migrated to dedicated PostgreSQL tables.
+Each real Expert now has an account-scoped workspace. An Expert account can sign in before receiving its first assignment. The Admin can assign a Student task after the Student accepts the official plan and Stripe confirms payment. The assignment includes the Student's source files and appears only in the chosen Expert's workspace. Staff QA searches all Expert workspaces. Migration 007 copies existing real Expert workspaces out of `app_state` into private, revision-checked `expert_workspaces` rows. Local demo data stays separate.
 
 Admin sign-in uses `/admin` and requires an existing Supabase Auth user whose `profiles.role` is `Admin` or `Superadmin`. Set the role for an approved staff account in the Supabase dashboard or SQL Editor. For local preview only, set `ADMIN_DEMO_SESSION=1` in `server/.env` and restart the server. The preview is available only from the same computer while `NODE_ENV` is not `production`.
 

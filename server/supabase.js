@@ -41,6 +41,42 @@ export async function supabaseConsumeRateLimit(key, max) {
   if (error) throw error
   return data === true
 }
+export async function supabaseReadExpertWorkspace(expertId) {
+  if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED')
+  const { data, error } = await adminClient.from('expert_workspaces').select('workspace, revision').eq('expert_id', expertId).maybeSingle()
+  if (error) throw error
+  if (!data) return null
+  Object.defineProperty(data.workspace, '__revision', { value: Number(data.revision), configurable: true })
+  return data.workspace
+}
+export async function supabaseWriteExpertWorkspace(expertId, workspace) {
+  if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED')
+  const revision = workspace.__revision ?? null
+  const updated_at = new Date().toISOString()
+  if (revision === null) {
+    const { error } = await adminClient.from('expert_workspaces').insert({ expert_id: expertId, workspace, revision: 1, updated_at })
+    if (error) throw error.code === '23505' ? new Error('EXPERT_WORKSPACE_CONFLICT') : error
+    Object.defineProperty(workspace, '__revision', { value: 1, configurable: true })
+    return workspace
+  }
+  if (!Number.isSafeInteger(revision)) throw new Error('EXPERT_WORKSPACE_REVISION_REQUIRED')
+  const { data, error } = await adminClient.from('expert_workspaces').update({ workspace, revision: revision + 1, updated_at }).eq('expert_id', expertId).eq('revision', revision).select('revision').maybeSingle()
+  if (error) throw error
+  if (!data) throw new Error('EXPERT_WORKSPACE_CONFLICT')
+  Object.defineProperty(workspace, '__revision', { value: Number(data.revision), configurable: true })
+  return workspace
+}
+export async function supabaseListExpertWorkspaces() {
+  if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED')
+  const rows = []
+  for (let offset = 0; ; offset += 500) {
+    const { data, error } = await adminClient.from('expert_workspaces').select('expert_id, workspace').order('expert_id').range(offset, offset + 499)
+    if (error) throw error
+    rows.push(...(data || []))
+    if (!data || data.length < 500) break
+  }
+  return rows
+}
 export async function supabaseProfile(userId) { if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED'); const { data, error } = await adminClient.from('profiles').select('id, role, name, email').eq('id', userId).maybeSingle(); if (error) throw error; return data }
 export async function supabaseExpertProfiles() { if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED'); const { data, error } = await adminClient.from('profiles').select('id, name, email, role').eq('role', 'Expert').order('name', { ascending: true }); if (error) throw error; return data || [] }
 export async function supabaseTeam({ page = 1, search = '' } = {}) {

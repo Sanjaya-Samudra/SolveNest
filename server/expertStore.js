@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { hasSupabase, supabaseReadState, supabaseWriteState } from './supabase.js'
+import { hasSupabase, supabaseListExpertWorkspaces, supabaseReadExpertWorkspace, supabaseReadState, supabaseWriteExpertWorkspace, supabaseWriteState } from './supabase.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const dataDir = path.join(__dirname, 'data')
@@ -66,6 +66,13 @@ function normalizeStore(value) {
 export async function readExpertStore() {
   const identity = currentExpert()
   if (hasSupabase()) {
+    if (identity.id !== 'demo-expert') {
+      const saved = await supabaseReadExpertWorkspace(identity.id)
+      const store = normalizeStore(saved)
+      if (saved) Object.defineProperty(store, '__revision', { value: saved.__revision, configurable: true })
+      store.expert = { ...store.expert, id: identity.id, name: identity.name || store.expert.name, title: saved?.expert?.title || 'Expert' }
+      return store
+    }
     const state = await supabaseReadState()
     const saved = identity.id === 'demo-expert' ? state.expertDemo || (state.expert?.expert?.id === 'demo-expert' ? state.expert : null) : state.expertWorkspaces?.[identity.id] || (state.expert?.expert?.id === identity.id ? state.expert : null)
     const store = normalizeStore(saved)
@@ -93,6 +100,7 @@ export async function writeExpertStore(store) {
   const identity = currentExpert()
   store.expert = { ...store.expert, id: identity.id, name: identity.name || store.expert.name }
   if (hasSupabase()) {
+    if (identity.id !== 'demo-expert') return supabaseWriteExpertWorkspace(identity.id, store)
     const state = await supabaseReadState()
     if (identity.id === 'demo-expert') {
       if (state.expert?.expert?.id && state.expert.expert.id !== 'demo-expert') state.expertDemo = store
@@ -115,11 +123,7 @@ export async function writeExpertStore(store) {
 
 export async function listExpertStores() {
   if (hasSupabase()) {
-    const state = await supabaseReadState()
-    const stores = Object.entries(state.expertWorkspaces || {}).map(([id, value]) => ({ id, store: normalizeStore(value) }))
-    const legacyId = state.expert?.expert?.id
-    if (legacyId && legacyId !== 'demo-expert' && !stores.some((item) => item.id === legacyId)) stores.push({ id: legacyId, store: normalizeStore(state.expert) })
-    return stores
+    return (await supabaseListExpertWorkspaces()).map((row) => ({ id: row.expert_id, store: normalizeStore(row.workspace) }))
   }
   ensureStore()
   const files = fs.readdirSync(dataDir).filter((name) => /^expert-[0-9a-f-]{36}\.json$/i.test(name))
