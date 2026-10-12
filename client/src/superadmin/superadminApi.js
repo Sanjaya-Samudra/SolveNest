@@ -16,7 +16,7 @@ async function request(path, options = {}) {
 }
 
 export const getSuperOverview = () => request('/overview')
-export const getTeam = () => request('/team')
+export const getTeam = ({ page = 1, search = '' } = {}) => request(`/team?page=${page}&search=${encodeURIComponent(search)}`)
 export const lookupTeamEmail = (email) => request(`/team/lookup?email=${encodeURIComponent(email)}`)
 export const getActivity = () => request('/activity')
 export const changeRole = (id, expectedRole, role, note) => request(`/team/${encodeURIComponent(id)}/role`, { method: 'POST', body: { expectedRole, role, note } })

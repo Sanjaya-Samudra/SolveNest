@@ -36,7 +36,7 @@ export async function supabaseDeleteAppSession(token) {
 }
 export async function supabaseProfile(userId) { if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED'); const { data, error } = await adminClient.from('profiles').select('id, role, name, email').eq('id', userId).maybeSingle(); if (error) throw error; return data }
 export async function supabaseExpertProfiles() { if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED'); const { data, error } = await adminClient.from('profiles').select('id, name, email, role').eq('role', 'Expert').order('name', { ascending: true }); if (error) throw error; return data || [] }
-export async function supabaseTeam() {
+export async function supabaseTeam({ page = 1, search = '' } = {}) {
   if (!adminClient) return null
   const roles = ['Student', 'Expert', 'Admin', 'Superadmin']
   const counts = await Promise.all(roles.map(async (role) => {
@@ -44,9 +44,16 @@ export async function supabaseTeam() {
     if (error) throw error
     return [role, count || 0]
   }))
-  const { data, error } = await adminClient.from('profiles').select('id, name, email, role, created_at, updated_at').in('role', ['Expert', 'Admin', 'Superadmin']).order('created_at', { ascending: false }).limit(200)
+  const pageSize = 25
+  const cleanSearch = String(search).trim().slice(0, 80).replace(/[^\p{L}\p{N} @._-]/gu, '')
+  let query = adminClient.from('profiles').select('id, name, email, role, created_at, updated_at', { count: 'exact' }).in('role', ['Expert', 'Admin', 'Superadmin'])
+  if (cleanSearch) {
+    const role = ['Expert', 'Admin', 'Superadmin'].find((item) => item.toLowerCase() === cleanSearch.toLowerCase())
+    query = role ? query.eq('role', role) : query.or(`name.ilike.%${cleanSearch}%,email.ilike.%${cleanSearch}%`)
+  }
+  const { data, error, count } = await query.order('created_at', { ascending: false }).order('id', { ascending: false }).range((page - 1) * pageSize, page * pageSize - 1)
   if (error) throw error
-  return { counts: Object.fromEntries(counts), people: data || [], capped: (counts.find(([role]) => role === 'Expert')?.[1] || 0) + (counts.find(([role]) => role === 'Admin')?.[1] || 0) + (counts.find(([role]) => role === 'Superadmin')?.[1] || 0) > (data || []).length }
+  return { counts: Object.fromEntries(counts), people: data || [], page, pageSize, total: count || 0, pages: Math.max(1, Math.ceil((count || 0) / pageSize)) }
 }
 export async function supabaseFindProfileByEmail(email) {
   if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED')

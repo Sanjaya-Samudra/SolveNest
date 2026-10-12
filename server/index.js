@@ -1903,7 +1903,9 @@ app.get('/api/superadmin/overview', requireStaff, requireSuperadmin, staffRoute(
   res.json(await getSuperadminOverview(services))
 }))
 app.get('/api/superadmin/team', requireStaff, requireSuperadmin, staffRoute(async (req, res) => {
-  res.json({ directory: req.staff.demo ? null : await supabaseTeam() })
+  const page = Number(req.query.page || 1)
+  if (!Number.isSafeInteger(page) || page < 1 || page > 10000) return safeError(res, 400, 'INVALID_PAGE', 'Choose a valid page.')
+  res.json({ directory: req.staff.demo ? null : await supabaseTeam({ page, search: req.query.search }) })
 }))
 app.get('/api/superadmin/team/lookup', requireStaff, requireSuperadmin, staffRoute(async (req, res) => {
   if (req.staff.demo || !hasSupabase()) return safeError(res, 503, 'TEAM_LOOKUP_UNAVAILABLE', 'Team lookup requires a real Super Admin account and Supabase.')
