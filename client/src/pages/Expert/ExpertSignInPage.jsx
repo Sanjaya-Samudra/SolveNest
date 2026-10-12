@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { fetchExpertAccountState, loginExpert } from '../../expert/expertApi.js'
+import './expert-dashboard.css'
 
 export function ExpertSignInPage() {
   const [email, setEmail] = useState('')

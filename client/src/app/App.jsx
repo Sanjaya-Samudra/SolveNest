@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { ArrowUpRight, Menu, X } from 'lucide-react'
 import { AcademicAurora, MagneticButton } from '../components/common/GlobalExperience.jsx'
-import logoImg from '../assets/logo-background-white.png'
+import logoImg from '../assets/logo-mark.webp'
 
 const StudentDashboard = lazy(() => import('../pages/Student/StudentDashboard.jsx').then((module) => ({ default: module.StudentDashboard })))
 const ExpertDashboard = lazy(() => import('../pages/Expert/ExpertDashboard.jsx').then((module) => ({ default: module.ExpertDashboard })))

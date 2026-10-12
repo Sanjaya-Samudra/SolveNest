@@ -3,6 +3,7 @@ import { LogOut, ShieldCheck, Radio } from 'lucide-react'
 import { useExpertAccountGate, useExpertDashboard } from '../../expert/expertDashboardData.js'
 import { parseAssignmentRoute } from '../../expert/assignmentState.js'
 import { signOutExpert } from '../../expert/expertApi.js'
+import './expert-dashboard.css'
 import { ExpertAppShell, ExpertGate, goExpert } from './ExpertAppShell.jsx'
 import {
   ExpertAvailabilityControl,

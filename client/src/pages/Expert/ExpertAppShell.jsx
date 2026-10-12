@@ -17,7 +17,7 @@ import {
   User,
   X,
 } from 'lucide-react'
-import logo from '../../assets/logo-background-white.png'
+import logo from '../../assets/logo-mark.webp'
 
 export const goExpert = (path) => {
   window.history.pushState({}, '', path)

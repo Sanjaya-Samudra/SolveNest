@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { motion } from 'framer-motion'
 import { ArrowRight, Check, ChevronDown, FileText, LockKeyhole, Mail, Menu, Network, Search, ShieldCheck, Sparkles, UploadCloud, Users, X } from 'lucide-react'
 import { IntakeCanvas } from '../../components/IntakeCanvas/IntakeCanvas.jsx'
+import '../../components/IntakeCanvas/intake.css'
 
 export const routeTo = (path) => { window.history.pushState({}, '', path); window.dispatchEvent(new PopStateEvent('popstate')) }
 const domains = [
