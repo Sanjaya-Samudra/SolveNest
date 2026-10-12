@@ -9,7 +9,7 @@ const TASK_STATES = {
   AWAITING_ACCEPTANCE: { label: 'Awaiting your decision', tone: 'attention', stage: 'CONFIRM', next: 'Review official plan', route: '/student/tasks' },
   PAYMENT_PENDING: { label: 'Payment required', tone: 'attention', stage: 'FUND', next: 'Fund task', route: '/student/payments' },
   PAID: { label: 'Funded', tone: 'calm', stage: 'MATCH', next: 'View progress', route: '/student/tasks' },
-  ASSIGNMENT_PENDING: { label: 'Matching expertise', tone: 'calm', stage: 'MATCH', next: 'View task', route: '/student/tasks' },
+  ASSIGNMENT_PENDING: { label: 'Expert assigned', tone: 'calm', stage: 'MATCH', next: 'View task', route: '/student/tasks' },
   IN_PROGRESS: { label: 'In progress', tone: 'active', stage: 'PROGRESS', next: 'View progress', route: '/student/tasks' },
   QUALITY_REVIEW: { label: 'Quality review', tone: 'active', stage: 'VERIFY', next: 'View task', route: '/student/tasks' },
   DELIVERED: { label: 'Delivery ready', tone: 'attention', stage: 'DELIVER', next: 'Review delivery', route: '/student/files' },

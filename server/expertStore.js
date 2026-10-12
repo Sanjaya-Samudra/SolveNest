@@ -2,11 +2,27 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { hasSupabase, supabaseReadState, supabaseWriteState } from './supabase.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const dataDir = path.join(__dirname, 'data')
 const storePath = path.join(dataDir, 'expert.json')
+const expertContext = new AsyncLocalStorage()
+const currentExpert = () => expertContext.getStore() || { id: 'demo-expert', name: 'Alex Morgan' }
+function fileFor(id) {
+  if (id !== 'demo-expert') return path.join(dataDir, `expert-${id}.json`)
+  try {
+    if (fs.existsSync(storePath) && JSON.parse(fs.readFileSync(storePath, 'utf8'))?.expert?.id !== 'demo-expert') return path.join(dataDir, 'expert-demo.json')
+  } catch {}
+  return storePath
+}
+
+export function runForExpert(expert, callback) {
+  const identity = typeof expert === 'string' ? { id: expert } : expert
+  if (!/^(demo-expert|[0-9a-f-]{36})$/i.test(String(identity?.id || ''))) throw new Error('EXPERT_ID_INVALID')
+  return expertContext.run(identity, callback)
+}
 
 const emptyStore = () => ({
   expert: {
@@ -48,34 +64,73 @@ function normalizeStore(value) {
 }
 
 export async function readExpertStore() {
+  const identity = currentExpert()
   if (hasSupabase()) {
     const state = await supabaseReadState()
-    return normalizeStore(state.expert)
+    const saved = identity.id === 'demo-expert' ? state.expertDemo || (state.expert?.expert?.id === 'demo-expert' ? state.expert : null) : state.expertWorkspaces?.[identity.id] || (state.expert?.expert?.id === identity.id ? state.expert : null)
+    const store = normalizeStore(saved)
+    store.expert = { ...store.expert, id: identity.id, name: identity.name || (identity.id === 'demo-expert' ? store.expert.name : 'Expert'), title: saved?.expert?.title || (identity.id === 'demo-expert' ? store.expert.title : 'Expert') }
+    return store
   }
   ensureStore()
   try {
-    const value = JSON.parse(fs.readFileSync(storePath, 'utf8'))
+    const destination = fileFor(identity.id)
+    const legacy = identity.id !== 'demo-expert' && !fs.existsSync(destination) ? JSON.parse(fs.readFileSync(storePath, 'utf8')) : null
+    const value = legacy?.expert?.id === identity.id ? legacy : JSON.parse(fs.readFileSync(destination, 'utf8'))
     if (!value || typeof value !== 'object') throw new Error('invalid')
-    return normalizeStore(value)
+    if (identity.id === 'demo-expert' && value.expert?.id && value.expert.id !== 'demo-expert') return emptyStore()
+    const store = normalizeStore(value)
+    store.expert = { ...store.expert, id: identity.id, name: identity.name || (identity.id === 'demo-expert' ? store.expert.name : 'Expert'), title: value.expert?.title || (identity.id === 'demo-expert' ? store.expert.title : 'Expert') }
+    return store
   } catch {
     const fresh = emptyStore()
-    fs.writeFileSync(storePath, JSON.stringify(fresh, null, 2))
+    fresh.expert = { ...fresh.expert, id: identity.id, name: identity.name || (identity.id === 'demo-expert' ? fresh.expert.name : 'Expert'), title: identity.id === 'demo-expert' ? fresh.expert.title : 'Expert' }
     return fresh
   }
 }
 
 export async function writeExpertStore(store) {
+  const identity = currentExpert()
+  store.expert = { ...store.expert, id: identity.id, name: identity.name || store.expert.name }
   if (hasSupabase()) {
     const state = await supabaseReadState()
-    state.expert = store
+    if (identity.id === 'demo-expert') {
+      if (state.expert?.expert?.id && state.expert.expert.id !== 'demo-expert') state.expertDemo = store
+      else state.expert = store
+    }
+    else {
+      state.expertWorkspaces = state.expertWorkspaces || {}
+      state.expertWorkspaces[identity.id] = store
+    }
     await supabaseWriteState(state)
     return store
   }
   ensureStore()
-  const temporaryPath = `${storePath}.tmp`
+  const destination = fileFor(identity.id)
+  const temporaryPath = `${destination}.tmp`
   fs.writeFileSync(temporaryPath, JSON.stringify(store, null, 2))
-  fs.renameSync(temporaryPath, storePath)
+  fs.renameSync(temporaryPath, destination)
   return store
+}
+
+export async function listExpertStores() {
+  if (hasSupabase()) {
+    const state = await supabaseReadState()
+    const stores = Object.entries(state.expertWorkspaces || {}).map(([id, value]) => ({ id, store: normalizeStore(value) }))
+    const legacyId = state.expert?.expert?.id
+    if (legacyId && legacyId !== 'demo-expert' && !stores.some((item) => item.id === legacyId)) stores.push({ id: legacyId, store: normalizeStore(state.expert) })
+    return stores
+  }
+  ensureStore()
+  const files = fs.readdirSync(dataDir).filter((name) => /^expert-[0-9a-f-]{36}\.json$/i.test(name))
+  const stores = await Promise.all(files.map(async (name) => {
+    const id = name.slice(7, -5)
+    return { id, store: await runForExpert(id, readExpertStore) }
+  }))
+  const legacy = normalizeStore(JSON.parse(fs.readFileSync(storePath, 'utf8')))
+  if (!stores.some((item) => item.id === legacy.expert.id)) stores.unshift({ id: legacy.expert.id, store: legacy })
+  if (legacy.expert.id !== 'demo-expert' && fs.existsSync(path.join(dataDir, 'expert-demo.json'))) stores.unshift({ id: 'demo-expert', store: await runForExpert('demo-expert', readExpertStore) })
+  return stores
 }
 
 export async function withExpertStore(mutator) {
@@ -971,6 +1026,10 @@ export async function provisionAssignment(seed = {}) {
   const title = String(seed.title || '').trim()
   if (!title) return { ok: false, error: 'TITLE_REQUIRED' }
   const store = await readExpertStore()
+  if (seed.taskId) {
+    const existing = store.assignments.find((item) => item.taskId === String(seed.taskId))
+    if (existing) return { ok: true, assignment: safeAssignmentDetail(existing), replayed: true }
+  }
   const stampValue = nowIso()
   const workState = WORK_STATE_VALUES.has(seed.workState) ? seed.workState : 'assigned'
   const id = `asg-${crypto.randomUUID()}`

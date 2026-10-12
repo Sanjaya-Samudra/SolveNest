@@ -13,6 +13,7 @@ export function hasSupabase() { return Boolean(authClient && adminClient) }
 export function hasSupabaseAuth() { return Boolean(authClient) }
 export function hasSupabaseStorage() { return Boolean(adminClient) }
 export async function supabaseProfile(userId) { if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED'); const { data, error } = await adminClient.from('profiles').select('id, role, name, email').eq('id', userId).maybeSingle(); if (error) throw error; return data }
+export async function supabaseExpertProfiles() { if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED'); const { data, error } = await adminClient.from('profiles').select('id, name, email, role').eq('role', 'Expert').order('name', { ascending: true }); if (error) throw error; return data || [] }
 export async function supabaseTeam() {
   if (!adminClient) return null
   const roles = ['Student', 'Expert', 'Admin', 'Superadmin']

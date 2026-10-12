@@ -33,6 +33,7 @@ import {
   provisionAvailableTasks,
   queryAssignments,
   readExpertStore,
+  runForExpert,
   removeAssignmentFile,
   resolveQaFeedback,
   resubmitAssignmentForQa,
@@ -45,7 +46,7 @@ import { addActivity, buildTaskSummary, getStudentAnalysis, getStudentFiles, get
 import { publish, subscribe } from './realtime.js'
 import { hasObjectStorage, persistUpload, removeStoredObject, signedObjectUrl } from './storage.js'
 import { hasEmail, sendEmail } from './email.js'
-import { hasSupabase, hasSupabaseAuth, supabaseChangeStaffRole, supabaseFindProfileByEmail, supabaseProfile, supabaseRefresh, supabaseRequestPasswordReset, supabaseTeam, supabaseUpdatePassword, supabaseSignIn, supabaseSignUp, supabaseUser } from './supabase.js'
+import { hasSupabase, hasSupabaseAuth, supabaseChangeStaffRole, supabaseExpertProfiles, supabaseFindProfileByEmail, supabaseProfile, supabaseRefresh, supabaseRequestPasswordReset, supabaseTeam, supabaseUpdatePassword, supabaseSignIn, supabaseSignUp, supabaseUser } from './supabase.js'
 import { getAdminCase, getAdminOverview, getAdminQaCase, issueAdminPlan, listAdminQaAssignments, recordAdminReview } from './adminStore.js'
 import { getSuperadminActivity, getSuperadminOverview } from './superadminStore.js'
 
@@ -80,7 +81,29 @@ app.post('/api/payments/stripe/webhook', express.raw({ type: 'application/json' 
   try { event = stripe.webhooks.constructEvent(req.body, req.headers['stripe-signature'], process.env.STRIPE_WEBHOOK_SECRET) } catch { return res.status(400).json({ error: 'INVALID_WEBHOOK' }) }
   const intent = event.data.object
   const status = event.type === 'payment_intent.succeeded' ? 'succeeded' : event.type === 'payment_intent.payment_failed' ? 'failed' : null
-  if (status) await withTaskStore((store) => { const payment = store.payments.find((item) => item.providerId === intent.id); if (payment) payment.status = status })
+  const fundedTask = status ? await withTaskStore((store) => {
+    const payment = store.payments.find((item) => item.providerId === intent.id)
+    if (!payment) return null
+    payment.status = status
+    if (status !== 'succeeded') return null
+    const task = store.tasks.find((item) => item.id === payment.taskId && item.studentId === payment.studentId)
+    const plan = store.plans.find((item) => item.id === payment.planId && item.status === 'ACCEPTED')
+    if (!task || !plan || task.status !== 'PAYMENT_PENDING') return null
+    const stamp = now()
+    task.status = 'PAID'
+    task.amountDue = 0
+    task.funding = { state: 'funded', amountTotal: plan.amount, amountDue: 0 }
+    task.latestUpdate = { text: 'Your task is funded and ready for Expert assignment.', createdAt: stamp }
+    task.nextAction = null
+    task.updatedAt = stamp
+    addActivity(store, { id: crypto.randomUUID(), studentId: task.studentId, taskId: task.id, type: 'TaskFunded', text: task.latestUpdate.text, createdAt: stamp })
+    return { id: task.id, studentId: task.studentId, title: task.title, at: stamp }
+  }) : null
+  if (fundedTask) {
+    try { await addNotification({ id: crypto.randomUUID(), studentId: fundedTask.studentId, title: 'Task funded', body: 'Your task is ready for Expert assignment.', task: { title: fundedTask.title, ref: fundedTask.id }, route: `/student/tasks?task=${fundedTask.id}`, isRead: false, requiresAction: false, createdAt: fundedTask.at }) }
+    catch (error) { console.error('[payment] notification failed', error) }
+    publish(fundedTask.studentId, { type: 'TaskFunded', taskId: fundedTask.id })
+  }
   res.json({ received: true })
 })
 app.use(express.json())
@@ -500,11 +523,19 @@ app.post('/api/student/payments/checkout', requireStudent, async (req, res) => {
   const task = await getStudentTask(req.student.studentId, req.body?.taskId)
   const plan = (await readTaskStore()).plans.find((item) => item.id === req.body?.planId && item.studentId === req.student.studentId)
   if (!task || !plan || plan.taskId !== task.id || plan.status !== 'ACCEPTED') return safeError(res, 409, 'PLAN_NOT_ACCEPTED', 'Accept the current official plan before funding this task.')
+  if (task.status !== 'PAYMENT_PENDING') return safeError(res, 409, 'TASK_NOT_PAYABLE', 'This task is not awaiting payment.')
   const amount = Number(plan.amount)
   if (!Number.isSafeInteger(amount) || amount <= 0) return safeError(res, 400, 'PAYMENT_AMOUNT_REQUIRED', 'There is no payable official plan for this task.')
   const key = String(req.body?.idempotencyKey || crypto.randomUUID())
-  const existing = (await readTaskStore()).payments.find((payment) => payment.studentId === req.student.studentId && payment.idempotencyKey === key)
-  if (existing) return res.json({ paymentId: existing.id, status: existing.status, provider: 'stripe' })
+  const payments = (await readTaskStore()).payments.filter((payment) => payment.studentId === req.student.studentId && payment.planId === plan.id)
+  const existing = payments.find((payment) => payment.idempotencyKey === key)
+  if (payments.some((payment) => payment.status === 'succeeded')) return safeError(res, 409, 'PLAN_ALREADY_FUNDED', 'This plan has already been funded.')
+  if (existing && ['failed', 'canceled'].includes(existing.status)) return safeError(res, 409, 'PAYMENT_RETRY_REQUIRED', 'Start a new payment attempt for this plan.')
+  const active = existing || payments.find((payment) => !['failed', 'canceled', 'succeeded'].includes(payment.status))
+  if (active?.providerId) {
+    const intent = await stripe.paymentIntents.retrieve(active.providerId)
+    return res.json({ paymentId: active.id, clientSecret: intent.client_secret, status: intent.status, provider: 'stripe' })
+  }
   const intent = await stripe.paymentIntents.create({ amount: Math.round(amount * 100), currency: process.env.STRIPE_CURRENCY || 'lkr', metadata: { taskId: task.id, studentId: req.student.studentId } }, { idempotencyKey: key })
   const payment = { id: crypto.randomUUID(), providerId: intent.id, studentId: req.student.studentId, taskId: task.id, planId: plan?.id || null, amount, currency: process.env.STRIPE_CURRENCY || 'lkr', status: intent.status, idempotencyKey: key, createdAt: now() }
   await withTaskStore((store) => store.payments.push(payment))
@@ -749,8 +780,6 @@ app.post('/api/expert/auth/login', async (req, res) => {
     if (error || !data?.user) return safeError(res, 401, 'INVALID_CREDENTIALS', 'Those details did not match an account.')
     const profile = await supabaseProfile(data.user.id)
     if (profile?.role !== 'Expert') return safeError(res, 403, 'EXPERT_ACCESS_REQUIRED', 'This account does not have Expert access.')
-    const workspace = await expertWorkspaceView()
-    if (workspace.expert.id !== profile.id) return safeError(res, 403, 'EXPERT_WORKSPACE_UNAVAILABLE', 'No Expert workspace is assigned to this account yet.')
     const sid = crypto.randomUUID()
     const stamp = now()
     expertSessions.set(sid, { id: sid, role: 'Expert', expertId: profile.id, studentId: profile.id, name: profile.name, email: profile.email, createdAt: stamp, lastActiveAt: stamp, device: userAgentLabel(req.headers['user-agent']) })
@@ -762,18 +791,27 @@ app.post('/api/expert/auth/login', async (req, res) => {
   }
 })
 
-function requireExpert(req, res, next) {
+async function requireExpert(req, res, next) {
   try {
     req.expert = ensureExpertSession(req, res)
+    if (req.expert.expertId !== 'demo-expert') {
+      const profile = await supabaseProfile(req.expert.expertId)
+      if (profile?.role !== 'Expert') {
+        expertSessions.delete(req.expert.id)
+        return safeError(res, 401, 'EXPERT_ACCESS_REQUIRED', 'This account no longer has Expert access.')
+      }
+      req.expert.name = profile.name
+      req.expert.email = profile.email
+    }
     next()
   } catch (error) {
-    res.status(error.status || 401).json({ error: 'EXPERT_ACCESS_REQUIRED' })
+    safeError(res, error.status || 503, 'EXPERT_ACCESS_REQUIRED', error.status ? 'Expert sign in is required.' : 'Expert access could not be verified right now.')
   }
 }
 
 function expertRoute(handler) {
   return (req, res, next) => {
-    Promise.resolve(handler(req, res, next)).catch((error) => {
+    Promise.resolve().then(() => runForExpert({ id: req.expert.expertId, name: req.expert.name }, () => handler(req, res, next))).catch((error) => {
       console.error(`[expert] ${req.method} ${req.originalUrl}`, error)
       if (res.headersSent) return
       safeError(res, 500, 'EXPERT_LOAD_FAILED', 'The expert workspace could not be loaded.')
@@ -1474,6 +1512,55 @@ app.post('/api/admin/tasks/:taskId/plan', requireStaff, staffRoute(async (req, r
   res.status(201).json({ plan: result.plan })
 }))
 
+app.get('/api/admin/experts', requireStaff, staffRoute(async (req, res) => {
+  const profiles = req.staff.demo ? [{ id: 'demo-expert', name: 'Alex Morgan', email: null, role: 'Expert' }] : await supabaseExpertProfiles()
+  const experts = await Promise.all(profiles.map(async (profile) => {
+    const store = await runForExpert(profile, readExpertStore)
+    return { id: profile.id, name: profile.name, email: profile.email, availability: store.expert.availability, activeAssignments: store.assignments.filter((item) => item.workState !== 'delivered').length }
+  }))
+  res.json({ experts })
+}))
+
+app.post('/api/admin/tasks/:taskId/assign', requireStaff, staffRoute(async (req, res) => {
+  if (!limited(`admin-assign:${req.staff.id}`, 20)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before assigning another task.')
+  const expertId = String(req.body?.expertId || '')
+  const profile = req.staff.demo && expertId === 'demo-expert' ? { id: expertId, name: 'Alex Morgan', role: 'Expert' } : req.staff.demo ? null : await supabaseProfile(expertId)
+  if (profile?.role !== 'Expert') return safeError(res, 404, 'EXPERT_NOT_FOUND', 'Choose an active Expert account.')
+  const state = await readTaskStore()
+  const task = state.tasks.find((item) => item.id === req.params.taskId)
+  const plan = state.plans.find((item) => item.taskId === task?.id && item.status === 'ACCEPTED')
+  const funded = state.payments.some((item) => item.taskId === task?.id && item.planId === plan?.id && item.status === 'succeeded')
+  if (!task) return safeError(res, 404, 'TASK_NOT_FOUND', 'Task not found.')
+  if (task.assignedExpertId) return safeError(res, 409, 'TASK_ALREADY_ASSIGNED', 'This task is already assigned.')
+  if (task.status !== 'PAID' || !plan || !funded) return safeError(res, 409, 'TASK_NOT_FUNDED', 'The Student must accept and fund the official plan before assignment.')
+  const workspace = await runForExpert(profile, readExpertStore)
+  if (workspace.expert.availability === 'unavailable') return safeError(res, 409, 'EXPERT_UNAVAILABLE', 'Choose an Expert who is available for work.')
+  const sourceFiles = state.files.filter((file) => file.taskId === task.id && file.studentId === task.studentId && file.state === 'READY').map((file) => ({ id: file.id, name: file.originalName, type: file.mimeType, size: file.size, storageKey: file.storageKey, origin: 'solvenest', uploadedBy: 'student', uploadedAt: file.createdAt }))
+  const requirements = [plan.scope, ...(Array.isArray(task.analysis?.deliverables) ? task.analysis.deliverables.map((item) => typeof item === 'string' ? item : item.title || item.name).filter(Boolean) : [])].slice(0, 12)
+  const created = await runForExpert(profile, () => provisionAssignment({ taskId: task.id, title: task.title, reference: plan.reference, domain: task.subject, type: task.type, deliverable: plan.scope, requirements, deadline: plan.delivery, workspace: { files: { source: sourceFiles } } }))
+  if (!created.ok) return expertMutationError(res, created.error)
+  const updated = await withTaskStore((store) => {
+    const current = store.tasks.find((item) => item.id === task.id)
+    if (!current || current.assignedExpertId || current.status !== 'PAID') return false
+    const stamp = now()
+    current.assignedExpertId = profile.id
+    current.assignedExpertName = profile.name
+    current.assignmentId = created.assignment.id
+    current.status = 'ASSIGNMENT_PENDING'
+    current.latestUpdate = { text: 'A SolveNest Expert has been assigned to your task.', createdAt: stamp }
+    current.updatedAt = stamp
+    store.adminAudit = store.adminAudit || []
+    store.adminAudit.unshift({ id: crypto.randomUUID(), taskId: task.id, actorId: req.staff.id, action: 'assign_expert', note: `Assigned ${profile.name} (${profile.id}).`, at: stamp })
+    addActivity(store, { id: crypto.randomUUID(), studentId: task.studentId, taskId: task.id, type: 'ExpertAssigned', text: current.latestUpdate.text, createdAt: stamp })
+    return true
+  })
+  if (!updated) return safeError(res, 409, 'TASK_ASSIGNMENT_CHANGED', 'The task changed while it was being assigned. Reload the case.')
+  await addNotification({ id: crypto.randomUUID(), studentId: task.studentId, title: 'Expert assigned', body: 'Your task has moved to the Expert workspace.', task: { title: task.title, ref: task.id }, route: `/student/tasks?task=${task.id}`, isRead: false, requiresAction: false, createdAt: now() })
+  publish(task.studentId, { type: 'ExpertAssigned', taskId: task.id })
+  publishExpert(profile.id, 'AssignmentChanged', { assignmentId: created.assignment.id, at: now() })
+  res.status(201).json({ assignmentId: created.assignment.id, expert: { id: profile.id, name: profile.name } })
+}))
+
 app.get('/api/admin/support', requireStaff, staffRoute(async (_req, res) => res.json({ tickets: await listSupportTickets() })))
 app.get('/api/admin/support/:ticketId', requireStaff, staffRoute(async (req, res) => {
   const ticket = await getSupportTicket(req.params.ticketId)
@@ -1507,7 +1594,7 @@ app.get('/api/admin/qa/:assignmentId', requireStaff, staffRoute(async (req, res)
 app.get('/api/admin/qa/:assignmentId/files/:fileId/download', requireStaff, staffRoute(async (req, res) => {
   const detail = await getAdminQaCase(req.params.assignmentId)
   if (!detail?.submissionFiles.some((file) => file.id === req.params.fileId)) return safeError(res, 404, 'FILE_NOT_FOUND', 'Submission file not found.')
-  const file = await findExpertFile(req.params.fileId)
+  const file = await runForExpert(detail.assignment.expertId, () => findExpertFile(req.params.fileId))
   if (!file?.storageKey) return safeError(res, 404, 'FILE_CONTENT_MISSING', 'The file is no longer available.')
   if (hasObjectStorage()) {
     const url = await signedObjectUrl(file.storageKey, file.name)
@@ -1525,10 +1612,11 @@ app.post('/api/admin/qa/:assignmentId/outcome', requireStaff, staffRoute(async (
   const note = String(req.body?.note || '').trim().slice(0, 2000)
   if (outcome === 'changes_requested' && note.length < 10) return safeError(res, 400, 'QA_FEEDBACK_REQUIRED', 'Explain the changes needed in at least 10 characters.')
   const feedback = outcome === 'changes_requested' ? [{ title: 'Changes required', body: note, severity: 'major' }] : []
-  const result = await applyQaOutcome(req.params.assignmentId, outcome, feedback, req.staff.id, note)
+  const detail = await getAdminQaCase(req.params.assignmentId)
+  if (!detail) return safeError(res, 404, 'ASSIGNMENT_NOT_FOUND', 'Assignment not found.')
+  const result = await runForExpert(detail.assignment.expertId, () => applyQaOutcome(req.params.assignmentId, outcome, feedback, req.staff.id, note))
   if (!result.ok) return expertMutationError(res, result.error)
-  const expert = await readExpertStore()
-  publishExpert(expert.expert.id, 'QaUpdated', { assignmentId: req.params.assignmentId, qa: result.qa })
+  publishExpert(detail.assignment.expertId, 'QaUpdated', { assignmentId: req.params.assignmentId, qa: result.qa })
   res.json(result)
 }))
 

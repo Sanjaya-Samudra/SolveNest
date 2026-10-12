@@ -664,6 +664,7 @@ export function usePaymentCheckout() {
       setState({ status: 'ready', result, error: null, busy: false })
       return result
     } catch (error) {
+      idempotencyRef.current = null
       setState({ status: 'error', result: null, error, busy: false })
       return null
     } finally {

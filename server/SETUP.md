@@ -43,7 +43,9 @@ Required in production:
 
 The migration creates a `profiles` table linked to `auth.users`, a signup trigger, Row Level Security policies, task/file/analysis/review tables, idempotency records, and guest-transfer records. The service role is used only by the trusted server for Storage and server-side operations.
 
-Expert sign-in uses `/expert/login` and requires an existing Supabase Auth user whose `profiles.role` is `Expert` and whose profile ID matches the assigned Expert workspace ID. Local development without Supabase can still open the demo Expert workspace when `STRICT_SESSION=0`. Production always requires a signed-in Expert session.
+Expert sign-in uses `/expert/login` and requires an existing Supabase Auth user whose `profiles.role` is `Expert`. Local development without Supabase can still open the demo Expert workspace when `STRICT_SESSION=0`. Production always requires a signed-in Expert session.
+
+Each real Expert now has an account-scoped workspace. An Expert account can sign in before receiving its first assignment. The Admin can assign a Student task after the Student accepts the official plan and Stripe confirms payment. The assignment includes the Student's source files and appears only in the chosen Expert's workspace. Staff QA searches all Expert workspaces. Existing single-Expert data is read for its matching account and copied into that account's workspace on its next update. Local demo data stays separate from a real Expert's legacy workspace. Production workspaces are keyed by Expert profile ID in `app_state` until domain records are migrated to dedicated PostgreSQL tables.
 
 Admin sign-in uses `/admin` and requires an existing Supabase Auth user whose `profiles.role` is `Admin` or `Superadmin`. Set the role for an approved staff account in the Supabase dashboard or SQL Editor. For local preview only, set `ADMIN_DEMO_SESSION=1` in `server/.env` and restart the server. The preview is available only from the same computer while `NODE_ENV` is not `production`.
 
