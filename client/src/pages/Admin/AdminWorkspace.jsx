@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, ArrowRight, Bell, CheckCircle2, ChevronDown, ClipboardList, Clock3, Download, FileText, LayoutDashboard, LifeBuoy, LogOut, Menu, Search, ShieldCheck, X } from 'lucide-react'
-import { assignExpert, getAssignableExperts, getCase, getOverview, getQaCase, getQaQueue, getStaff, getSupportCase, getSupportQueue, issuePlan, loginStaff, logoutStaff, recordQaOutcome, recordReview, updateSupportStatus } from '../../admin/adminApi.js'
+import { ArrowLeft, ArrowRight, Bell, CheckCircle2, ChevronDown, ClipboardList, Clock3, Download, FileText, LayoutDashboard, LifeBuoy, LogOut, Menu, MessageCircle, Search, ShieldCheck, X } from 'lucide-react'
+import { assignExpert, getAssignableExperts, getCase, getConversation, getConversations, getOverview, getQaCase, getQaQueue, getStaff, getSupportCase, getSupportQueue, issuePlan, loginStaff, logoutStaff, markConversationRead, recordQaOutcome, recordReview, sendConversationReply, updateSupportStatus } from '../../admin/adminApi.js'
 import './admin-workspace.css'
 
 const pathFor = (id) => id ? `/admin/tasks/${encodeURIComponent(id)}` : '/admin'
 const selectedFromPath = () => window.location.pathname.match(/^\/admin\/tasks\/([^/]+)$/)?.[1] || null
 const routeFromPath = () => {
-  const match = window.location.pathname.match(/^\/admin\/(qa|support)(?:\/([^/]+))?$/)
+  const match = window.location.pathname.match(/^\/admin\/(qa|support|messages)(?:\/([^/]+))?$/)
   if (!match) return { section: 'tasks', id: selectedFromPath() }
   try { return { section: match[1], id: match[2] ? decodeURIComponent(match[2]) : null } }
   catch { return { section: match[1], id: null } }
@@ -67,6 +67,7 @@ function AdminSidebar({ section, filter, setFilter, staff, mobileOpen, setMobile
         <p className="adm-nav-label" style={{ marginTop: 22 }}>SERVICE DESK</p>
         <button className={section === 'qa' ? 'is-active' : ''} onClick={() => { setMobileOpen(false); goSection('qa') }}><ShieldCheck size={17} /> Quality review</button>
         <button className={section === 'support' ? 'is-active' : ''} onClick={() => { setMobileOpen(false); goSection('support') }}><LifeBuoy size={17} /> Support requests</button>
+        <button className={section === 'messages' ? 'is-active' : ''} onClick={() => { setMobileOpen(false); goSection('messages') }}><MessageCircle size={17} /> Task messages</button>
         {staff?.role === 'Superadmin' && <><p className="adm-nav-label" style={{ marginTop: 22 }}>GOVERNANCE</p><button onClick={() => window.location.assign('/superadmin')}><ShieldCheck size={17} /> Super Admin</button></>}
       </nav>
       <div className="adm-sidebar-foot"><span className="adm-avatar">{staff?.name?.slice(0, 1) || 'A'}</span><span><strong>{staff?.name || 'Admin'}</strong><small>{staff?.demo ? 'Local preview' : staff?.role}</small></span></div>
@@ -190,6 +191,28 @@ function QaDetail({ detail, reload, onBack }) {
   return <><button className="adm-back" onClick={onBack}><ArrowLeft size={16} /> Back to quality queue</button><header className="adm-case-head"><div><p className="adm-kicker">QUALITY CASE / {detail.assignment.reference || shortId(detail.assignment.id)}</p><h1>{detail.assignment.title}</h1><p>{detail.assignment.expertName} · Cycle {detail.qa?.cycle || 1}</p></div><span className="adm-status" data-state={detail.qa?.state}>{detail.qa?.state === 'in_review' ? 'In review' : detail.qa?.state?.replaceAll('_', ' ')}</span></header><div className="adm-case-grid"><div className="adm-case-main"><section className="adm-panel"><p className="adm-kicker">SUBMISSION</p><h2 className="adm-section-title">Files to inspect</h2>{detail.submissionFiles.length ? <ul className="adm-files">{detail.submissionFiles.map((file) => <li key={file.id}><FileText size={18} /><span><strong>{file.name}</strong><small>{Math.ceil((file.size || 0) / 1024)} KB</small></span><button className="adm-icon" onClick={() => openFile(file.id)} aria-label={`Open ${file.name}`}><Download size={17} /></button></li>)}</ul> : <p className="adm-muted">No submission files are available.</p>}{error && <div className="adm-alert" role="alert">{error}</div>}</section><section className="adm-panel"><p className="adm-kicker">QUALITY HISTORY</p><h2 className="adm-section-title">Review decisions</h2>{detail.history.length ? <ol className="adm-timeline">{detail.history.map((item) => <li key={item.id}><span className="adm-timeline-dot" /><div><strong>{item.outcome.replaceAll('_', ' ')}</strong><small>{fmtTime(item.at)} · {item.actorId}</small>{item.note && <p>{item.note}</p>}</div></li>)}</ol> : <p className="adm-muted">No staff decision recorded yet.</p>}</section></div><aside className="adm-case-side"><section className="adm-panel adm-decision"><p className="adm-kicker">QUALITY DECISION</p><h2>Ready to deliver?</h2><p>Approval moves Expert work to ready to deliver. Requested changes return feedback to the Expert.</p>{detail.qa?.state === 'in_review' ? <><label className="adm-check"><input type="checkbox" checked={reviewed} onChange={(event) => setReviewed(event.target.checked)} /> I reviewed the submission files</label><label>Review note<textarea rows={5} maxLength={2000} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Record the reason or changes needed…" /></label><div className="adm-action-stack"><button className="adm-primary" disabled={busy || !reviewed} onClick={() => decide('approved')}>Approve quality <ArrowRight size={15} /></button><button className="adm-secondary" disabled={busy || !reviewed} onClick={() => decide('changes_requested')}>Request changes</button></div></> : <p className="adm-muted">This submission has already been reviewed.</p>}</section></aside></div></>
 }
 
+function MessagesQueue({ conversations, onOpen }) {
+  const [search, setSearch] = useState('')
+  const visible = conversations.filter((item) => `${item.taskTitle} ${item.taskRef} ${item.lastMessage?.body || ''}`.toLowerCase().includes(search.toLowerCase()))
+  return <><header className="adm-heading"><div><p className="adm-kicker">SERVICE DESK / TASK MESSAGES</p><h1>Student conversations.</h1><p>Read and answer messages from each task room.</p></div></header><section className="adm-panel adm-queue"><div className="adm-panel-head"><div><h2>Inbox</h2><p>{visible.filter((item) => item.staffUnread).length} need a reply</p></div><label className="adm-search"><Search size={16} /><input type="search" placeholder="Search task or message" value={search} onChange={(event) => setSearch(event.target.value)} /></label></div>{visible.length ? <div className="adm-table-wrap"><table><thead><tr><th>Task</th><th>Latest message</th><th>Updated</th><th>Status</th><th><span className="adm-sr">Open</span></th></tr></thead><tbody>{visible.map((item) => <tr key={item.id}><td><button className="adm-task-link" onClick={() => onOpen(item.id)}><strong>{item.taskTitle}</strong><small>{shortId(item.taskId)}</small></button></td><td>{item.lastMessage?.body?.slice(0, 90) || 'No messages yet'}</td><td>{fmtTime(item.updatedAt)}</td><td>{item.staffUnread ? <span className="adm-status" data-state="QUEUED">Needs reply</span> : 'Current'}</td><td><button className="adm-icon" onClick={() => onOpen(item.id)} aria-label={`Open messages for ${item.taskTitle}`}><ArrowRight size={17} /></button></td></tr>)}</tbody></table></div> : <div className="adm-empty"><MessageCircle size={28} /><h3>No conversations found</h3><p>{search ? 'Try another search term.' : 'Task rooms will appear here when Students submit tasks.'}</p></div>}</section></>
+}
+
+function MessagesDetail({ data, reload, onBack }) {
+  const [body, setBody] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const send = async (event) => {
+    event.preventDefault()
+    if (!body.trim()) return
+    setBusy(true)
+    setError('')
+    try { await sendConversationReply(data.conversation.id, body.trim()); setBody(''); await reload() }
+    catch (issue) { setError(issue.message) }
+    finally { setBusy(false) }
+  }
+  return <><button className="adm-back" onClick={onBack}><ArrowLeft size={16} /> Back to messages</button><header className="adm-case-head"><div><p className="adm-kicker">TASK ROOM / {shortId(data.conversation.taskId)}</p><h1>{data.conversation.taskTitle}</h1><p>Student conversation · {data.messages.length} messages</p></div></header><section className="adm-panel adm-conversation"><div className="adm-conversation-list">{data.messages.length ? data.messages.map((message) => <article key={message.id} className={message.from === 'student' ? 'is-student' : 'is-staff'}><div><strong>{message.author || (message.from === 'student' ? 'Student' : 'SolveNest')}</strong><time>{fmtTime(message.createdAt)}</time></div><p>{message.body}</p></article>) : <p className="adm-muted">No messages have been sent yet.</p>}</div><form onSubmit={send}><label htmlFor="adm-message-reply">Reply to Student</label><textarea id="adm-message-reply" rows={4} maxLength={4000} required value={body} onChange={(event) => setBody(event.target.value)} placeholder="Write a clear reply…" />{error && <div className="adm-alert" role="alert">{error}</div>}<button className="adm-primary" disabled={busy || !body.trim()}>{busy ? 'Sending…' : 'Send reply'} <ArrowRight size={15} /></button></form></section></>
+}
+
 export function AdminWorkspace() {
   const [staffState, setStaffState] = useState({ loading: true, staff: null, error: null })
   const [overview, setOverview] = useState({ loading: true, data: null, error: null })
@@ -198,6 +221,8 @@ export function AdminWorkspace() {
   const [supportCase, setSupportCase] = useState({ loading: false, data: null, error: null })
   const [qaQueue, setQaQueue] = useState({ loading: true, data: null, error: null })
   const [qaCase, setQaCase] = useState({ loading: false, data: null, error: null })
+  const [messagesQueue, setMessagesQueue] = useState({ loading: true, data: null, error: null })
+  const [messagesCase, setMessagesCase] = useState({ loading: false, data: null, error: null })
   const [route, setRoute] = useState(routeFromPath)
   const [filter, setFilter] = useState('queue')
   const [mobileOpen, setMobileOpen] = useState(false)
@@ -238,10 +263,20 @@ export function AdminWorkspace() {
     try { setQaCase({ loading: false, data: await getQaCase(id), error: null }) }
     catch (error) { setQaCase({ loading: false, data: null, error }) }
   }, [])
+  const loadMessagesQueue = useCallback(async () => {
+    setMessagesQueue((prev) => ({ ...prev, loading: true, error: null }))
+    try { setMessagesQueue({ loading: false, data: await getConversations(), error: null }) }
+    catch (error) { setMessagesQueue({ loading: false, data: null, error }) }
+  }, [])
+  const loadMessagesCase = useCallback(async (id) => {
+    setMessagesCase({ loading: true, data: null, error: null })
+    try { const data = await getConversation(id); setMessagesCase({ loading: false, data, error: null }); await markConversationRead(id); loadMessagesQueue() }
+    catch (error) { setMessagesCase({ loading: false, data: null, error }) }
+  }, [loadMessagesQueue])
   useEffect(() => { loadStaff() }, [loadStaff])
   useEffect(() => { const update = () => setRoute(routeFromPath()); window.addEventListener('popstate', update); return () => window.removeEventListener('popstate', update) }, [])
-  useEffect(() => { if (staffState.staff) { loadOverview(); loadSupportQueue(); loadQaQueue() } }, [staffState.staff, loadOverview, loadSupportQueue, loadQaQueue])
-  useEffect(() => { if (!staffState.staff || !route.id) return; if (route.section === 'tasks') loadCase(route.id); if (route.section === 'support') loadSupportCase(route.id); if (route.section === 'qa') loadQaCase(route.id) }, [staffState.staff, route, loadCase, loadSupportCase, loadQaCase])
+  useEffect(() => { if (staffState.staff) { loadOverview(); loadSupportQueue(); loadQaQueue(); loadMessagesQueue() } }, [staffState.staff, loadOverview, loadSupportQueue, loadQaQueue, loadMessagesQueue])
+  useEffect(() => { if (!staffState.staff || !route.id) return; if (route.section === 'tasks') loadCase(route.id); if (route.section === 'support') loadSupportCase(route.id); if (route.section === 'qa') loadQaCase(route.id); if (route.section === 'messages') loadMessagesCase(route.id) }, [staffState.staff, route, loadCase, loadSupportCase, loadQaCase, loadMessagesCase])
 
   if (staffState.loading) return <div className="adm-gate"><div className="adm-loading" role="status">Loading Admin access…</div></div>
   if (staffState.error?.status === 401) return <Login onDone={loadStaff} />
@@ -249,7 +284,11 @@ export function AdminWorkspace() {
   let content
   let state
   let retry
-  if (route.section === 'support') {
+  if (route.section === 'messages') {
+    state = route.id ? messagesCase : messagesQueue
+    retry = () => route.id ? loadMessagesCase(route.id) : loadMessagesQueue()
+    if (state.data) content = route.id ? <MessagesDetail key={route.id} data={state.data} reload={async () => { await Promise.all([loadMessagesCase(route.id), loadMessagesQueue()]) }} onBack={() => goSection('messages')} /> : <MessagesQueue conversations={state.data.conversations} onOpen={(id) => goSection('messages', id)} />
+  } else if (route.section === 'support') {
     state = route.id ? supportCase : supportQueue
     retry = () => route.id ? loadSupportCase(route.id) : loadSupportQueue()
     if (state.data) content = route.id ? <SupportDetail key={route.id} ticket={state.data.ticket} reload={async () => { await Promise.all([loadSupportCase(route.id), loadSupportQueue(), loadOverview()]) }} onBack={() => goSection('support')} /> : <SupportQueue tickets={state.data.tickets} onOpen={(id) => goSection('support', id)} />
@@ -264,5 +303,5 @@ export function AdminWorkspace() {
   }
   if (!content && state.loading) content = <div className="adm-loading" role="status">Loading {route.section}…</div>
   if (!content && state.error) content = <div className="adm-panel adm-error"><h2>Could not load {route.section}</h2><p>{state.error.message}</p><button className="adm-primary" onClick={retry}>Try again</button></div>
-  return <div className="adm-app"><AdminSidebar section={route.section} filter={filter} setFilter={setFilter} staff={staffState.staff} mobileOpen={mobileOpen} setMobileOpen={setMobileOpen} /><div className="adm-frame"><div className="adm-topbar"><button className="adm-menu" onClick={() => setMobileOpen(true)} aria-label="Open menu"><Menu size={20} /></button><span>Admin <ChevronDown size={14} /> {route.section === 'tasks' ? 'Task intake' : route.section === 'qa' ? 'Quality review' : 'Support'}</span><div><span className="adm-role">{staffState.staff.demo ? 'LOCAL PREVIEW' : staffState.staff.role.toUpperCase()}</span>{!staffState.staff.demo && <button className="adm-icon" onClick={async () => { await logoutStaff().catch(() => {}); loadStaff() }} aria-label="Sign out"><LogOut size={18} /></button>}</div></div><main className="adm-content">{content}</main></div></div>
+  return <div className="adm-app"><AdminSidebar section={route.section} filter={filter} setFilter={setFilter} staff={staffState.staff} mobileOpen={mobileOpen} setMobileOpen={setMobileOpen} /><div className="adm-frame"><div className="adm-topbar"><button className="adm-menu" onClick={() => setMobileOpen(true)} aria-label="Open menu"><Menu size={20} /></button><span>Admin <ChevronDown size={14} /> {route.section === 'tasks' ? 'Task intake' : route.section === 'qa' ? 'Quality review' : route.section === 'messages' ? 'Task messages' : 'Support'}</span><div><span className="adm-role">{staffState.staff.demo ? 'LOCAL PREVIEW' : staffState.staff.role.toUpperCase()}</span>{!staffState.staff.demo && <button className="adm-icon" onClick={async () => { await logoutStaff().catch(() => {}); loadStaff() }} aria-label="Sign out"><LogOut size={18} /></button>}</div></div><main className="adm-content">{content}</main></div></div>
 }

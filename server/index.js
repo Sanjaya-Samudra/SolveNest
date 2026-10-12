@@ -498,7 +498,8 @@ app.get('/api/student/dashboard', requireStudent, async (req, res) => {
   const tasks = await Promise.all((await getStudentTasks(req.student.studentId)).map((task) => studentTaskPayload(task, req.student.studentId)))
   const notifications = await listNotifications(req.student.studentId)
   const activity = (await readTaskStore()).activity.filter((item) => item.studentId === req.student.studentId).slice(0, 10)
-  res.json({ student: { id: req.student.studentId, name: req.student.name, role: req.student.role, email: req.student.email || null }, tasks, notifications, recentActivity: activity, upcomingActions: [], unreadMessages: 0 })
+  const unreadMessages = (await readTaskStore()).conversations.filter((item) => item.studentId === req.student.studentId).reduce((total, item) => total + Number(item.unread || 0), 0)
+  res.json({ student: { id: req.student.studentId, name: req.student.name, role: req.student.role, email: req.student.email || null }, tasks, notifications, recentActivity: activity, upcomingActions: [], unreadMessages })
 })
 
 app.get('/api/student/conversations', requireStudent, async (req, res) => {
@@ -530,6 +531,7 @@ app.post('/api/student/conversations/:conversationId/messages', requireStudent, 
     store.messages.push(item)
     conversation.lastMessage = item
     conversation.updatedAt = item.createdAt
+    conversation.staffUnread = true
     addActivity(store, { id: crypto.randomUUID(), studentId: req.student.studentId, taskId: conversation.taskId, type: 'StudentMessageSent', text: 'Message sent to SolveNest.', createdAt: item.createdAt })
     return item
   })
@@ -1640,6 +1642,49 @@ app.post('/api/admin/logout', requireStaff, (req, res) => {
   res.json({ ok: true })
 })
 app.get('/api/admin/overview', requireStaff, staffRoute(async (_req, res) => res.json(await getAdminOverview())))
+app.get('/api/admin/conversations', requireStaff, staffRoute(async (_req, res) => {
+  const state = await readTaskStore()
+  const conversations = state.conversations.map((conversation) => ({ ...conversation, lastMessage: state.messages.filter((message) => message.conversationId === conversation.id).at(-1) || conversation.lastMessage })).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
+  res.json({ conversations })
+}))
+app.get('/api/admin/conversations/:conversationId/messages', requireStaff, staffRoute(async (req, res) => {
+  const state = await readTaskStore()
+  const conversation = state.conversations.find((item) => item.id === req.params.conversationId)
+  if (!conversation) return safeError(res, 404, 'CONVERSATION_NOT_FOUND', 'Conversation not found.')
+  res.json({ conversation, messages: state.messages.filter((item) => item.conversationId === conversation.id) })
+}))
+app.post('/api/admin/conversations/:conversationId/messages', requireStaff, staffRoute(async (req, res) => {
+  if (!limited(`staff-message:${req.staff.id}`, 30)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before sending another message.')
+  const body = String(req.body?.body || '').trim()
+  if (!body || body.length > 4000) return safeError(res, 400, 'MESSAGE_INVALID', 'Message must be between 1 and 4000 characters.')
+  const result = await withTaskStore((store) => {
+    const conversation = store.conversations.find((item) => item.id === req.params.conversationId)
+    if (!conversation) return null
+    const message = { id: crypto.randomUUID(), conversationId: conversation.id, studentId: conversation.studentId, from: 'solvenest', author: req.staff.name || 'SolveNest', role: 'Support', initials: 'SN', body, attachments: [], createdAt: now(), status: 'sent' }
+    store.messages.push(message)
+    conversation.lastMessage = message
+    conversation.updatedAt = message.createdAt
+    conversation.staffUnread = false
+    conversation.unread = Number(conversation.unread || 0) + 1
+    addActivity(store, { id: crypto.randomUUID(), studentId: conversation.studentId, taskId: conversation.taskId, type: 'StaffMessageSent', text: 'SolveNest replied in your task room.', createdAt: message.createdAt })
+    return { message, conversation }
+  })
+  if (!result) return safeError(res, 404, 'CONVERSATION_NOT_FOUND', 'Conversation not found.')
+  try { await addNotification({ id: crypto.randomUUID(), studentId: result.conversation.studentId, title: 'New task message', body: 'SolveNest replied in your task room.', task: { title: result.conversation.taskTitle, ref: result.conversation.taskId }, route: `/student/messages?conversation=${result.conversation.id}`, isRead: false, requiresAction: false, createdAt: result.message.createdAt }) }
+  catch (error) { console.error('[messages] notification failed', error) }
+  publish(result.conversation.studentId, { type: 'MessageCreated', message: result.message })
+  res.status(201).json({ message: result.message })
+}))
+app.post('/api/admin/conversations/:conversationId/read', requireStaff, staffRoute(async (req, res) => {
+  const changed = await withTaskStore((store) => {
+    const conversation = store.conversations.find((item) => item.id === req.params.conversationId)
+    if (!conversation) return false
+    conversation.staffUnread = false
+    return true
+  })
+  if (!changed) return safeError(res, 404, 'CONVERSATION_NOT_FOUND', 'Conversation not found.')
+  res.json({ ok: true })
+}))
 app.get('/api/admin/tasks/:taskId', requireStaff, staffRoute(async (req, res) => {
   const detail = await getAdminCase(req.params.taskId)
   if (!detail) return safeError(res, 404, 'TASK_NOT_FOUND', 'This task could not be found.')
