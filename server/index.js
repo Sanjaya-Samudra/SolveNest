@@ -128,9 +128,15 @@ app.post('/api/payments/stripe/webhook', express.raw({ type: 'application/json' 
   if (!stripe || !process.env.STRIPE_WEBHOOK_SECRET) return res.status(503).json({ error: 'PAYMENTS_NOT_CONFIGURED' })
   let event
   try { event = stripe.webhooks.constructEvent(req.body, req.headers['stripe-signature'], process.env.STRIPE_WEBHOOK_SECRET) } catch { return res.status(400).json({ error: 'INVALID_WEBHOOK' }) }
-  const intent = event.data.object
-  const status = event.type === 'payment_intent.succeeded' ? 'succeeded' : event.type === 'payment_intent.payment_failed' ? 'failed' : null
-  const fundedTask = status ? await recordPaymentStatus(intent.id, status) : null
+  const object = event.data.object
+  const sessionEvent = event.type.startsWith('checkout.session.')
+  const status = event.type === 'checkout.session.completed' ? (object.payment_status === 'paid' ? 'succeeded' : null)
+    : event.type === 'checkout.session.async_payment_succeeded' ? 'succeeded'
+      : event.type === 'checkout.session.async_payment_failed' ? 'failed'
+        : event.type === 'checkout.session.expired' ? 'canceled'
+          : event.type === 'payment_intent.succeeded' ? 'succeeded'
+            : event.type === 'payment_intent.payment_failed' ? 'failed' : null
+  const fundedTask = status && (sessionEvent || object.id.startsWith('pi_')) ? await recordPaymentStatus(object.id, status) : null
   await announceFundedTask(fundedTask)
   res.json({ received: true })
 })
@@ -669,35 +675,57 @@ app.post('/api/student/payments/checkout', requireStudent, async (req, res) => {
   if (existing && ['failed', 'canceled'].includes(existing.status)) return safeError(res, 409, 'PAYMENT_RETRY_REQUIRED', 'Start a new payment attempt for this plan.')
   const active = existing || payments.find((payment) => !['failed', 'canceled', 'succeeded'].includes(payment.status))
   if (active?.providerId) {
-    const intent = await stripe.paymentIntents.retrieve(active.providerId)
-    return res.json({ paymentId: active.id, clientSecret: intent.client_secret, status: intent.status, provider: 'stripe' })
+    if (active.providerId.startsWith('cs_')) {
+      const session = await stripe.checkout.sessions.retrieve(active.providerId)
+      if (session.payment_status === 'paid') {
+        await announceFundedTask(await recordPaymentStatus(active.providerId, 'succeeded'))
+        return safeError(res, 409, 'PLAN_ALREADY_FUNDED', 'This plan has already been funded. Refresh the task to see its new status.')
+      }
+      if (session.status !== 'expired') return res.json({ paymentId: active.id, checkoutUrl: session.url, status: active.status, provider: 'stripe' })
+      await recordPaymentStatus(active.providerId, 'canceled')
+    } else {
+      const intent = await stripe.paymentIntents.retrieve(active.providerId)
+      if (['canceled', 'requires_payment_method'].includes(intent.status)) await recordPaymentStatus(active.providerId, 'failed')
+      else return safeError(res, 409, 'PAYMENT_RETRY_REQUIRED', 'A previous payment attempt must be resolved before starting hosted checkout.')
+    }
   }
-  const attempt = payments.filter((payment) => ['failed', 'canceled'].includes(payment.status)).length
-  const intent = await stripe.paymentIntents.create({ amount: Math.round(amount * 100), currency: process.env.STRIPE_CURRENCY || 'lkr', metadata: { taskId: task.id, studentId: req.student.studentId } }, { idempotencyKey: `plan-${plan.id}-attempt-${attempt}` })
-  const payment = { id: crypto.randomUUID(), providerId: intent.id, studentId: req.student.studentId, taskId: task.id, planId: plan?.id || null, amount, currency: process.env.STRIPE_CURRENCY || 'lkr', status: intent.status, idempotencyKey: key, createdAt: now() }
+  const attempt = payments.filter((payment) => ['failed', 'canceled'].includes(payment.status)).length + (active?.providerId ? 1 : 0)
+  const origin = process.env.PUBLIC_APP_URL || 'http://localhost:5173'
+  const session = await stripe.checkout.sessions.create({
+    mode: 'payment',
+    client_reference_id: task.id,
+    customer_email: req.student.email || undefined,
+    line_items: [{ price_data: { currency: process.env.STRIPE_CURRENCY || 'lkr', unit_amount: Math.round(amount * 100), product_data: { name: `SolveNest plan ${plan.reference || task.id}` } }, quantity: 1 }],
+    success_url: `${origin.replace(/\/$/, '')}/student/payments?task=${encodeURIComponent(task.id)}&section=history`,
+    cancel_url: `${origin.replace(/\/$/, '')}/student/payments?task=${encodeURIComponent(task.id)}&section=funding`,
+    metadata: { taskId: task.id, studentId: req.student.studentId, planId: plan.id },
+    payment_intent_data: { metadata: { taskId: task.id, studentId: req.student.studentId, planId: plan.id } },
+  }, { idempotencyKey: `plan-${plan.id}-attempt-${attempt}` })
+  const payment = { id: crypto.randomUUID(), providerId: session.id, studentId: req.student.studentId, taskId: task.id, planId: plan.id, amount, currency: process.env.STRIPE_CURRENCY || 'lkr', status: 'pending', idempotencyKey: key, createdAt: now() }
   let stored
   try {
     stored = await withTaskStore((store) => {
-      const prior = store.payments.find((item) => item.providerId === intent.id)
+      const prior = store.payments.find((item) => item.providerId === session.id)
       if (prior) return prior
       store.payments.push(payment)
       return payment
     })
   } catch (error) {
     if (error.message !== 'APP_STATE_CONFLICT') throw error
-    stored = (await readTaskStore()).payments.find((item) => item.providerId === intent.id && item.studentId === req.student.studentId)
+    stored = (await readTaskStore()).payments.find((item) => item.providerId === session.id && item.studentId === req.student.studentId)
     if (!stored) throw error
   }
-  res.status(stored.id === payment.id ? 201 : 200).json({ paymentId: stored.id, clientSecret: intent.client_secret, provider: 'stripe', status: stored.status })
+  res.status(stored.id === payment.id ? 201 : 200).json({ paymentId: stored.id, checkoutUrl: session.url, provider: 'stripe', status: stored.status })
 })
 
 app.get('/api/student/payments/payments/:paymentId/status', requireStudent, async (req, res) => {
   const payment = (await readTaskStore()).payments.find((item) => item.id === req.params.paymentId && item.studentId === req.student.studentId)
   if (!payment) return safeError(res, 404, 'PAYMENT_NOT_FOUND', 'Payment not found.')
   if (stripe && payment.providerId) {
-    const intent = await stripe.paymentIntents.retrieve(payment.providerId)
-    payment.status = intent.status
-    const fundedTask = await recordPaymentStatus(payment.providerId, intent.status)
+    const provider = payment.providerId.startsWith('cs_') ? await stripe.checkout.sessions.retrieve(payment.providerId) : await stripe.paymentIntents.retrieve(payment.providerId)
+    const status = payment.providerId.startsWith('cs_') ? provider.payment_status === 'paid' ? 'succeeded' : provider.status === 'expired' ? 'canceled' : 'pending' : provider.status
+    payment.status = status
+    const fundedTask = await recordPaymentStatus(payment.providerId, status)
     await announceFundedTask(fundedTask)
   }
   res.json(payment)
@@ -718,7 +746,9 @@ app.get('/api/student/payments/payments/:paymentId/receipt', requireStudent, asy
   const payment = (await readTaskStore()).payments.find((item) => item.id === req.params.paymentId && item.studentId === req.student.studentId)
   if (!payment || payment.status !== 'succeeded') return safeError(res, 404, 'RECEIPT_NOT_FOUND', 'Receipt is not available yet.')
   if (!stripe || !payment.providerId) return safeError(res, 503, 'RECEIPT_UNAVAILABLE', 'The payment provider is unavailable.')
-  const intent = await stripe.paymentIntents.retrieve(payment.providerId, { expand: ['latest_charge'] })
+  const session = payment.providerId.startsWith('cs_') ? await stripe.checkout.sessions.retrieve(payment.providerId) : null
+  const intentId = typeof session?.payment_intent === 'string' ? session.payment_intent : session?.payment_intent?.id || payment.providerId
+  const intent = await stripe.paymentIntents.retrieve(intentId, { expand: ['latest_charge'] })
   const charge = typeof intent.latest_charge === 'string' ? await stripe.charges.retrieve(intent.latest_charge) : intent.latest_charge
   if (!charge?.receipt_url) return safeError(res, 404, 'RECEIPT_NOT_FOUND', 'The payment provider has not issued a receipt yet.')
   res.json({ url: charge.receipt_url, filename: null })

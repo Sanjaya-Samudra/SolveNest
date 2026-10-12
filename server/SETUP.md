@@ -89,7 +89,7 @@ Expose a server-to-server Solvy endpoint that accepts authorized file metadata a
 
 ## 8. Payments
 
-Set the Stripe server variables, configure a Stripe webhook for `/api/payments/stripe/webhook`, and subscribe it to `payment_intent.succeeded` and `payment_intent.payment_failed`. The browser receives only a PaymentIntent client secret; Stripe secrets remain server-side.
+Set the Stripe server variables, configure a Stripe webhook for `/api/payments/stripe/webhook`, and subscribe it to `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, and `checkout.session.expired`. Existing PaymentIntent events remain accepted for older payment records. The browser receives a short-lived hosted Checkout URL; Stripe secrets remain server-side. The return URL only brings the Student back to the app. Funding is recorded after a signed webhook or a provider status lookup confirms payment.
 
 ## 9. HTTPS and process management
 

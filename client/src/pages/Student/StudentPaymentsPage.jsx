@@ -977,7 +977,7 @@ export default function StudentPaymentsPage() {
       planId: planQuery.data?.id || null,
     })
     if (result?.checkoutUrl) {
-      checkout.handoff()
+      window.location.assign(result.checkoutUrl)
     }
   }, [viewState.taskId, focusQuery.data, currentMs, planQuery.data, checkout])
 
