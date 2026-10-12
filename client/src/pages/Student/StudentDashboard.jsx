@@ -208,7 +208,7 @@ function resolveDashboardState(model) {
   const key = model.focusAction?.task?.display?.key || ''
   if (['DELIVERED', 'REVISION_REQUESTED'].includes(key)) return { status: 'DELIVERY READY', headline: 'Your delivery is ready.', body: 'Your task is ready to review.', tone: 'delivery' }
   if (key === 'PAYMENT_PENDING') return { status: 'FUNDING REQUIRED', headline: 'A payment is needed.', body: 'Work begins once the required payment is completed.', tone: 'payment' }
-  if (key === 'ASSIGNMENT_PENDING') return { status: 'MATCHING', headline: 'Matching expertise.', body: 'SolveNest is reviewing suitable expertise for your task.', tone: 'waiting' }
+  if (key === 'ASSIGNMENT_PENDING') return { status: 'EXPERT ASSIGNED', headline: 'Your Expert is ready.', body: 'Your task has moved into the Expert workspace.', tone: 'waiting' }
   if (['QUOTE_READY', 'AWAITING_ACCEPTANCE'].includes(key)) return { status: 'ACTION REQUIRED', headline: 'A decision is waiting.', body: 'Your official plan is ready to review.', tone: 'action' }
   if (key === 'NEEDS_INFORMATION') return { status: 'ACTION REQUIRED', headline: 'More information needed.', body: 'Please respond to complete the task.', tone: 'action' }
   if (['IN_PROGRESS', 'QUALITY_REVIEW', 'REVISION_IN_PROGRESS'].includes(key)) return { status: 'IN PROGRESS', headline: 'Your task is moving forward.', body: 'Solvy is working on your request.', tone: 'progress' }
@@ -430,7 +430,7 @@ export function StudentDashboard() {
   const [notificationState, setNotificationState] = useState({ items: [], unreadCount: 0 })
   const load = () => { const controller = new AbortController(); setState((current) => ({ ...current, loading: true, error: null })); fetchStudentDashboard(controller.signal).then((model) => setState({ loading: false, error: null, model })).catch((error) => { if (error.name !== 'AbortError') setState({ loading: false, error, model: null }) }); return () => controller.abort() }
   useEffect(() => load(), [])
-  useEffect(() => { const events = new EventSource('/api/student/events', { withCredentials: true }); const refresh = () => { load(); loadNotifications({ force: true }).catch(() => {}) }; events.addEventListener('TaskSubmittedForReview', refresh); events.addEventListener('AnalysisCompleted', refresh); return () => events.close() }, [])
+  useEffect(() => { const events = new EventSource('/api/student/events', { withCredentials: true }); const refresh = () => { load(); loadNotifications({ force: true }).catch(() => {}) }; ['TaskSubmittedForReview', 'AnalysisCompleted', 'PlanIssued', 'PlanAccepted', 'TaskFunded', 'ExpertAssigned', 'TaskDelivered', 'RevisionRequested', 'RevisionStarted', 'MessageCreated'].forEach((type) => events.addEventListener(type, refresh)); return () => events.close() }, [])
   useEffect(() => { window.localStorage.setItem('sn-student-sidebar', collapsed ? 'collapsed' : 'expanded') }, [collapsed])
   useEffect(() => {
     const unsubscribe = subscribeNotifications((snapshot) => setNotificationState({ items: snapshot.items, unreadCount: snapshot.unreadCount }))

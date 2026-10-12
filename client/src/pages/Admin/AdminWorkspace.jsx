@@ -15,7 +15,7 @@ const fmtDate = (value) => value ? new Date(value).toLocaleDateString(undefined,
 const fmtTime = (value) => value ? new Date(value).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) : 'Not set'
 const shortId = (value) => String(value || '').slice(0, 8).toUpperCase()
 const reviewLabel = { QUEUED: 'Needs review', IN_REVIEW: 'In review', APPROVED: 'Approved internally', NEEDS_INFO: 'Needs information', DECLINED: 'Declined internally' }
-const filters = [['queue', 'Needs review'], ['in-review', 'In review'], ['decided', 'Decisions'], ['all', 'All tasks']]
+const filters = [['queue', 'Needs review'], ['in-review', 'In review'], ['ready', 'Ready to assign'], ['decided', 'Decisions'], ['all', 'All tasks']]
 
 function go(id) {
   window.history.pushState({}, '', pathFor(id))
@@ -61,6 +61,7 @@ function AdminSidebar({ section, filter, setFilter, staff, mobileOpen, setMobile
         <p className="adm-nav-label">OPERATIONS</p>
         <button className={section === 'tasks' && filter === 'queue' ? 'is-active' : ''} onClick={() => { setFilter('queue'); setMobileOpen(false); go(null) }}><LayoutDashboard size={17} /> Action queue</button>
         <button className={section === 'tasks' && filter === 'in-review' ? 'is-active' : ''} onClick={() => { setFilter('in-review'); setMobileOpen(false); go(null) }}><Clock3 size={17} /> In review</button>
+        <button className={section === 'tasks' && filter === 'ready' ? 'is-active' : ''} onClick={() => { setFilter('ready'); setMobileOpen(false); go(null) }}><Bell size={17} /> Ready to assign</button>
         <button className={section === 'tasks' && filter === 'decided' ? 'is-active' : ''} onClick={() => { setFilter('decided'); setMobileOpen(false); go(null) }}><CheckCircle2 size={17} /> Decisions</button>
         <button className={section === 'tasks' && filter === 'all' ? 'is-active' : ''} onClick={() => { setFilter('all'); setMobileOpen(false); go(null) }}><ClipboardList size={17} /> All tasks</button>
         <p className="adm-nav-label" style={{ marginTop: 22 }}>SERVICE DESK</p>
@@ -77,7 +78,7 @@ function Metric({ value, label, icon: Icon, tone }) { return <div className="adm
 function Queue({ overview, filter, setFilter, onOpen }) {
   const [search, setSearch] = useState('')
   const list = useMemo(() => (overview.tasks || []).filter((task) => {
-    const stateMatch = filter === 'all' || (filter === 'queue' && task.reviewStatus === 'QUEUED') || (filter === 'in-review' && task.reviewStatus === 'IN_REVIEW') || (filter === 'decided' && ['APPROVED', 'NEEDS_INFO', 'DECLINED'].includes(task.reviewStatus))
+    const stateMatch = filter === 'all' || (filter === 'queue' && task.reviewStatus === 'QUEUED') || (filter === 'in-review' && task.reviewStatus === 'IN_REVIEW') || (filter === 'ready' && task.status === 'PAID' && !task.assignedExpertId) || (filter === 'decided' && ['APPROVED', 'NEEDS_INFO', 'DECLINED'].includes(task.reviewStatus))
     return stateMatch && `${task.title} ${task.subject || ''} ${task.id} ${task.studentId}`.toLowerCase().includes(search.toLowerCase())
   }), [overview.tasks, filter, search])
   return <>
@@ -85,7 +86,7 @@ function Queue({ overview, filter, setFilter, onOpen }) {
     <div className="adm-metrics">
       <Metric label="Needs review" value={overview.metrics.queued} icon={Bell} tone="amber" />
       <Metric label="In review" value={overview.metrics.inReview} icon={Clock3} tone="blue" />
-      <Metric label="Decisions recorded" value={overview.metrics.decided} icon={CheckCircle2} tone="green" />
+      <Metric label="Ready to assign" value={overview.metrics.readyToAssign || 0} icon={Bell} tone="green" />
       <Metric label="QA waiting" value={overview.metrics.qaWaiting} icon={ShieldCheck} />
     </div>
     <section className="adm-panel adm-queue">

@@ -38,6 +38,7 @@ export async function getAdminOverview() {
       queued: tasks.filter((task) => task.reviewStatus === 'QUEUED').length,
       inReview: tasks.filter((task) => task.reviewStatus === 'IN_REVIEW').length,
       decided: tasks.filter((task) => ['APPROVED', 'NEEDS_INFO', 'DECLINED'].includes(task.reviewStatus)).length,
+      readyToAssign: tasks.filter((task) => task.status === 'PAID' && !task.assignedExpertId).length,
       qaWaiting: experts.reduce((total, { store }) => total + store.assignments.filter((item) => item.workspace?.qa?.state === 'in_review').length, 0),
       supportOpen: tickets.filter((item) => !['closed', 'resolved'].includes(String(item.status || '').toLowerCase())).length,
     },

@@ -201,7 +201,7 @@ function lifecyclePreviewHeader(state) {
     QUOTE_READY: { status: 'OFFICIAL PLAN READY', tone: 'action' },
     AWAITING_ACCEPTANCE: { status: 'AWAITING YOUR DECISION', tone: 'action' },
     PAYMENT_PENDING: { status: 'FUNDING REQUIRED', tone: 'payment' },
-    ASSIGNMENT_PENDING: { status: 'MATCHING', tone: 'waiting' },
+    ASSIGNMENT_PENDING: { status: 'EXPERT ASSIGNED', tone: 'waiting' },
     IN_PROGRESS: { status: 'IN PROGRESS', tone: 'progress' },
     QUALITY_REVIEW: { status: 'QUALITY REVIEW', tone: 'review' },
     REVISION_IN_PROGRESS: { status: 'REVISION IN PROGRESS', tone: 'progress' },
