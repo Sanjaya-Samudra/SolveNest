@@ -722,13 +722,13 @@ app.get('/api/student/payments/tasks/:taskId/scope-change', requireStudent, asyn
   const task = await getStudentTask(req.student.studentId, req.params.taskId)
   const change = (await readTaskStore()).scopeChanges.find((item) => item.taskId === req.params.taskId && item.studentId === req.student.studentId && item.status !== 'ACCEPTED')
   if (!task || !change) return safeError(res, 404, 'SCOPE_CHANGE_NOT_FOUND', 'No scope change is waiting for you.')
-  res.json({ scopeChange: change })
+  res.json({ scopeChange: { ...change, canAccept: false, status: 'REVIEW_REQUIRED' } })
 })
 
 app.post('/api/student/payments/scope-changes/:scopeChangeId/accept', requireStudent, async (req, res) => {
-  const change = await withTaskStore((store) => { const item = store.scopeChanges.find((candidate) => candidate.id === req.params.scopeChangeId && candidate.studentId === req.student.studentId); if (item) item.status = 'ACCEPTED'; return item || null })
+  const change = (await readTaskStore()).scopeChanges.find((candidate) => candidate.id === req.params.scopeChangeId && candidate.studentId === req.student.studentId)
   if (!change) return safeError(res, 404, 'SCOPE_CHANGE_NOT_FOUND', 'Scope change not found.')
-  res.json({ scopeChange: change })
+  return safeError(res, 409, 'SCOPE_CHANGE_UNAVAILABLE', 'Scope changes require a new approved quote and payment workflow. Contact support to review the change.')
 })
 
 app.post('/api/student/explain/tasks/:taskId/explain', requireStudent, async (req, res) => {

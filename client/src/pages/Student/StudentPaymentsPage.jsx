@@ -720,7 +720,7 @@ function ScopeChangePanel({ change, onAccept, accepting }) {
       <EmptyState
         icon={<AlertTriangle size={24} aria-hidden="true" />}
         title="No pending scope change"
-        body="If your tutor requests a scope revision, the comparison will appear here."
+        body="For new requirements outside your accepted plan, contact support to request a revised quote."
       />
     )
   }
@@ -734,6 +734,7 @@ function ScopeChangePanel({ change, onAccept, accepting }) {
         </StatusPill>
       </header>
       {change.reason ? <p className="sn-pay-scope__reason">{change.reason}</p> : null}
+      {!change.canAccept ? <p className="sn-pay-scope__reason">Contact support to review the revised quote and any additional payment before work changes.</p> : null}
       <div className="sn-pay-scope__compare">
         <div className="sn-pay-scope__col">
           <h4>Previous</h4>
