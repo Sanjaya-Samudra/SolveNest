@@ -57,7 +57,29 @@ export async function getAdminCase(taskId) {
     activity: store.activity.filter((item) => item.taskId === taskId).slice(0, 20),
     audit: (store.adminAudit || []).filter((item) => item.taskId === taskId).slice(0, 20),
     plan: store.plans.find((item) => item.taskId === taskId && !['superseded', 'revised'].includes(String(item.status).toLowerCase())) || null,
+    scopeChange: store.scopeChanges.find((item) => item.taskId === taskId && ['REQUESTED', 'AWAITING_PAYMENT'].includes(item.status)) || null,
   }
+}
+
+export async function issueAdminScopeChange(taskId, actorId, input) {
+  const scope = String(input?.scope || '').trim().slice(0, 4000)
+  const reason = String(input?.reason || '').trim().slice(0, 2000)
+  const priceDelta = Number(input?.priceDelta)
+  const delivery = new Date(String(input?.delivery || ''))
+  if (scope.length < 20 || reason.length < 10 || !Number.isSafeInteger(priceDelta) || priceDelta < 0 || priceDelta > 100000000 || Number.isNaN(delivery.getTime()) || delivery.getTime() <= Date.now()) return { error: 'SCOPE_CHANGE_INVALID' }
+  return withTaskStore((store) => {
+    const task = store.tasks.find((item) => item.id === taskId)
+    const plan = store.plans.find((item) => item.taskId === taskId && item.status === 'ACCEPTED')
+    if (!task || !plan) return { error: 'TASK_OR_PLAN_NOT_FOUND' }
+    if (!['PAID', 'ASSIGNMENT_PENDING', 'REVISION_REQUESTED', 'REVISION_IN_PROGRESS'].includes(task.status)) return { error: 'TASK_NOT_ELIGIBLE' }
+    if (store.scopeChanges.some((item) => item.taskId === taskId && ['REQUESTED', 'AWAITING_PAYMENT'].includes(item.status))) return { error: 'SCOPE_CHANGE_PENDING' }
+    const issuedAt = new Date().toISOString()
+    const change = { id: crypto.randomUUID(), taskId, studentId: task.studentId, planId: plan.id, status: 'REQUESTED', reason, original: { scope: plan.scope, price: plan.amount, delivery: plan.delivery }, requested: { scope, priceDelta, delivery: delivery.toISOString() }, newTotal: plan.amount + priceDelta, currency: plan.currency, issuedAt, issuedBy: actorId, canAccept: true }
+    store.scopeChanges.unshift(change)
+    store.adminAudit = store.adminAudit || []
+    store.adminAudit.unshift({ id: crypto.randomUUID(), taskId, actorId, action: 'issue_scope_change', note: reason, at: issuedAt })
+    return { ok: true, change, studentId: task.studentId, title: task.title }
+  })
 }
 
 export async function issueAdminPlan(taskId, actorId, input) {

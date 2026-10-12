@@ -93,6 +93,8 @@ Set the Stripe server variables, configure a Stripe webhook for `/api/payments/s
 
 An Admin can issue either a full-payment plan or a two-milestone plan. The first milestone unlocks Expert assignment; the second must be paid before an approved delivery is released. The Admin chooses the first milestone percentage when issuing the quote. The plan shown to the Student lists both amounts before acceptance. Each milestone uses a separate Checkout Session and payment record.
 
+For work that changes after acceptance, an Admin can issue a scope change while the Expert assignment remains open. The Student sees the old and revised scope, date, and additional price. A zero-price change applies on acceptance; a paid change applies only after its separate Checkout Session is confirmed. Accepted changes update the Expert brief. If the Expert workspace is temporarily unavailable, the API retries that sync every minute.
+
 ## 9. HTTPS and process management
 
 Serve the built `client/dist` site over HTTPS. Route `/api` on that same origin to the Node API, because browser requests use relative `/api` paths and session cookies are scoped to the site. Terminate TLS at a trusted reverse proxy, set `TRUST_PROXY_HOPS` to its exact hop count, and keep the API private behind that proxy. Allow SSE connections through it with buffering disabled. Start with one API instance: sessions and rate limits are shared, but domain records still live in the single `app_state` JSON document and concurrent edits can return a conflict.
@@ -108,4 +110,4 @@ Serve the built `client/dist` site over HTTPS. Route `/api` on that same origin 
 7. Build the client with `npm --prefix client run build`, start the API with `npm --prefix server start`, and confirm `/api/health` responds through the public HTTPS domain.
 8. Manually register and sign in a Student, upload a brief and rubric, run analysis, create a task, issue and accept a plan, complete a real payment, assign an Expert, submit for Admin QA, deliver, and request a revision. Confirm password recovery and signed file downloads.
 
-Do not open a public launch yet: the active domain model remains one `app_state` JSON document; scope-change billing is intentionally unavailable; upload validation checks file signatures but does not scan malware or archive contents; provider connectivity, email delivery, and live payment behavior cannot be verified until accounts and credentials exist. Complete these gates and repeat the manual flow before launch.
+Do not open a public launch yet: the active task/payment domain model remains one `app_state` JSON document; upload validation checks file signatures but does not scan malware or archive contents; provider connectivity, email delivery, and live payment behavior cannot be verified until accounts and credentials exist. Complete these gates and repeat the manual flow before launch.

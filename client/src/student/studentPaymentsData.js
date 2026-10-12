@@ -298,10 +298,12 @@ export function mapScopeChange(raw) {
       scope: payload.requested?.scope || payload.requestedScope || payload.scopeAfter || payload.addition || null,
       priceDelta: payload.requested?.priceDelta ?? payload.priceDelta ?? payload.additionalPrice ?? payload.priceAfter ?? null,
       deliveryDelta: payload.requested?.deliveryDelta ?? payload.deliveryDelta ?? payload.additionalTime ?? payload.deliveryAfter ?? null,
+      delivery: payload.requested?.delivery || payload.requestedDelivery || null,
     },
     currency: payload.currency || 'LKR',
     newTotal: payload.newTotal != null ? Number(payload.newTotal) : null,
     canAccept: payload.canAccept ?? ['requested', 'pending', 'awaiting_acceptance'].includes(String(payload.status || '').toLowerCase()),
+    checkoutUrl: payload.checkoutUrl || raw.checkoutUrl || null,
     raw: payload,
   }
 }

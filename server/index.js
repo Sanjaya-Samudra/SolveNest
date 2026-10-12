@@ -13,6 +13,7 @@ import { getCatalog, resolveGuidance, searchHelp } from './helpStore.js'
 import { createSupportTicket, getStudentSupportTicket, listStudentSupportTickets, listSupportTickets, getSupportTicket, updateSupportTicket } from './supportStore.js'
 import {
   addAssignmentFile,
+  applyAssignmentScopeChange,
   appendProgressUpdate,
   applyQaOutcome,
   beginAssignmentRevision,
@@ -49,7 +50,7 @@ import { publish, subscribe } from './realtime.js'
 import { hasObjectStorage, persistUpload, removeStoredObject, signedObjectUrl } from './storage.js'
 import { hasEmail, sendEmail } from './email.js'
 import { hasSupabase, hasSupabaseAuth, supabaseChangeStaffRole, supabaseConsumeRateLimit, supabaseCreateAppSession, supabaseDeleteAppSession, supabaseExpertProfiles, supabaseFindProfileByEmail, supabaseGetAppSession, supabaseProfile, supabaseRefresh, supabaseRequestPasswordReset, supabaseTeam, supabaseUpdatePassword, supabaseSignIn, supabaseSignUp, supabaseUser } from './supabase.js'
-import { getAdminCase, getAdminOverview, getAdminQaCase, issueAdminPlan, listAdminQaAssignments, recordAdminReview } from './adminStore.js'
+import { getAdminCase, getAdminOverview, getAdminQaCase, issueAdminPlan, issueAdminScopeChange, listAdminQaAssignments, recordAdminReview } from './adminStore.js'
 import { getSuperadminActivity, getSuperadminOverview } from './superadminStore.js'
 
 const PORT = Number(process.env.PORT || 4174)
@@ -96,24 +97,57 @@ const upload = multer({
 const app = express()
 const trustedProxyHops = Number(process.env.TRUST_PROXY_HOPS || 0)
 if (Number.isSafeInteger(trustedProxyHops) && trustedProxyHops > 0 && trustedProxyHops <= 3) app.set('trust proxy', trustedProxyHops)
-async function recordPaymentStatus(providerId, status) {
+function applyApprovedScopeChange(store, change, task, plan, stamp) {
+  if (change.status === 'ACCEPTED') return null
+  change.status = 'ACCEPTED'
+  change.acceptedAt = stamp
+  change.canAccept = false
+  change.expertSyncPending = Boolean(task.assignedExpertId && task.assignmentId)
+  plan.scope = change.requested.scope
+  plan.delivery = change.requested.delivery
+  plan.amount += change.requested.priceDelta
+  plan.price = plan.amount
+  task.deadline = plan.delivery
+  task.amountDue = Number(task.amountDue || 0)
+  task.funding = { ...(task.funding || {}), amountTotal: plan.amount, amountFunded: Number(task.funding?.amountFunded || plan.amount - change.requested.priceDelta - task.amountDue) + change.requested.priceDelta, amountDue: task.amountDue }
+  task.latestUpdate = { text: 'Your approved scope and delivery date have been updated.', createdAt: stamp }
+  task.updatedAt = stamp
+  addActivity(store, { id: crypto.randomUUID(), studentId: task.studentId, taskId: task.id, type: 'ScopeChangeAccepted', text: task.latestUpdate.text, createdAt: stamp })
+  return { id: task.id, studentId: task.studentId, title: task.title, at: stamp, scopeChangeId: change.id }
+}
+async function recordPaymentStatus(providerId, status, requireRecord = false) {
   return withTaskStore((store) => {
     const payment = store.payments.find((item) => item.providerId === providerId)
-    if (!payment) return null
-    if (payment.status === 'succeeded') return null
+    if (!payment) {
+      if (requireRecord) throw new Error('PAYMENT_RECORD_PENDING')
+      return null
+    }
+    if (payment.status === 'succeeded') {
+      const change = payment.scopeChangeId ? store.scopeChanges.find((item) => item.id === payment.scopeChangeId) : null
+      return change?.expertSyncPending ? { scopeChangeId: change.id, id: change.taskId, studentId: change.studentId } : null
+    }
     payment.status = status
     if (status !== 'succeeded') return null
     const task = store.tasks.find((item) => item.id === payment.taskId && item.studentId === payment.studentId)
     const plan = store.plans.find((item) => item.id === payment.planId && item.status === 'ACCEPTED')
-    if (!task || !plan) return null
+    if (!task || !plan) {
+      if (payment.scopeChangeId) throw new Error('SCOPE_PAYMENT_PLAN_MISSING')
+      return null
+    }
     const stamp = now()
+    if (payment.scopeChangeId) {
+      const change = store.scopeChanges.find((item) => item.id === payment.scopeChangeId && item.taskId === task.id && item.status === 'AWAITING_PAYMENT')
+      if (!change) throw new Error('SCOPE_PAYMENT_CHANGE_MISSING')
+      return applyApprovedScopeChange(store, change, task, plan, stamp)
+    }
     if (payment.milestoneId) {
       const milestone = plan.milestones?.find((item) => item.id === payment.milestoneId)
       if (!milestone || milestone.fundingState === 'funded') return null
       milestone.fundingState = 'funded'
       milestone.paidAt = stamp
       milestone.paymentId = payment.id
-      const amountFunded = plan.milestones.filter((item) => item.fundingState === 'funded').reduce((total, item) => total + item.amount, 0)
+      const scopeFunded = store.payments.filter((item) => item.planId === plan.id && item.scopeChangeId && item.status === 'succeeded').reduce((total, item) => total + item.amount, 0)
+      const amountFunded = scopeFunded + plan.milestones.filter((item) => item.fundingState === 'funded').reduce((total, item) => total + item.amount, 0)
       const next = plan.milestones.find((item) => item.fundingState !== 'funded')
       if (next) next.fundingState = 'payment_required'
       task.amountDue = Math.max(0, plan.amount - amountFunded)
@@ -140,9 +174,23 @@ async function recordPaymentStatus(providerId, status) {
 
 async function announceFundedTask(task) {
   if (!task) return
-  try { await addNotification({ id: crypto.randomUUID(), studentId: task.studentId, title: task.milestoneName ? `${task.milestoneName} funded` : 'Task funded', body: task.milestoneName ? task.remaining ? 'Expert work can begin. The final milestone is due before delivery.' : 'All milestones are funded and delivery can be released.' : 'Your task is ready for Expert assignment.', task: { title: task.title, ref: task.id }, route: `/student/payments?task=${task.id}&section=${task.milestoneName ? 'milestones' : 'funding'}`, isRead: false, requiresAction: false, createdAt: task.at }) }
+  if (task.scopeChangeId) await syncApprovedScopeChange(task.scopeChangeId)
+  if (!task.at) return
+  try { await addNotification({ id: crypto.randomUUID(), studentId: task.studentId, title: task.scopeChangeId ? 'Scope change approved' : task.milestoneName ? `${task.milestoneName} funded` : 'Task funded', body: task.scopeChangeId ? 'Your updated scope and delivery date are now in effect.' : task.milestoneName ? task.remaining ? 'Expert work can begin. The final milestone is due before delivery.' : 'All milestones are funded and delivery can be released.' : 'Your task is ready for Expert assignment.', task: { title: task.title, ref: task.id }, route: `/student/payments?task=${task.id}&section=${task.milestoneName ? 'milestones' : 'funding'}`, isRead: false, requiresAction: false, createdAt: task.at }) }
   catch (error) { console.error('[payment] notification failed', error) }
   publish(task.studentId, { type: 'TaskFunded', taskId: task.id })
+}
+
+async function syncApprovedScopeChange(scopeChangeId) {
+  const state = await readTaskStore()
+  const change = state.scopeChanges.find((item) => item.id === scopeChangeId && item.status === 'ACCEPTED' && item.expertSyncPending)
+  if (!change) return
+  const task = state.tasks.find((item) => item.id === change.taskId)
+  if (!task?.assignedExpertId || !task.assignmentId) return
+  const result = await runForExpert(task.assignedExpertId, () => applyAssignmentScopeChange(task.assignmentId, change))
+  if (!result.ok) throw new Error(result.error || 'SCOPE_EXPERT_SYNC_FAILED')
+  await withTaskStore((store) => { const current = store.scopeChanges.find((item) => item.id === scopeChangeId); if (current) current.expertSyncPending = false })
+  publishExpert(task.assignedExpertId, 'AssignmentChanged', { assignmentId: task.assignmentId, at: now() })
 }
 
 app.post('/api/payments/stripe/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
@@ -157,9 +205,14 @@ app.post('/api/payments/stripe/webhook', express.raw({ type: 'application/json' 
         : event.type === 'checkout.session.expired' ? 'canceled'
           : event.type === 'payment_intent.succeeded' ? 'succeeded'
             : event.type === 'payment_intent.payment_failed' ? 'failed' : null
-  const fundedTask = status && (sessionEvent || object.id.startsWith('pi_')) ? await recordPaymentStatus(object.id, status) : null
-  await announceFundedTask(fundedTask)
-  res.json({ received: true })
+  try {
+    const fundedTask = status && (sessionEvent || object.id.startsWith('pi_')) ? await recordPaymentStatus(object.id, status, Boolean(object.metadata?.taskId)) : null
+    await announceFundedTask(fundedTask)
+    res.json({ received: true })
+  } catch (error) {
+    console.error('[stripe-webhook] reconciliation failed', error)
+    res.status(503).json({ error: 'PAYMENT_RECONCILIATION_PENDING' })
+  }
 })
 app.use(express.json())
 
@@ -168,6 +221,8 @@ function now() { return new Date().toISOString() }
 function safeError(res, status, code, message, fieldErrors = {}) {
   res.status(status).json({ error: code, code, message, fieldErrors, retryable: status >= 500 })
 }
+
+const studentRoute = (handler) => (req, res, next) => Promise.resolve(handler(req, res)).catch(next)
 
 async function limited(key, max = 10) {
   if (process.env.NODE_ENV === 'production') {
@@ -757,11 +812,13 @@ app.get('/api/student/payments/payments/:paymentId/status', requireStudent, asyn
   const payment = (await readTaskStore()).payments.find((item) => item.id === req.params.paymentId && item.studentId === req.student.studentId)
   if (!payment) return safeError(res, 404, 'PAYMENT_NOT_FOUND', 'Payment not found.')
   if (stripe && payment.providerId) {
-    const provider = payment.providerId.startsWith('cs_') ? await stripe.checkout.sessions.retrieve(payment.providerId) : await stripe.paymentIntents.retrieve(payment.providerId)
-    const status = payment.providerId.startsWith('cs_') ? provider.payment_status === 'paid' ? 'succeeded' : provider.status === 'expired' ? 'canceled' : 'pending' : provider.status
-    payment.status = status
-    const fundedTask = await recordPaymentStatus(payment.providerId, status)
-    await announceFundedTask(fundedTask)
+    try {
+      const provider = payment.providerId.startsWith('cs_') ? await stripe.checkout.sessions.retrieve(payment.providerId) : await stripe.paymentIntents.retrieve(payment.providerId)
+      const status = payment.providerId.startsWith('cs_') ? provider.payment_status === 'paid' ? 'succeeded' : provider.status === 'expired' ? 'canceled' : 'pending' : provider.status
+      payment.status = status
+      const fundedTask = await recordPaymentStatus(payment.providerId, status)
+      await announceFundedTask(fundedTask)
+    } catch (error) { console.error('[payment-status] reconciliation pending', error); return safeError(res, 503, 'PAYMENT_STATUS_PENDING', 'Payment status could not be finalized yet. Please try again.') }
   }
   res.json(payment)
 })
@@ -791,16 +848,68 @@ app.get('/api/student/payments/payments/:paymentId/receipt', requireStudent, asy
 
 app.get('/api/student/payments/tasks/:taskId/scope-change', requireStudent, async (req, res) => {
   const task = await getStudentTask(req.student.studentId, req.params.taskId)
-  const change = (await readTaskStore()).scopeChanges.find((item) => item.taskId === req.params.taskId && item.studentId === req.student.studentId && item.status !== 'ACCEPTED')
+  const change = (await readTaskStore()).scopeChanges.find((item) => item.taskId === req.params.taskId && item.studentId === req.student.studentId && ['REQUESTED', 'AWAITING_PAYMENT'].includes(item.status))
   if (!task || !change) return safeError(res, 404, 'SCOPE_CHANGE_NOT_FOUND', 'No scope change is waiting for you.')
-  res.json({ scopeChange: { ...change, canAccept: false, status: 'REVIEW_REQUIRED' } })
+  res.json({ scopeChange: { ...change, canAccept: true } })
 })
 
-app.post('/api/student/payments/scope-changes/:scopeChangeId/accept', requireStudent, async (req, res) => {
-  const change = (await readTaskStore()).scopeChanges.find((candidate) => candidate.id === req.params.scopeChangeId && candidate.studentId === req.student.studentId)
+app.post('/api/student/payments/scope-changes/:scopeChangeId/accept', requireStudent, studentRoute(async (req, res) => {
+  const state = await readTaskStore()
+  const change = state.scopeChanges.find((candidate) => candidate.id === req.params.scopeChangeId && candidate.studentId === req.student.studentId)
   if (!change) return safeError(res, 404, 'SCOPE_CHANGE_NOT_FOUND', 'Scope change not found.')
-  return safeError(res, 409, 'SCOPE_CHANGE_UNAVAILABLE', 'Scope changes require a new approved quote and payment workflow. Contact support to review the change.')
-})
+  if (change.status === 'ACCEPTED') return res.json({ scopeChange: change })
+  if (!['REQUESTED', 'AWAITING_PAYMENT'].includes(change.status)) return safeError(res, 409, 'SCOPE_CHANGE_NOT_READY', 'This scope change can no longer be accepted.')
+  const task = state.tasks.find((item) => item.id === change.taskId && item.studentId === req.student.studentId)
+  const plan = state.plans.find((item) => item.id === change.planId && item.status === 'ACCEPTED')
+  if (!task || !plan) return safeError(res, 409, 'SCOPE_CHANGE_NOT_READY', 'The original accepted plan is unavailable.')
+  if (change.requested.priceDelta === 0) {
+    const result = await withTaskStore((store) => {
+      const current = store.scopeChanges.find((item) => item.id === change.id)
+      if (!current || current.status === 'ACCEPTED') return { change: current, event: null }
+      const currentTask = store.tasks.find((item) => item.id === current.taskId)
+      const currentPlan = store.plans.find((item) => item.id === current.planId)
+      return { change: current, event: applyApprovedScopeChange(store, current, currentTask, currentPlan, now()) }
+    })
+    try { await announceFundedTask(result.event) }
+    catch (error) { console.error('[scope-change] Expert sync pending', error) }
+    return res.json({ scopeChange: result.change })
+  }
+  if (!stripe) return safeError(res, 503, 'PROVIDER_UNAVAILABLE', 'Payment is required for this scope change, but checkout is unavailable.')
+  const attempts = state.payments.filter((item) => item.scopeChangeId === change.id)
+  const active = attempts.find((item) => !['failed', 'canceled', 'succeeded'].includes(item.status))
+  if (active?.providerId) {
+    const existing = await stripe.checkout.sessions.retrieve(active.providerId)
+    if (existing.payment_status === 'paid') {
+      try { await announceFundedTask(await recordPaymentStatus(active.providerId, 'succeeded')) }
+      catch (error) { console.error('[scope-change] payment reconciliation pending', error); return safeError(res, 503, 'SCOPE_CHANGE_PENDING', 'Payment was received; the scope update is still being finalized.') }
+      return res.json({ scopeChange: (await readTaskStore()).scopeChanges.find((item) => item.id === change.id) })
+    }
+    if (existing.status !== 'expired') return res.json({ scopeChange: { ...change, checkoutUrl: existing.url } })
+    await recordPaymentStatus(active.providerId, 'canceled')
+  }
+  const attempt = attempts.filter((item) => ['failed', 'canceled'].includes(item.status)).length + (active ? 1 : 0)
+  const origin = process.env.PUBLIC_APP_URL || 'http://localhost:5173'
+  const session = await stripe.checkout.sessions.create({
+    mode: 'payment',
+    client_reference_id: task.id,
+    customer_email: req.student.email || undefined,
+    line_items: [{ price_data: { currency: process.env.STRIPE_CURRENCY || 'lkr', unit_amount: change.requested.priceDelta * 100, product_data: { name: `SolveNest scope change · ${plan.reference}` } }, quantity: 1 }],
+    success_url: `${origin.replace(/\/$/, '')}/student/payments?task=${encodeURIComponent(task.id)}&section=history`,
+    cancel_url: `${origin.replace(/\/$/, '')}/student/payments?task=${encodeURIComponent(task.id)}&section=scope-change`,
+    metadata: { taskId: task.id, studentId: task.studentId, planId: plan.id, scopeChangeId: change.id },
+  }, { idempotencyKey: `scope-${change.id}-attempt-${attempt}` })
+  const payment = { id: crypto.randomUUID(), providerId: session.id, studentId: task.studentId, taskId: task.id, taskTitle: task.title, planId: plan.id, planReference: plan.reference, scopeChangeId: change.id, type: 'Scope change', amount: change.requested.priceDelta, currency: process.env.STRIPE_CURRENCY || 'lkr', status: 'pending', createdAt: now() }
+  const stored = await withTaskStore((store) => {
+    const current = store.scopeChanges.find((item) => item.id === change.id)
+    if (!current || current.status === 'ACCEPTED') return current
+    if (!store.payments.some((item) => item.providerId === session.id)) store.payments.push(payment)
+    current.status = 'AWAITING_PAYMENT'
+    current.paymentId = store.payments.find((item) => item.providerId === session.id)?.id
+    return current
+  })
+  if (stored?.status === 'ACCEPTED') return res.json({ scopeChange: stored })
+  res.json({ scopeChange: { ...stored, checkoutUrl: session.url } })
+}))
 
 app.post('/api/student/explain/tasks/:taskId/explain', requireStudent, async (req, res) => {
   const task = await getStudentTask(req.student.studentId, req.params.taskId)
@@ -1843,6 +1952,22 @@ app.post('/api/admin/tasks/:taskId/plan', requireStaff, staffRoute(async (req, r
   res.status(201).json({ plan: result.plan })
 }))
 
+app.post('/api/admin/tasks/:taskId/scope-change', requireStaff, staffRoute(async (req, res) => {
+  if (!await limited(`admin-scope:${req.staff.id}`, 10)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before issuing another scope change.')
+  const task = (await readTaskStore()).tasks.find((item) => item.id === req.params.taskId)
+  if (!task) return safeError(res, 404, 'TASK_NOT_FOUND', 'Task not found.')
+  if (task.assignedExpertId && task.assignmentId) {
+    const expert = await runForExpert(task.assignedExpertId, readExpertStore)
+    const assignment = expert.assignments.find((item) => item.id === task.assignmentId)
+    if (!assignment || ['qa_review', 'ready_to_deliver', 'delivered'].includes(assignment.workState)) return safeError(res, 409, 'SCOPE_CHANGE_TOO_LATE', 'Wait until the current quality review is resolved, or contact support about delivered work.')
+  }
+  const result = await issueAdminScopeChange(req.params.taskId, req.staff.id, req.body)
+  if (result.error) return safeError(res, result.error === 'SCOPE_CHANGE_INVALID' ? 400 : 409, result.error, 'Provide a clear reason, revised scope, future delivery date, and nonnegative additional price for an eligible task.')
+  await addNotification({ id: crypto.randomUUID(), studentId: result.studentId, title: 'Scope change proposed', body: 'Review the revised work, price, and delivery date before accepting.', task: { title: result.title, ref: task.id }, route: `/student/payments?task=${task.id}&section=scope-change`, isRead: false, requiresAction: true, createdAt: result.change.issuedAt })
+  publish(result.studentId, { type: 'ScopeChangeIssued', taskId: task.id })
+  res.status(201).json({ scopeChange: result.change })
+}))
+
 app.get('/api/admin/experts', requireStaff, staffRoute(async (req, res) => {
   const profiles = req.staff.demo ? [{ id: 'demo-expert', name: 'Alex Morgan', email: null, role: 'Expert' }] : await supabaseExpertProfiles()
   const experts = await Promise.all(profiles.map(async (profile) => {
@@ -2032,3 +2157,14 @@ if (process.env.NODE_ENV === 'production') {
 const server = app.listen(PORT, () => {
   console.log(`SolveNest API listening on http://127.0.0.1:${server.address().port}`)
 })
+let scopeSyncRunning = false
+const scopeSyncTimer = setInterval(async () => {
+  if (scopeSyncRunning) return
+  scopeSyncRunning = true
+  try {
+    const pending = (await readTaskStore()).scopeChanges.filter((item) => item.status === 'ACCEPTED' && item.expertSyncPending)
+    for (const change of pending) await syncApprovedScopeChange(change.id)
+  } catch (error) { console.error('[scope-change] Expert sync retry failed', error) }
+  finally { scopeSyncRunning = false }
+}, 60_000)
+scopeSyncTimer.unref()

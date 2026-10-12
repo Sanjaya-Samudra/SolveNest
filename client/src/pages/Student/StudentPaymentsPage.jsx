@@ -731,11 +731,11 @@ function ScopeChangePanel({ change, onAccept, accepting }) {
       <header className="sn-pay-scope__header">
         <span className="student-overline">Scope Change</span>
         <StatusPill tone={change.canAccept ? 'attention' : 'muted'}>
-          {change.status === 'requested' ? 'Awaiting your acceptance' : change.status}
+          {change.status === 'requested' ? 'Awaiting your acceptance' : change.status === 'awaiting_payment' ? 'Payment required' : change.status}
         </StatusPill>
       </header>
       {change.reason ? <p className="sn-pay-scope__reason">{change.reason}</p> : null}
-      {!change.canAccept ? <p className="sn-pay-scope__reason">Contact support to review the revised quote and any additional payment before work changes.</p> : null}
+      {change.status === 'awaiting_payment' ? <p className="sn-pay-scope__reason">The revised work takes effect after its additional payment is confirmed.</p> : null}
       <div className="sn-pay-scope__compare">
         <div className="sn-pay-scope__col">
           <h4>Previous</h4>
@@ -754,14 +754,14 @@ function ScopeChangePanel({ change, onAccept, accepting }) {
                 ? formatCurrency(change.newTotal, currency)
                 : '—'}
           </p>
-          <p className="sn-pay-scope__delivery">{change.requested.deliveryDelta || '—'}</p>
+          <p className="sn-pay-scope__delivery">{formatDate(change.requested.delivery) || change.requested.deliveryDelta || '—'}</p>
         </div>
       </div>
       {change.canAccept ? (
         <div className="sn-pay-scope__actions">
           <button type="button" className="student-button student-button--primary" onClick={onAccept} disabled={accepting}>
             <CheckCircle2 size={16} aria-hidden="true" />
-            {accepting ? 'Accepting…' : 'Accept Revised Plan'}
+            {accepting ? 'Preparing…' : change.status === 'awaiting_payment' ? 'Continue payment' : change.requested.priceDelta > 0 ? 'Accept and pay' : 'Accept revised plan'}
           </button>
           <PaymentHelpLink />
         </div>
@@ -822,6 +822,7 @@ export default function StudentPaymentsPage() {
   })
   const [acceptPlanOpen, setAcceptPlanOpen] = useState(false)
   const [acceptScopeOpen, setAcceptScopeOpen] = useState(false)
+  const [scopeAcceptError, setScopeAcceptError] = useState('')
   const [receiptBusy, setReceiptBusy] = useState(false)
   const [receiptError, setReceiptError] = useState(null)
 
@@ -1012,11 +1013,12 @@ export default function StudentPaymentsPage() {
 
   const confirmAcceptScope = async () => {
     try {
-      await scopeQuery.accept()
+      const result = await scopeQuery.accept()
       setAcceptScopeOpen(false)
+      if (result?.checkoutUrl) { window.location.assign(result.checkoutUrl); return }
       structureQuery.reload()
       tasksQuery.reload()
-    } catch {}
+    } catch (issue) { setScopeAcceptError(issue.message || 'Could not accept this scope change.') }
   }
 
   const downloadReceipt = async () => {
@@ -1188,7 +1190,7 @@ export default function StudentPaymentsPage() {
         ) : (
           <ScopeChangePanel
             change={scopeQuery.data}
-            onAccept={() => setAcceptScopeOpen(true)}
+            onAccept={() => { setScopeAcceptError(''); setAcceptScopeOpen(true) }}
             accepting={scopeQuery.accepting}
           />
         )
@@ -1272,10 +1274,11 @@ export default function StudentPaymentsPage() {
         open={acceptScopeOpen}
         title="Accept revised plan?"
         body={
-          <p>
-            Accepting updates the scope and funding for <strong>{planTaskTitle}</strong>.
+          <><p>
+            Accepting updates the scope and funding for <strong>{planTaskTitle}</strong>. Any additional price is paid through secure checkout before the change takes effect.
             Review the comparison carefully before confirming.
           </p>
+          {scopeAcceptError && <ErrorBanner message={scopeAcceptError} />}</>
         }
         confirmLabel="Accept Revised Plan"
         busy={scopeQuery.accepting}

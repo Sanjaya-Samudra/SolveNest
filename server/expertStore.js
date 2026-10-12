@@ -1046,6 +1046,24 @@ export async function notifyAssignmentRevision(id, request) {
   return { ok: true }
 }
 
+export async function applyAssignmentScopeChange(id, change) {
+  const store = await readExpertStore()
+  const assignment = findRawAssignment(store, id)
+  if (!assignment) return { ok: false, error: 'ASSIGNMENT_NOT_FOUND' }
+  assignment.scopeChangeIds = Array.isArray(assignment.scopeChangeIds) ? assignment.scopeChangeIds : []
+  if (assignment.scopeChangeIds.includes(change.id)) return { ok: true, replayed: true }
+  if (assignment.workState === 'delivered') return { ok: false, error: 'ASSIGNMENT_CLOSED' }
+  assignment.deliverable = change.requested.scope
+  assignment.requirements = [change.requested.scope, ...(assignment.requirements || []).filter((item) => item !== change.original.scope)].slice(0, 12)
+  assignment.deadline = change.requested.delivery
+  assignment.scopeChangeIds.push(change.id)
+  touchAssignment(assignment, { latestKind: 'scope', latestText: 'The approved scope and delivery date were updated.' })
+  pushMovement(store, { kind: 'scope', label: 'SCOPE UPDATED', title: assignment.title, assignmentId: assignment.id })
+  pushExpertNotification(store, { title: 'Scope change approved', body: assignment.title, route: `/expert/assignments/${assignment.id}` })
+  await writeExpertStore(store)
+  return { ok: true }
+}
+
 export async function provisionAssignment(seed = {}) {
   const title = String(seed.title || '').trim()
   if (!title) return { ok: false, error: 'TITLE_REQUIRED' }

@@ -27,6 +27,7 @@ export const markConversationRead = (id) => request(`/conversations/${encodeURIC
 export const getCase = (id) => request(`/tasks/${encodeURIComponent(id)}`)
 export const recordReview = (id, action, note) => request(`/tasks/${encodeURIComponent(id)}/review`, { method: 'POST', body: { action, note } })
 export const issuePlan = (id, plan) => request(`/tasks/${encodeURIComponent(id)}/plan`, { method: 'POST', body: plan })
+export const issueScopeChange = (id, change) => request(`/tasks/${encodeURIComponent(id)}/scope-change`, { method: 'POST', body: change })
 export const getAssignableExperts = () => request('/experts')
 export const assignExpert = (id, expertId) => request(`/tasks/${encodeURIComponent(id)}/assign`, { method: 'POST', body: { expertId } })
 export const getSupportQueue = () => request('/support')
