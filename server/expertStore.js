@@ -417,7 +417,9 @@ function emptyWorkspace(workState = 'assigned') {
     qa: { state: 'not_submitted', cycle: 0, submittedAt: null, reviewedAt: null, feedback: [] },
     qaLog: [],
     delivery: { state: 'not_delivered', version: 0, deliveredAt: null, note: null, fileIds: [] },
+    deliveryHistory: [],
     revision: { active: false, requestedAt: null },
+    revisionRequest: null,
     updatedAt: null,
   }
 }
@@ -534,7 +536,9 @@ function normalizeWorkspace(raw, workState) {
       note: deliveryRaw.note ? String(deliveryRaw.note) : null,
       fileIds: Array.isArray(deliveryRaw.fileIds) ? deliveryRaw.fileIds.map(String) : [],
     },
+    deliveryHistory: Array.isArray(raw.deliveryHistory) ? raw.deliveryHistory.filter((item) => item && Number.isSafeInteger(Number(item.version)) && Array.isArray(item.files)).slice(-20) : [],
     revision: { active: Boolean(revisionRaw.active), requestedAt: revisionRaw.requestedAt || null },
+    revisionRequest: raw.revisionRequest?.id ? { id: String(raw.revisionRequest.id), note: String(raw.revisionRequest.note || ''), requestedAt: raw.revisionRequest.requestedAt || null } : null,
     updatedAt: raw.updatedAt || null,
   }
 }
@@ -845,6 +849,7 @@ export async function removeAssignmentFile(id, fileId) {
   for (const section of FILE_SECTION_VALUES) {
     const index = assignment.workspace.files[section].findIndex((file) => file.id === wanted)
     if (index >= 0) {
+      if ((assignment.workspace.deliveryHistory || []).some((delivery) => delivery.fileIds?.includes(wanted)) || assignment.workspace.delivery.fileIds.includes(wanted)) return { ok: false, error: 'FILE_IMMUTABLE' }
       const [file] = assignment.workspace.files[section].splice(index, 1)
       if (file.origin !== 'expert') {
         assignment.workspace.files[section].splice(index, 0, file)
@@ -988,6 +993,7 @@ export async function deliverAssignment(id, { note } = {}) {
   const assignment = findRawAssignment(store, id)
   if (!assignment) return { ok: false, error: 'ASSIGNMENT_NOT_FOUND' }
   const workspace = assignment.workspace
+  if (assignment.workState === 'delivered' && workspace.delivery.state === 'delivered') return { ok: true, delivery: workspace.delivery, revision: workspace.revision, workState: assignment.workState, updatedAt: assignment.updatedAt, replayed: true }
   if (workspace.qa.state !== 'approved') return { ok: false, error: 'QA_APPROVAL_REQUIRED' }
   const submission = workspace.files.submission
   if (!submission.length) return { ok: false, error: 'DELIVERY_FILES_REQUIRED' }
@@ -999,6 +1005,8 @@ export async function deliverAssignment(id, { note } = {}) {
     note: note ? clipText(note, 2000) : null,
     fileIds: submission.map((file) => file.id),
   }
+  workspace.deliveryHistory = Array.isArray(workspace.deliveryHistory) ? workspace.deliveryHistory : []
+  workspace.deliveryHistory.push({ ...workspace.delivery, files: submission.map((file) => ({ ...file })) })
   workspace.revision = { active: false, requestedAt: null }
   pushMovement(store, { kind: 'delivery', label: 'DELIVERED', title: assignment.title, assignmentId: assignment.id })
   pushExpertNotification(store, { title: 'Delivery submitted', body: assignment.title, route: `/expert/assignments/${assignment.id}` })
@@ -1020,6 +1028,18 @@ export async function beginAssignmentRevision(id) {
   pushMovement(store, { kind: 'revision', label: 'REVISION STARTED', title: assignment.title, assignmentId: assignment.id })
   await writeExpertStore(store)
   return { ok: true, revision: workspace.revision, qa: workspace.qa, workState: assignment.workState, updatedAt: assignment.updatedAt }
+}
+
+export async function notifyAssignmentRevision(id, request) {
+  const store = await readExpertStore()
+  const assignment = findRawAssignment(store, id)
+  if (!assignment) return { ok: false, error: 'ASSIGNMENT_NOT_FOUND' }
+  if (assignment.workspace.revisionRequest?.id === request.id) return { ok: true, replayed: true }
+  assignment.workspace.revisionRequest = { id: request.id, note: request.note, requestedAt: request.requestedAt }
+  pushMovement(store, { kind: 'revision', label: 'REVISION REQUESTED', title: assignment.title, assignmentId: assignment.id })
+  pushExpertNotification(store, { title: 'Student revision requested', body: assignment.title, route: `/expert/assignments/${assignment.id}` })
+  await writeExpertStore(store)
+  return { ok: true }
 }
 
 export async function provisionAssignment(seed = {}) {

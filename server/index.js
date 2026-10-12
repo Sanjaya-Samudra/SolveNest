@@ -28,6 +28,7 @@ import {
   listAvailableTasks,
   listMovement,
   markAssignmentMessagesRead,
+  notifyAssignmentRevision,
   postAssignmentMessage,
   provisionAssignment,
   provisionAvailableTasks,
@@ -191,7 +192,45 @@ function signedExpertFileUrl(fileId) {
 }
 
 async function ownedFile(studentId, fileId) {
-  return (await getStudentFiles(studentId)).find((file) => file.id === fileId) || null
+  const state = await readTaskStore()
+  return [...state.files, ...(state.deliveryFiles || [])].find((file) => file.studentId === studentId && file.id === fileId) || null
+}
+
+function dossierPayload(task, files) {
+  const sourceFiles = files.map((file) => ({ id: file.id, name: file.originalName, role: file.role, type: file.mimeType, size: file.size, origin: 'student', state: file.state, createdAt: file.createdAt, taskId: task.id, canReplace: !task.assignedExpertId, canRemove: !task.assignedExpertId }))
+  const deliveryVersions = task.deliveryVersions || []
+  return { id: task.id, taskId: task.id, title: task.title, subject: task.subject, status: task.status, deadline: task.deadline, sourceFiles, exchangeFiles: [], deliveryVersions, fileCount: sourceFiles.length + deliveryVersions.reduce((total, item) => total + item.files.length, 0), lastActivityAt: task.updatedAt, hasNewDelivery: Boolean(task.hasNewDelivery) }
+}
+
+async function syncStudentDelivery(expertId, assignmentId) {
+  const workspace = await readExpertStore()
+  const assignment = workspace.assignments.find((item) => item.id === assignmentId && item.taskId)
+  if (!assignment) throw new Error('ASSIGNMENT_NOT_FOUND')
+  const history = assignment.workspace?.deliveryHistory || []
+  const latest = history.at(-1) || (assignment.workspace?.delivery?.state === 'delivered' ? { ...assignment.workspace.delivery, files: (assignment.workspace.files?.submission || []).filter((file) => assignment.workspace.delivery.fileIds.includes(file.id)) } : null)
+  if (!latest) throw new Error('DELIVERY_NOT_FOUND')
+  return withTaskStore((store) => {
+    const task = store.tasks.find((item) => item.id === assignment.taskId && item.assignedExpertId === expertId && item.assignmentId === assignmentId)
+    if (!task) return null
+    task.deliveryVersions = Array.isArray(task.deliveryVersions) ? task.deliveryVersions : []
+    if (task.deliveryVersions.some((item) => item.version === latest.version)) return null
+    const plan = store.plans.find((item) => item.taskId === task.id && item.status === 'ACCEPTED')
+    const remaining = Math.max(0, Number(plan?.revisionAllowance || 0) - (task.revisionRequests || []).length)
+    const files = latest.files.map((file) => ({ id: file.id, name: file.name, type: file.type, size: file.size, version: latest.version, uploadedAt: file.uploadedAt || latest.deliveredAt, role: 'deliverable' }))
+    store.deliveryFiles = Array.isArray(store.deliveryFiles) ? store.deliveryFiles : []
+    for (const file of latest.files) {
+      if (!file.storageKey) continue
+      if (!store.deliveryFiles.some((item) => item.id === file.id && item.studentId === task.studentId)) store.deliveryFiles.push({ id: file.id, studentId: task.studentId, taskId: task.id, role: 'DELIVERY', originalName: file.name, storageKey: file.storageKey, mimeType: file.type, size: file.size, state: 'READY', createdAt: latest.deliveredAt })
+    }
+    const delivery = { id: `${assignmentId}-v${latest.version}`, version: latest.version, deliveredAt: latest.deliveredAt, status: 'ready_to_review', files, note: latest.note, qa: { state: 'approved' }, revision: { status: remaining ? 'available' : 'limit_reached', remaining } }
+    task.deliveryVersions.push(delivery)
+    task.status = 'DELIVERED'
+    task.hasNewDelivery = true
+    task.latestUpdate = { text: `Delivery version ${latest.version} is ready to review.`, createdAt: latest.deliveredAt }
+    task.updatedAt = latest.deliveredAt
+    addActivity(store, { id: crypto.randomUUID(), studentId: task.studentId, taskId: task.id, type: 'TaskDelivered', text: task.latestUpdate.text, createdAt: latest.deliveredAt })
+    return { task, delivery }
+  })
 }
 
 app.get('/api/student/me', requireStudent, (req, res) => {
@@ -304,11 +343,14 @@ app.get('/api/student/files/:fileId/download', requireStudent, async (req, res) 
 })
 
 app.delete('/api/student/files/:fileId', requireStudent, async (req, res) => {
+  const owned = await ownedFile(req.student.studentId, req.params.fileId)
+  if (!owned) return safeError(res, 404, 'FILE_NOT_FOUND', 'File not found.')
+  const task = owned.taskId ? await getStudentTask(req.student.studentId, owned.taskId) : null
+  if (owned.role === 'DELIVERY' || task?.assignedExpertId) return safeError(res, 409, 'FILE_IMMUTABLE', 'Files linked to an assigned task cannot be removed.')
   const removed = await withTaskStore((store) => {
     const index = store.files.findIndex((file) => file.id === req.params.fileId && file.studentId === req.student.studentId)
     if (index < 0) return null
     const [file] = store.files.splice(index, 1)
-    try { fs.unlinkSync(path.join(uploadDir, file.storageKey)) } catch {}
     return file
   })
   if (!removed) return safeError(res, 404, 'FILE_NOT_FOUND', 'File not found.')
@@ -317,7 +359,9 @@ app.delete('/api/student/files/:fileId', requireStudent, async (req, res) => {
 })
 
 app.post('/api/student/dossiers/:taskId/files', requireStudent, async (req, res, next) => {
-  if (!(await getStudentTask(req.student.studentId, req.params.taskId))) return safeError(res, 404, 'TASK_NOT_FOUND', 'Task not found.')
+  const task = await getStudentTask(req.student.studentId, req.params.taskId)
+  if (!task) return safeError(res, 404, 'TASK_NOT_FOUND', 'Task not found.')
+  if (task.assignedExpertId) return safeError(res, 409, 'TASK_FILES_LOCKED', 'Contact support to add materials after Expert assignment.')
   upload.single('file')(req, res, (error) => {
     if (error || !req.file) return safeError(res, 400, 'FILE_UPLOAD_REJECTED', 'This file could not be uploaded.')
     next()
@@ -330,7 +374,10 @@ app.post('/api/student/dossiers/:taskId/files', requireStudent, async (req, res,
 })
 
 app.put('/api/student/files/:fileId/replace', requireStudent, async (req, res, next) => {
-  if (!(await ownedFile(req.student.studentId, req.params.fileId))) return safeError(res, 404, 'FILE_NOT_FOUND', 'File not found.')
+  const file = await ownedFile(req.student.studentId, req.params.fileId)
+  if (!file) return safeError(res, 404, 'FILE_NOT_FOUND', 'File not found.')
+  const task = file.taskId ? await getStudentTask(req.student.studentId, file.taskId) : null
+  if (file.role === 'DELIVERY' || task?.assignedExpertId) return safeError(res, 409, 'FILE_IMMUTABLE', 'Files linked to an assigned task cannot be replaced.')
   upload.single('file')(req, res, (error) => {
     if (error || !req.file) return safeError(res, 400, 'FILE_UPLOAD_REJECTED', 'This file could not be uploaded.')
     next()
@@ -399,7 +446,7 @@ app.get('/api/student/tasks/:taskId/preview', requireStudent, async (req, res) =
 })
 
 app.get('/api/student/dossiers', requireStudent, async (req, res) => {
-  const dossiers = await Promise.all((await getStudentTasks(req.student.studentId)).map(async (task) => { const files = await getStudentFiles(req.student.studentId, task.id); return { id: task.id, taskId: task.id, title: task.title, subject: task.subject, status: task.status, deadline: task.deadline, sourceFiles: files.map((file) => ({ id: file.id, name: file.originalName, role: file.role, type: file.mimeType, size: file.size, origin: 'student', state: file.state, createdAt: file.createdAt, taskId: task.id })), exchangeFiles: [], deliveryVersions: [], fileCount: files.length, lastActivityAt: task.updatedAt, hasNewDelivery: false } }))
+  const dossiers = await Promise.all((await getStudentTasks(req.student.studentId)).map(async (task) => dossierPayload(task, await getStudentFiles(req.student.studentId, task.id))))
   res.json({ dossiers, meta: { total: dossiers.length } })
 })
 
@@ -407,7 +454,44 @@ app.get('/api/student/dossiers/:taskId', requireStudent, async (req, res) => {
   const task = await getStudentTask(req.student.studentId, req.params.taskId)
   if (!task) return safeError(res, 404, 'TASK_NOT_FOUND', 'Task not found.')
   const files = await getStudentFiles(req.student.studentId, task.id)
-  res.json({ dossier: { id: task.id, taskId: task.id, title: task.title, subject: task.subject, status: task.status, deadline: task.deadline, sourceFiles: files.map((file) => ({ id: file.id, name: file.originalName, role: file.role, type: file.mimeType, size: file.size, origin: 'student', state: file.state, createdAt: file.createdAt, taskId: task.id })), exchangeFiles: [], deliveryVersions: [], fileCount: files.length, lastActivityAt: task.updatedAt, hasNewDelivery: false } })
+  res.json({ dossier: dossierPayload(task, files) })
+})
+
+app.get('/api/student/dossiers/:taskId/delivery', requireStudent, async (req, res) => {
+  const task = await getStudentTask(req.student.studentId, req.params.taskId)
+  if (!task) return safeError(res, 404, 'TASK_NOT_FOUND', 'Task not found.')
+  const version = req.query.version ? Number(req.query.version) : null
+  const delivery = version ? (task.deliveryVersions || []).find((item) => item.version === version) : (task.deliveryVersions || []).at(-1)
+  if (!delivery) return safeError(res, 404, 'DELIVERY_NOT_FOUND', 'No delivery is available for this task.')
+  res.json({ delivery })
+})
+
+app.post('/api/student/dossiers/:taskId/revision', requireStudent, async (req, res) => {
+  const note = String(req.body?.note || '').trim()
+  if (note.length < 10 || note.length > 2000) return safeError(res, 400, 'REVISION_NOTE_REQUIRED', 'Describe the requested revision in 10 to 2000 characters.')
+  const result = await withTaskStore((store) => {
+    const task = store.tasks.find((item) => item.id === req.params.taskId && item.studentId === req.student.studentId)
+    if (!task) return { error: 'TASK_NOT_FOUND' }
+    if (task.status !== 'DELIVERED' || !task.assignmentId) return { error: 'REVISION_NOT_AVAILABLE' }
+    const plan = store.plans.find((item) => item.taskId === task.id && item.status === 'ACCEPTED')
+    const requests = task.revisionRequests || []
+    if (requests.length >= Number(plan?.revisionAllowance || 0)) return { error: 'REVISION_LIMIT_REACHED' }
+    const stamp = now()
+    const revision = { id: crypto.randomUUID(), note, status: 'requested', version: task.deliveryVersions?.at(-1)?.version || 1, requestedAt: stamp }
+    task.revisionRequests = [...requests, revision]
+    task.status = 'REVISION_REQUESTED'
+    task.latestUpdate = { text: 'Your revision request has been sent to the Expert.', createdAt: stamp }
+    task.updatedAt = stamp
+    if (task.deliveryVersions?.length) task.deliveryVersions.at(-1).revision = { status: 'requested', remaining: Math.max(0, Number(plan?.revisionAllowance || 0) - task.revisionRequests.length) }
+    addActivity(store, { id: crypto.randomUUID(), studentId: task.studentId, taskId: task.id, type: 'RevisionRequested', text: task.latestUpdate.text, createdAt: stamp })
+    return { revision, expertId: task.assignedExpertId, assignmentId: task.assignmentId }
+  })
+  if (result.error) return safeError(res, result.error === 'TASK_NOT_FOUND' ? 404 : 409, result.error, 'A revision is not available for this delivery.')
+  try { await runForExpert(result.expertId, () => notifyAssignmentRevision(result.assignmentId, result.revision)) }
+  catch (error) { console.error('[revision] expert notification failed', error) }
+  publishExpert(result.expertId, 'RevisionRequested', { assignmentId: result.assignmentId, note, at: result.revision.requestedAt })
+  publish(req.student.studentId, { type: 'RevisionRequested', taskId: req.params.taskId })
+  res.status(201).json({ revision: result.revision })
 })
 
 app.get('/api/student/dashboard', requireStudent, async (req, res) => {
@@ -1122,13 +1206,33 @@ app.post('/api/expert/assignments/:assignmentId/delivery', requireExpert, expert
   if (!limited(`expert-delivery:${req.expert.expertId}`, 12)) return safeError(res, 429, 'RATE_LIMITED', 'Too many delivery attempts. Try again shortly.')
   const result = await deliverAssignment(req.params.assignmentId, { note: req.body?.note })
   if (!result.ok) return expertMutationError(res, result.error)
+  const studentDelivery = await syncStudentDelivery(req.expert.expertId, req.params.assignmentId)
+  if (studentDelivery) {
+    try { await addNotification({ id: crypto.randomUUID(), studentId: studentDelivery.task.studentId, title: 'Your delivery is ready', body: `Version ${studentDelivery.delivery.version} is ready to review.`, task: { title: studentDelivery.task.title, ref: studentDelivery.task.id }, route: `/student/files?task=${studentDelivery.task.id}&section=delivery`, isRead: false, requiresAction: true, createdAt: studentDelivery.delivery.deliveredAt }) }
+    catch (error) { console.error('[delivery] student notification failed', error) }
+    publish(studentDelivery.task.studentId, { type: 'TaskDelivered', taskId: studentDelivery.task.id })
+  }
   expertChanged(req, result)
   res.json(result)
 }))
 
 app.post('/api/expert/assignments/:assignmentId/revision/begin', requireExpert, expertRoute(async (req, res) => {
+  const state = await readTaskStore()
+  const task = state.tasks.find((item) => item.assignmentId === req.params.assignmentId && item.assignedExpertId === req.expert.expertId)
+  if (task && task.status !== 'REVISION_REQUESTED') return safeError(res, 409, 'REVISION_NOT_REQUESTED', 'The Student has not requested a revision.')
   const result = await beginAssignmentRevision(req.params.assignmentId)
   if (!result.ok) return expertMutationError(res, result.error)
+  if (task) {
+    await withTaskStore((store) => {
+      const current = store.tasks.find((item) => item.id === task.id && item.status === 'REVISION_REQUESTED')
+      if (!current) return
+      current.status = 'REVISION_IN_PROGRESS'
+      current.latestUpdate = { text: 'Your revision is in progress.', createdAt: now() }
+      current.updatedAt = current.latestUpdate.createdAt
+      if (current.deliveryVersions?.length) current.deliveryVersions.at(-1).revision.status = 'in_progress'
+    })
+    publish(task.studentId, { type: 'RevisionStarted', taskId: task.id })
+  }
   expertChanged(req, result)
   publishExpert(req.expert.expertId, 'QaUpdated', { assignmentId: req.params.assignmentId, qa: result.qa })
   res.json(result)
