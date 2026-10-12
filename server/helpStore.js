@@ -186,7 +186,7 @@ export function getCatalog() {
     policies,
     workspace: workspaceTasks.filter((t) => t.status === 'PAYMENT_PENDING' || t.status === 'DELIVERED' || t.paymentState === 'Processing').slice(0, 3),
     tasks: workspaceTasks,
-    tickets: readTickets().tickets,
+    tickets: [],
   }
 }
 

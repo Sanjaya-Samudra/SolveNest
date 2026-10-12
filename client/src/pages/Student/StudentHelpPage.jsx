@@ -877,13 +877,14 @@ export default function StudentHelpPage() {
               <div className="sn-hlp__result-top">
                 <span className="sn-hlp__result-badge sn-hlp__result-badge--guidance">
                   <CheckCircle2 size={13} aria-hidden="true" />
-                  Request received
+                  Support request
                 </span>
               </div>
               <p className="sn-hlp__result-found">Support request {ticket.id}</p>
               <p className="sn-hlp__result-body">
-                Status: {ticket.status === 'received' ? 'Received' : ticket.status}. Track updates here and in notifications.
+                Status: {ticket.status === 'received' ? 'Received' : String(ticket.status || '').replaceAll('_', ' ')}. Track updates here and in notifications.
               </p>
+              {ticket.studentUpdates?.length > 0 && <p className="sn-hlp__result-body"><strong>Latest update:</strong> {ticket.studentUpdates[0].message}</p>}
               <div className="sn-hlp__actions">
                 <button
                   type="button"
@@ -901,6 +902,7 @@ export default function StudentHelpPage() {
         </div>
 
         <aside className="sn-hlp__rail" aria-label="Help sidebar">
+          {snapshot.tickets.length > 0 && <section className="sn-hlp__panel sn-hlp__panel--attention"><div className="sn-hlp__panel-head"><p className="student-overline sn-hlp__section-overline">Support desk</p><h2 className="sn-hlp__panel-title">Your requests</h2></div><div className="sn-hlp__ws-list">{snapshot.tickets.map((item) => <div className="sn-hlp__ws-card" key={item.id}><div className="sn-hlp__ws-body"><span className="sn-hlp__task-title">{item.categoryLabel || 'Support request'}</span><span className="sn-hlp__task-meta"><span className="sn-hlp__status-pill">{String(item.status || 'received').replaceAll('_', ' ')}</span><span className="sn-hlp__ref">{item.id}</span></span></div><button type="button" className="sn-hlp__ws-action" onClick={() => { setTicket(item); setCategory(null); setIssue(null); setGuidance(null); setShowSupportForm(false) }}>View update <ArrowRight size={13} aria-hidden="true" /></button></div>)}</div><button type="button" className="sn-hlp__link-btn" onClick={() => loadHelpCatalog({ force: true }).catch(() => {})}>Refresh requests →</button></section>}
           {showHome && snapshot.workspace.length > 0 && (
             <section className="sn-hlp__panel sn-hlp__panel--attention">
               <div className="sn-hlp__panel-head">

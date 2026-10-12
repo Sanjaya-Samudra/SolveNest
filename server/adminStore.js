@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
 import { readTaskStore, withTaskStore } from './taskStore.js'
 import { readExpertStore } from './expertStore.js'
-import { listTickets } from './helpStore.js'
+import { listSupportTickets } from './supportStore.js'
 
 const reviewOf = (store, task) => store.reviews.find((item) => item.taskId === task.id) || task.review || { status: 'QUEUED' }
 const dateValue = (value) => value ? new Date(value).getTime() || 0 : 0
@@ -28,14 +28,14 @@ export async function getAdminOverview() {
   const store = await readTaskStore()
   const tasks = store.tasks.map((task) => summary(store, task)).sort((a, b) => dateValue(b.updatedAt) - dateValue(a.updatedAt))
   const expert = await readExpertStore()
-  const tickets = listTickets()
+  const tickets = await listSupportTickets()
   return {
     tasks,
     metrics: {
       queued: tasks.filter((task) => task.reviewStatus === 'QUEUED').length,
       inReview: tasks.filter((task) => task.reviewStatus === 'IN_REVIEW').length,
       decided: tasks.filter((task) => ['APPROVED', 'NEEDS_INFO', 'DECLINED'].includes(task.reviewStatus)).length,
-      qaWaiting: expert.assignments.filter((item) => item.workspace?.qa?.state === 'pending').length,
+      qaWaiting: expert.assignments.filter((item) => item.workspace?.qa?.state === 'in_review').length,
       supportOpen: tickets.filter((item) => !['closed', 'resolved'].includes(String(item.status || '').toLowerCase())).length,
     },
   }
@@ -78,4 +78,32 @@ export async function recordAdminReview(taskId, actorId, action, note) {
     store.adminAudit.unshift({ id: crypto.randomUUID(), taskId, actorId, action, note: cleanNote || null, at: stamp })
     return { ok: true, status: next.status }
   })
+}
+
+export async function listAdminQaAssignments() {
+  const store = await readExpertStore()
+  return store.assignments.filter((item) => item.workspace?.qa?.state === 'in_review').map((item) => ({
+    id: item.id,
+    title: item.title,
+    reference: item.reference || null,
+    domain: item.domain || null,
+    deadline: item.deadline || null,
+    workState: item.workState,
+    submittedAt: item.workspace.qa.submittedAt || null,
+    cycle: item.workspace.qa.cycle || 1,
+    fileCount: item.workspace.files?.submission?.length || 0,
+    expertName: store.expert.name,
+  })).sort((a, b) => String(a.submittedAt).localeCompare(String(b.submittedAt)))
+}
+
+export async function getAdminQaCase(assignmentId) {
+  const store = await readExpertStore()
+  const assignment = store.assignments.find((item) => item.id === assignmentId)
+  if (!assignment) return null
+  return {
+    assignment: { id: assignment.id, title: assignment.title, reference: assignment.reference || null, domain: assignment.domain || null, deadline: assignment.deadline || null, workState: assignment.workState, expertName: store.expert.name },
+    qa: assignment.workspace?.qa || null,
+    submissionFiles: (assignment.workspace?.files?.submission || []).map((file) => ({ id: file.id, name: file.name || file.originalName || 'Submission file', size: file.size || 0, mimeType: file.mimeType || null })),
+    history: (store.staffQaAudit || []).filter((item) => item.assignmentId === assignmentId).slice(0, 20),
+  }
 }

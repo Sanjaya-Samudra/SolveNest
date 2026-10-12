@@ -878,16 +878,23 @@ export async function resubmitAssignmentForQa(id, { note } = {}) {
   return { ok: true, qa: workspace.qa, workState: assignment.workState, updatedAt: assignment.updatedAt }
 }
 
-export async function applyQaOutcome(id, outcome, feedbackItems = []) {
+export async function applyQaOutcome(id, outcome, feedbackItems = [], actorId = null, reviewNote = '') {
   const store = await readExpertStore()
   const assignment = findRawAssignment(store, id)
   if (!assignment) return { ok: false, error: 'ASSIGNMENT_NOT_FOUND' }
   const workspace = assignment.workspace
   if (workspace.qa.state !== 'in_review') return { ok: false, error: 'QA_NOT_PENDING' }
+  if (!workspace.files.submission.length) return { ok: false, error: 'QA_FILES_REQUIRED' }
   const stampValue = nowIso()
   if (outcome === 'approved') {
     workspace.qa.reviewedAt = stampValue
     workspace.qa.state = 'approved'
+    workspace.qa.reviewerId = actorId
+    workspace.qa.reviewNote = String(reviewNote || '').trim().slice(0, 2000) || null
+    if (actorId) {
+      store.staffQaAudit = Array.isArray(store.staffQaAudit) ? store.staffQaAudit : []
+      store.staffQaAudit.unshift({ id: crypto.randomUUID(), assignmentId: id, actorId, outcome, note: workspace.qa.reviewNote, feedback: [], at: stampValue })
+    }
     touchAssignment(assignment, { workState: 'ready_to_deliver', latestKind: 'qa', latestText: 'Quality review approved — ready to deliver.' })
     pushMovement(store, { kind: 'qa', label: 'QA APPROVED', title: assignment.title, assignmentId: assignment.id })
     pushExpertNotification(store, { title: 'Quality review approved', body: assignment.title, route: `/expert/assignments/${assignment.id}` })
@@ -899,6 +906,8 @@ export async function applyQaOutcome(id, outcome, feedbackItems = []) {
   if (!items.length) return { ok: false, error: 'QA_FEEDBACK_REQUIRED' }
   workspace.qa.reviewedAt = stampValue
   workspace.qa.state = 'changes_requested'
+  workspace.qa.reviewerId = actorId
+  workspace.qa.reviewNote = String(reviewNote || '').trim().slice(0, 2000) || null
   workspace.qa.feedback = items.slice(0, 20).map((item) => normalizeFeedback({
     id: stamp('fb'),
     title: item?.title || 'QA feedback',
@@ -908,6 +917,10 @@ export async function applyQaOutcome(id, outcome, feedbackItems = []) {
     cycle: workspace.qa.cycle,
     createdAt: stampValue,
   })).filter(Boolean)
+  if (actorId) {
+    store.staffQaAudit = Array.isArray(store.staffQaAudit) ? store.staffQaAudit : []
+    store.staffQaAudit.unshift({ id: crypto.randomUUID(), assignmentId: id, actorId, outcome, note: workspace.qa.reviewNote, feedback: workspace.qa.feedback.map(({ title, body, severity }) => ({ title, body, severity })), at: stampValue })
+  }
   touchAssignment(assignment, { workState: 'changes_requested', latestKind: 'qa', latestText: 'Quality review returned feedback.' })
   pushMovement(store, { kind: 'qa', label: 'CHANGES REQUESTED', title: assignment.title, assignmentId: assignment.id })
   pushExpertNotification(store, { title: 'QA feedback received', body: assignment.title, route: `/expert/assignments/${assignment.id}` })

@@ -9,7 +9,8 @@ import Stripe from 'stripe'
 import { authenticateUser, createSession, createUser, deleteSession, getSession, listSessions } from './authStore.js'
 import { getAccountView, updatePreferences, updateProfile } from './accountStore.js'
 import { addNotification, listNotifications, markAllRead, markRead, unreadCount } from './store.js'
-import { createTicket, getCatalog, getTicket, listTickets, resolveGuidance, searchHelp } from './helpStore.js'
+import { getCatalog, resolveGuidance, searchHelp } from './helpStore.js'
+import { createSupportTicket, getStudentSupportTicket, listStudentSupportTickets, listSupportTickets, getSupportTicket, updateSupportTicket } from './supportStore.js'
 import {
   addAssignmentFile,
   appendProgressUpdate,
@@ -45,7 +46,7 @@ import { publish, subscribe } from './realtime.js'
 import { hasObjectStorage, persistUpload, removeStoredObject, signedObjectUrl } from './storage.js'
 import { hasEmail, sendEmail } from './email.js'
 import { hasSupabase, hasSupabaseAuth, supabaseChangeStaffRole, supabaseFindProfileByEmail, supabaseProfile, supabaseRefresh, supabaseRequestPasswordReset, supabaseTeam, supabaseUpdatePassword, supabaseSignIn, supabaseSignUp, supabaseUser } from './supabase.js'
-import { getAdminCase, getAdminOverview, recordAdminReview } from './adminStore.js'
+import { getAdminCase, getAdminOverview, getAdminQaCase, listAdminQaAssignments, recordAdminReview } from './adminStore.js'
 import { getSuperadminActivity, getSuperadminOverview } from './superadminStore.js'
 
 const PORT = Number(process.env.PORT || 4174)
@@ -1294,9 +1295,9 @@ app.delete('/api/student/account/sessions/:sessionId', requireStudent, (req, res
   res.json({ ok: true })
 })
 
-app.get('/api/student/help', requireStudent, (req, res) => {
-  res.json(getCatalog())
-})
+app.get('/api/student/help', requireStudent, supportRoute(async (req, res) => {
+  res.json({ ...getCatalog(), tickets: await listStudentSupportTickets(req.student.studentId) })
+}))
 
 app.get('/api/student/help/search', requireStudent, (req, res) => {
   const query = String(req.query.q || '')
@@ -1316,20 +1317,24 @@ app.get('/api/student/help/guidance', requireStudent, (req, res) => {
   }))
 })
 
-app.get('/api/student/help/tickets', requireStudent, (req, res) => {
-  res.json({ tickets: listTickets() })
-})
+function supportRoute(handler) {
+  return (req, res) => Promise.resolve(handler(req, res)).catch((error) => {
+    console.error(`[support] ${req.method} ${req.originalUrl}`, error)
+    if (!res.headersSent) safeError(res, 500, 'SUPPORT_UNAVAILABLE', 'Support requests could not be loaded.')
+  })
+}
 
-app.get('/api/student/help/tickets/:ticketId', requireStudent, (req, res) => {
-  const ticket = getTicket(req.params.ticketId)
-  if (!ticket) {
-    res.status(404).json({ error: 'TICKET_NOT_FOUND' })
-    return
-  }
+app.get('/api/student/help/tickets', requireStudent, supportRoute(async (req, res) => {
+  res.json({ tickets: await listStudentSupportTickets(req.student.studentId) })
+}))
+
+app.get('/api/student/help/tickets/:ticketId', requireStudent, supportRoute(async (req, res) => {
+  const ticket = await getStudentSupportTicket(req.student.studentId, req.params.ticketId)
+  if (!ticket) return safeError(res, 404, 'TICKET_NOT_FOUND', 'Support request not found.')
   res.json(ticket)
-})
+}))
 
-app.post('/api/student/help/tickets', requireStudent, (req, res) => {
+app.post('/api/student/help/tickets', requireStudent, supportRoute(async (req, res) => {
   const body = req.body || {}
   const message = String(body.message || '').trim()
   if (!message) {
@@ -1340,7 +1345,7 @@ app.post('/api/student/help/tickets', requireStudent, (req, res) => {
     res.status(400).json({ error: 'MESSAGE_TOO_LONG' })
     return
   }
-  const ticket = createTicket({
+  const ticket = await createSupportTicket({
     student: req.student,
     category: body.category ? String(body.category) : null,
     issue: body.issue ? String(body.issue) : null,
@@ -1348,7 +1353,7 @@ app.post('/api/student/help/tickets', requireStudent, (req, res) => {
     message,
   })
   res.status(201).json(ticket)
-})
+}))
 
 function localStaffPreview(req) {
   return process.env.NODE_ENV !== 'production' && (process.env.ADMIN_DEMO_SESSION === '1' || process.env.SUPERADMIN_DEMO_SESSION === '1') && /^(::1|127\.0\.0\.1|::ffff:127\.0\.0\.1)$/.test(req.ip || '')
@@ -1419,10 +1424,81 @@ app.get('/api/admin/tasks/:taskId', requireStaff, staffRoute(async (req, res) =>
   if (!detail) return safeError(res, 404, 'TASK_NOT_FOUND', 'This task could not be found.')
   res.json(detail)
 }))
+app.get('/api/admin/tasks/:taskId/files/:fileId/download', requireStaff, staffRoute(async (req, res) => {
+  const store = await readTaskStore()
+  const file = store.files.find((item) => item.id === req.params.fileId && item.taskId === req.params.taskId)
+  if (!file?.storageKey) return safeError(res, 404, 'FILE_NOT_FOUND', 'Task file not found.')
+  if (hasObjectStorage()) {
+    const url = await signedObjectUrl(file.storageKey, file.originalName)
+    if (!url) return safeError(res, 404, 'FILE_CONTENT_MISSING', 'The file is no longer available.')
+    return res.redirect(302, url)
+  }
+  const storagePath = path.resolve(uploadDir, file.storageKey)
+  if (!storagePath.startsWith(`${path.resolve(uploadDir)}${path.sep}`) || !fs.existsSync(storagePath)) return safeError(res, 404, 'FILE_CONTENT_MISSING', 'The file is no longer available.')
+  res.download(storagePath, file.originalName)
+}))
 app.post('/api/admin/tasks/:taskId/review', requireStaff, staffRoute(async (req, res) => {
   if (!limited(`admin-review:${req.staff.id}`, 30)) return safeError(res, 429, 'RATE_LIMITED', 'Too many review actions. Please wait a moment.')
   const result = await recordAdminReview(req.params.taskId, req.staff.id, req.body?.action, req.body?.note)
   if (result.error) return safeError(res, result.error === 'TASK_NOT_FOUND' ? 404 : result.error === 'NOTE_REQUIRED' || result.error === 'INVALID_ACTION' ? 400 : 409, result.error, result.error === 'NOTE_REQUIRED' ? 'Add an internal note of at least 10 characters.' : 'This review cannot be changed from its current state.')
+  res.json(result)
+}))
+
+app.get('/api/admin/support', requireStaff, staffRoute(async (_req, res) => res.json({ tickets: await listSupportTickets() })))
+app.get('/api/admin/support/:ticketId', requireStaff, staffRoute(async (req, res) => {
+  const ticket = await getSupportTicket(req.params.ticketId)
+  if (!ticket) return safeError(res, 404, 'TICKET_NOT_FOUND', 'Support request not found.')
+  res.json({ ticket })
+}))
+app.post('/api/admin/support/:ticketId/status', requireStaff, staffRoute(async (req, res) => {
+  if (!limited(`admin-support:${req.staff.id}`, 30)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before updating another request.')
+  const result = await updateSupportTicket(req.params.ticketId, req.staff.id, req.body?.status, req.body?.note, req.body?.studentMessage)
+  if (result.error) return safeError(res, result.error === 'TICKET_NOT_FOUND' ? 404 : result.error === 'STATUS_UNCHANGED' ? 409 : 400, result.error, result.error === 'NOTE_REQUIRED' ? 'Add an internal note of at least 10 characters.' : result.error === 'STUDENT_MESSAGE_REQUIRED' ? 'Explain what the Student needs to provide.' : 'This support request could not be updated.')
+  const studentId = result.ticket.context?.studentId
+  if (studentId) {
+    const labels = { in_progress: 'Your support request is being reviewed.', waiting_on_student: 'Your support request needs your attention.', resolved: 'Your support request was resolved.' }
+    const body = result.ticket.studentUpdates?.[0]?.at === result.ticket.updatedAt ? result.ticket.studentUpdates[0].message : labels[result.ticket.status]
+    if (body) {
+      try {
+        await addNotification({ id: crypto.randomUUID(), studentId, title: 'Support request updated', body, route: '/student/help', isRead: false, requiresAction: result.ticket.status === 'waiting_on_student', createdAt: now() })
+        publish(studentId, { type: 'SupportTicketUpdated', ticketId: result.ticket.id, status: result.ticket.status })
+      } catch (error) { console.error('[support] notification failed', error) }
+    }
+  }
+  res.json(result)
+}))
+
+app.get('/api/admin/qa', requireStaff, staffRoute(async (_req, res) => res.json({ assignments: await listAdminQaAssignments() })))
+app.get('/api/admin/qa/:assignmentId', requireStaff, staffRoute(async (req, res) => {
+  const detail = await getAdminQaCase(req.params.assignmentId)
+  if (!detail) return safeError(res, 404, 'ASSIGNMENT_NOT_FOUND', 'Assignment not found.')
+  res.json(detail)
+}))
+app.get('/api/admin/qa/:assignmentId/files/:fileId/download', requireStaff, staffRoute(async (req, res) => {
+  const detail = await getAdminQaCase(req.params.assignmentId)
+  if (!detail?.submissionFiles.some((file) => file.id === req.params.fileId)) return safeError(res, 404, 'FILE_NOT_FOUND', 'Submission file not found.')
+  const file = await findExpertFile(req.params.fileId)
+  if (!file?.storageKey) return safeError(res, 404, 'FILE_CONTENT_MISSING', 'The file is no longer available.')
+  if (hasObjectStorage()) {
+    const url = await signedObjectUrl(file.storageKey, file.name)
+    if (!url) return safeError(res, 404, 'FILE_CONTENT_MISSING', 'The file is no longer available.')
+    return res.redirect(302, url)
+  }
+  const storagePath = path.resolve(uploadDir, file.storageKey)
+  if (!storagePath.startsWith(`${path.resolve(uploadDir)}${path.sep}`) || !fs.existsSync(storagePath)) return safeError(res, 404, 'FILE_CONTENT_MISSING', 'The file is no longer available.')
+  res.download(storagePath, file.name)
+}))
+app.post('/api/admin/qa/:assignmentId/outcome', requireStaff, staffRoute(async (req, res) => {
+  if (!limited(`admin-qa:${req.staff.id}`, 20)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before recording another quality decision.')
+  const outcome = String(req.body?.outcome || '')
+  if (!['approved', 'changes_requested'].includes(outcome)) return safeError(res, 400, 'QA_OUTCOME_INVALID', 'Choose a valid quality decision.')
+  const note = String(req.body?.note || '').trim().slice(0, 2000)
+  if (outcome === 'changes_requested' && note.length < 10) return safeError(res, 400, 'QA_FEEDBACK_REQUIRED', 'Explain the changes needed in at least 10 characters.')
+  const feedback = outcome === 'changes_requested' ? [{ title: 'Changes required', body: note, severity: 'major' }] : []
+  const result = await applyQaOutcome(req.params.assignmentId, outcome, feedback, req.staff.id, note)
+  if (!result.ok) return expertMutationError(res, result.error)
+  const expert = await readExpertStore()
+  publishExpert(expert.expert.id, 'QaUpdated', { assignmentId: req.params.assignmentId, qa: result.qa })
   res.json(result)
 }))
 

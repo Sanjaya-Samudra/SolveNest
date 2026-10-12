@@ -49,6 +49,10 @@ Admin sign-in uses `/admin` and requires an existing Supabase Auth user whose `p
 
 Super Admin sign-in uses `/superadmin` and requires `profiles.role = 'Superadmin'`. Apply `server/migrations/002_staff_governance.sql` to enable audited role changes and the activity feed. Create the first Superadmin through a trusted Supabase administrator; the workspace does not let a user promote their own account. Set `SUPERADMIN_DEMO_SESSION=1` for a loopback-only visual preview. That preview cannot read or change real team access.
 
+Admin operations now include quality review and support. Quality approval moves an Expert submission to `ready_to_deliver`; requested changes return feedback to the Expert. Support requests are stored with the application state and Student ticket reads are limited to the owning Student. Existing local `help-tickets.json` records remain visible locally and are copied into the new store when an Admin updates them.
+
+Support status changes require an internal note. A `waiting_on_student` change also requires a separate message visible to the Student and creates a notification. The Help catalog and ticket endpoints return only tickets owned by the signed-in Student.
+
 ## 4. PostgreSQL
 
 1. Supabase already provides PostgreSQL.
