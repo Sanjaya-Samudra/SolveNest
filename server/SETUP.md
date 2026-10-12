@@ -37,12 +37,14 @@ Required in production:
 4. Put the server-only service role key in `SUPABASE_SERVICE_ROLE_KEY`. Never add this key to `client/.env` or browser code.
 5. Set `SUPABASE_STORAGE_BUCKET=student-files`.
 6. Create a private Storage bucket with that name.
-7. In the Supabase SQL Editor, run `server/migrations/001_initial.sql`, `002_staff_governance.sql`, `003_student_accounts.sql`, and `004_app_state_revision.sql` in order.
+7. In the Supabase SQL Editor, run `server/migrations/001_initial.sql`, `002_staff_governance.sql`, `003_student_accounts.sql`, `004_app_state_revision.sql`, and `005_private_app_sessions.sql` in order.
 8. In **Authentication > Providers**, enable Email/password. Decide whether email confirmation is required; if enabled, configure SMTP in Supabase Auth and complete confirmation before the first Student session.
 
 The migration creates a `profiles` table linked to `auth.users`, a signup trigger, Row Level Security policies, task/file/analysis/review tables, idempotency records, and guest-transfer records. The service role is used only by the trusted server for Storage and server-side operations.
 
 Expert sign-in uses `/expert/login` and requires an existing Supabase Auth user whose `profiles.role` is `Expert`. Local development without Supabase can still open the demo Expert workspace when `STRICT_SESSION=0`. Production always requires a signed-in Expert session.
+
+Expert and staff sessions are stored in the private `app_sessions` table, so API restarts do not log users out. The browser holds a random, HttpOnly cookie; only its SHA-256-derived identifier is stored in the database. Sessions expire after seven days. Deleting a session record revokes its cookie.
 
 Each real Expert now has an account-scoped workspace. An Expert account can sign in before receiving its first assignment. The Admin can assign a Student task after the Student accepts the official plan and Stripe confirms payment. The assignment includes the Student's source files and appears only in the chosen Expert's workspace. Staff QA searches all Expert workspaces. Existing single-Expert data is read for its matching account and copied into that account's workspace on its next update. Local demo data stays separate from a real Expert's legacy workspace. Production workspaces are keyed by Expert profile ID in `app_state` until domain records are migrated to dedicated PostgreSQL tables.
 

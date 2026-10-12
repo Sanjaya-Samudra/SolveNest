@@ -48,7 +48,7 @@ import { addActivity, buildTaskSummary, getStudentAnalysis, getStudentFiles, get
 import { publish, subscribe } from './realtime.js'
 import { hasObjectStorage, persistUpload, removeStoredObject, signedObjectUrl } from './storage.js'
 import { hasEmail, sendEmail } from './email.js'
-import { hasSupabase, hasSupabaseAuth, supabaseChangeStaffRole, supabaseExpertProfiles, supabaseFindProfileByEmail, supabaseProfile, supabaseRefresh, supabaseRequestPasswordReset, supabaseTeam, supabaseUpdatePassword, supabaseSignIn, supabaseSignUp, supabaseUser } from './supabase.js'
+import { hasSupabase, hasSupabaseAuth, supabaseChangeStaffRole, supabaseCreateAppSession, supabaseDeleteAppSession, supabaseExpertProfiles, supabaseFindProfileByEmail, supabaseGetAppSession, supabaseProfile, supabaseRefresh, supabaseRequestPasswordReset, supabaseTeam, supabaseUpdatePassword, supabaseSignIn, supabaseSignUp, supabaseUser } from './supabase.js'
 import { getAdminCase, getAdminOverview, getAdminQaCase, issueAdminPlan, listAdminQaAssignments, recordAdminReview } from './adminStore.js'
 import { getSuperadminActivity, getSuperadminOverview } from './superadminStore.js'
 
@@ -921,9 +921,13 @@ function requireStudent(req, res, next) {
   })
 }
 
-function ensureExpertSession(req, res) {
+async function ensureExpertSession(req, res) {
   const cookies = parseCookies(req.headers.cookie)
   const sid = cookies[EXPERT_COOKIE]
+  if (sid && hasSupabase()) {
+    const record = await supabaseGetAppSession(sid)
+    if (record?.role === 'Expert') return { id: sid, role: 'Expert', expertId: record.user_id, studentId: record.user_id, createdAt: record.created_at, lastActiveAt: record.last_active_at, device: record.device }
+  }
   if (sid && expertSessions.has(sid)) {
     const session = expertSessions.get(sid)
     session.lastActiveAt = now()
@@ -963,8 +967,7 @@ app.post('/api/expert/auth/login', async (req, res) => {
     const profile = await supabaseProfile(data.user.id)
     if (profile?.role !== 'Expert') return safeError(res, 403, 'EXPERT_ACCESS_REQUIRED', 'This account does not have Expert access.')
     const sid = crypto.randomUUID()
-    const stamp = now()
-    expertSessions.set(sid, { id: sid, role: 'Expert', expertId: profile.id, studentId: profile.id, name: profile.name, email: profile.email, createdAt: stamp, lastActiveAt: stamp, device: userAgentLabel(req.headers['user-agent']) })
+    await supabaseCreateAppSession(sid, profile.id, 'Expert', userAgentLabel(req.headers['user-agent']))
     res.setHeader('Set-Cookie', `${EXPERT_COOKIE}=${sid}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`)
     res.json({ user: { id: profile.id, role: 'Expert', name: profile.name, email: profile.email } })
   } catch (error) {
@@ -975,11 +978,12 @@ app.post('/api/expert/auth/login', async (req, res) => {
 
 async function requireExpert(req, res, next) {
   try {
-    req.expert = ensureExpertSession(req, res)
+    req.expert = await ensureExpertSession(req, res)
     if (req.expert.expertId !== 'demo-expert') {
       const profile = await supabaseProfile(req.expert.expertId)
       if (profile?.role !== 'Expert') {
-        expertSessions.delete(req.expert.id)
+        if (hasSupabase()) await supabaseDeleteAppSession(req.expert.id)
+        else expertSessions.delete(req.expert.id)
         return safeError(res, 401, 'EXPERT_ACCESS_REQUIRED', 'This account no longer has Expert access.')
       }
       req.expert.name = profile.name
@@ -1371,11 +1375,12 @@ app.get('/api/expert/events', requireExpert, (req, res) => {
   })
 })
 
-app.post('/api/expert/logout', requireExpert, (req, res) => {
-  expertSessions.delete(req.expert.id)
+app.post('/api/expert/logout', requireExpert, expertRoute(async (req, res) => {
+  if (hasSupabase() && req.expert.expertId !== 'demo-expert') await supabaseDeleteAppSession(req.expert.id)
+  else expertSessions.delete(req.expert.id)
   res.setHeader('Set-Cookie', `${EXPERT_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`)
   res.json({ ok: true })
-})
+}))
 
 app.get('/api/health', (req, res) => {
   res.json({ ok: true, service: 'solvenest-server' })
@@ -1625,15 +1630,17 @@ function localStaffPreview(req) {
 
 async function requireStaff(req, res, next) {
   const sid = parseCookies(req.headers.cookie)[STAFF_COOKIE]
-  if (sid && staffSessions.has(sid)) {
+  if (sid && (hasSupabase() || staffSessions.has(sid))) {
     try {
-      const session = staffSessions.get(sid)
-      const profile = await supabaseProfile(session.id)
+      const session = hasSupabase() ? await supabaseGetAppSession(sid) : staffSessions.get(sid)
+      if (!session || !['Admin', 'Superadmin'].includes(session.role)) return safeError(res, 401, 'STAFF_ACCESS_REQUIRED', 'Sign in with an Admin account to continue.')
+      const profile = await supabaseProfile(session.user_id || session.id)
       if (['Admin', 'Superadmin'].includes(profile?.role)) {
         req.staff = { id: profile.id, name: profile.name, email: profile.email, role: profile.role }
         return next()
       }
-      staffSessions.delete(sid)
+      if (hasSupabase()) await supabaseDeleteAppSession(sid)
+      else staffSessions.delete(sid)
       return safeError(res, 401, 'STAFF_ACCESS_REQUIRED', 'This account no longer has staff access.')
     } catch (error) {
       console.error('[staff] profile check failed', error)
@@ -1670,18 +1677,21 @@ app.post('/api/admin/login', staffRoute(async (req, res) => {
   if (!['Admin', 'Superadmin'].includes(profile?.role)) return safeError(res, 403, 'STAFF_ACCESS_REQUIRED', 'This account does not have staff access.')
   const sid = crypto.randomUUID()
   const staff = { id: profile.id, name: profile.name, email: profile.email, role: profile.role }
-  staffSessions.set(sid, staff)
+  await supabaseCreateAppSession(sid, profile.id, profile.role, userAgentLabel(req.headers['user-agent']))
   res.setHeader('Set-Cookie', `${STAFF_COOKIE}=${sid}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`)
   res.json({ staff })
 }))
 
 app.get('/api/admin/me', requireStaff, (req, res) => res.json({ staff: req.staff }))
-app.post('/api/admin/logout', requireStaff, (req, res) => {
+app.post('/api/admin/logout', requireStaff, staffRoute(async (req, res) => {
   const sid = parseCookies(req.headers.cookie)[STAFF_COOKIE]
-  if (sid) staffSessions.delete(sid)
+  if (sid) {
+    if (hasSupabase()) await supabaseDeleteAppSession(sid)
+    else staffSessions.delete(sid)
+  }
   res.setHeader('Set-Cookie', `${STAFF_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`)
   res.json({ ok: true })
-})
+}))
 app.get('/api/admin/overview', requireStaff, staffRoute(async (_req, res) => res.json(await getAdminOverview())))
 app.get('/api/admin/conversations', requireStaff, staffRoute(async (_req, res) => {
   const state = await readTaskStore()

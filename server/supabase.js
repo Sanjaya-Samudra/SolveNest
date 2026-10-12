@@ -1,5 +1,6 @@
 import 'dotenv/config'
 import fs from 'node:fs'
+import crypto from 'node:crypto'
 import { createClient } from '@supabase/supabase-js'
 
 const url = process.env.SUPABASE_URL
@@ -12,6 +13,27 @@ const adminClient = url && serviceRoleKey ? createClient(url, serviceRoleKey, { 
 export function hasSupabase() { return Boolean(authClient && adminClient) }
 export function hasSupabaseAuth() { return Boolean(authClient) }
 export function hasSupabaseStorage() { return Boolean(adminClient) }
+function appSessionId(token) {
+  const hash = crypto.createHash('sha256').update(token).digest('hex')
+  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20, 32)}`
+}
+export async function supabaseCreateAppSession(token, userId, role, device) {
+  if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED')
+  const expires_at = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
+  const { error } = await adminClient.from('app_sessions').insert({ id: appSessionId(token), user_id: userId, role, device, expires_at })
+  if (error) throw error
+}
+export async function supabaseGetAppSession(token) {
+  if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED')
+  const { data, error } = await adminClient.from('app_sessions').select('user_id, role, device, created_at, last_active_at, expires_at').eq('id', appSessionId(token)).gt('expires_at', new Date().toISOString()).maybeSingle()
+  if (error) throw error
+  return data
+}
+export async function supabaseDeleteAppSession(token) {
+  if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED')
+  const { error } = await adminClient.from('app_sessions').delete().eq('id', appSessionId(token))
+  if (error) throw error
+}
 export async function supabaseProfile(userId) { if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED'); const { data, error } = await adminClient.from('profiles').select('id, role, name, email').eq('id', userId).maybeSingle(); if (error) throw error; return data }
 export async function supabaseExpertProfiles() { if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED'); const { data, error } = await adminClient.from('profiles').select('id, name, email, role').eq('role', 'Expert').order('name', { ascending: true }); if (error) throw error; return data || [] }
 export async function supabaseTeam() {
