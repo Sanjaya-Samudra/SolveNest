@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, ArrowRight, Bell, CheckCircle2, ChevronDown, ClipboardList, Clock3, Download, FileText, LayoutDashboard, LifeBuoy, LogOut, Menu, MessageCircle, Search, ShieldCheck, X } from 'lucide-react'
 import { assignExpert, getAssignableExperts, getCase, getConversation, getConversations, getOverview, getQaCase, getQaQueue, getStaff, getSupportCase, getSupportQueue, issuePlan, issueScopeChange, loginStaff, logoutStaff, markConversationRead, recordQaOutcome, recordReview, sendConversationReply, updateSupportStatus } from '../../admin/adminApi.js'
+import logo from '../../assets/logo-mark.webp'
 import './admin-workspace.css'
 
 const pathFor = (id) => id ? `/admin/tasks/${encodeURIComponent(id)}` : '/admin'
@@ -56,7 +57,7 @@ function ReviewPill({ status }) { return <span className="adm-status" data-state
 function AdminSidebar({ section, filter, setFilter, staff, mobileOpen, setMobileOpen }) {
   return <><div className={`adm-scrim ${mobileOpen ? 'is-open' : ''}`} onClick={() => setMobileOpen(false)} />
     <aside className={`adm-sidebar ${mobileOpen ? 'is-open' : ''}`}>
-      <div className="adm-brand"><span className="adm-brand-mark" aria-hidden="true">S</span><span>SolveNest<small>ADMIN</small></span><button className="adm-mobile-close" onClick={() => setMobileOpen(false)} aria-label="Close menu"><X size={18} /></button></div>
+      <div className="adm-brand"><img className="adm-brand-logo" src={logo} alt="SolveNest" /><span>SolveNest<small>ADMIN</small></span><button className="adm-mobile-close" onClick={() => setMobileOpen(false)} aria-label="Close menu"><X size={18} /></button></div>
       <nav aria-label="Admin navigation">
         <p className="adm-nav-label">OPERATIONS</p>
         <button className={section === 'tasks' && filter === 'queue' ? 'is-active' : ''} onClick={() => { setFilter('queue'); setMobileOpen(false); go(null) }}><LayoutDashboard size={17} /> Action queue</button>

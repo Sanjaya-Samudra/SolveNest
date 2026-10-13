@@ -31,6 +31,8 @@
   --exp-sidebar: 76px;
 }
 
+.expert-app :focus-visible{outline:2px solid var(--exp-cyan);outline-offset:3px}
+@media(prefers-reduced-motion:reduce){.expert-app *{scroll-behavior:auto!important;transition-duration:.01ms!important;animation-duration:.01ms!important;animation-iteration-count:1!important}}
 .expert-app--gate {
   align-items: center;
   justify-content: center;
