@@ -68,7 +68,6 @@ function AdminSidebar({ section, filter, setFilter, staff, mobileOpen, setMobile
         <button className={section === 'qa' ? 'is-active' : ''} onClick={() => { setMobileOpen(false); goSection('qa') }}><ShieldCheck size={17} /> Quality review</button>
         <button className={section === 'support' ? 'is-active' : ''} onClick={() => { setMobileOpen(false); goSection('support') }}><LifeBuoy size={17} /> Support requests</button>
         <button className={section === 'messages' ? 'is-active' : ''} onClick={() => { setMobileOpen(false); goSection('messages') }}><MessageCircle size={17} /> Task messages</button>
-        {staff?.role === 'Superadmin' && <><p className="adm-nav-label" style={{ marginTop: 22 }}>GOVERNANCE</p><button onClick={() => window.location.assign('/superadmin')}><ShieldCheck size={17} /> Super Admin</button></>}
       </nav>
       <div className="adm-sidebar-foot"><span className="adm-avatar">{staff?.name?.slice(0, 1) || 'A'}</span><span><strong>{staff?.name || 'Admin'}</strong><small>{staff?.demo ? 'Local preview' : staff?.role}</small></span></div>
     </aside></>

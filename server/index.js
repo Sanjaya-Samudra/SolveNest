@@ -59,7 +59,8 @@ const COOKIE = 'sn_sid'
 const EXPERT_COOKIE = 'sn_eid'
 const expertSessions = new Map()
 const staffSessions = new Map()
-const STAFF_COOKIE = 'sn_staff'
+const ADMIN_COOKIE = 'sn_admin'
+const SUPERADMIN_COOKIE = 'sn_superadmin'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const uploadDir = path.join(__dirname, 'private-uploads')
 const requestWindows = new Map()
@@ -1808,41 +1809,40 @@ app.post('/api/student/help/tickets', requireStudent, supportRoute(async (req, r
   res.status(201).json(ticket)
 }))
 
-function localStaffPreview(req) {
-  return process.env.NODE_ENV !== 'production' && (process.env.ADMIN_DEMO_SESSION === '1' || process.env.SUPERADMIN_DEMO_SESSION === '1') && /^(::1|127\.0\.0\.1|::ffff:127\.0\.0\.1)$/.test(req.ip || '')
+function localStaffPreview(req, role) {
+  const enabled = role === 'Superadmin' ? process.env.SUPERADMIN_DEMO_SESSION === '1' : process.env.ADMIN_DEMO_SESSION === '1'
+  return process.env.NODE_ENV !== 'production' && enabled && /^(::1|127\.0\.0\.1|::ffff:127\.0\.0\.1)$/.test(req.ip || '')
 }
 
-async function requireStaff(req, res, next) {
-  const sid = parseCookies(req.headers.cookie)[STAFF_COOKIE]
+function staffCookie(role) { return role === 'Superadmin' ? SUPERADMIN_COOKIE : ADMIN_COOKIE }
+function staffLabel(role) { return role === 'Superadmin' ? 'Super Admin' : 'Admin' }
+function requireStaffRole(role) { return async (req, res, next) => {
+  const sid = parseCookies(req.headers.cookie)[staffCookie(role)]
   if (sid && (hasSupabase() || staffSessions.has(sid))) {
     try {
       const session = hasSupabase() ? await supabaseGetAppSession(sid) : staffSessions.get(sid)
-      if (!session || !['Admin', 'Superadmin'].includes(session.role)) return safeError(res, 401, 'STAFF_ACCESS_REQUIRED', 'Sign in with an Admin account to continue.')
+      if (!session || session.role !== role) return safeError(res, 401, `${role.toUpperCase()}_ACCESS_REQUIRED`, `Sign in with a ${staffLabel(role)} account to continue.`)
       const profile = await supabaseProfile(session.user_id || session.id)
-      if (['Admin', 'Superadmin'].includes(profile?.role)) {
+      if (profile?.role === role) {
         req.staff = { id: profile.id, name: profile.name, email: profile.email, role: profile.role }
         return next()
       }
       if (hasSupabase()) await supabaseDeleteAppSession(sid)
       else staffSessions.delete(sid)
-      return safeError(res, 401, 'STAFF_ACCESS_REQUIRED', 'This account no longer has staff access.')
+      return safeError(res, 401, `${role.toUpperCase()}_ACCESS_REQUIRED`, `This account no longer has ${staffLabel(role)} access.`)
     } catch (error) {
       console.error('[staff] profile check failed', error)
-      return safeError(res, 503, 'STAFF_ACCESS_UNAVAILABLE', 'Staff access could not be verified right now.')
+      return safeError(res, 503, 'STAFF_ACCESS_UNAVAILABLE', `${staffLabel(role)} access could not be verified right now.`)
     }
   }
-  if (localStaffPreview(req)) {
-    const superadmin = process.env.SUPERADMIN_DEMO_SESSION === '1'
-    req.staff = { id: superadmin ? 'local-superadmin' : 'local-admin', name: superadmin ? 'Local Super Admin' : 'Local Admin', role: superadmin ? 'Superadmin' : 'Admin', demo: true }
+  if (localStaffPreview(req, role)) {
+    req.staff = { id: role === 'Superadmin' ? 'local-superadmin' : 'local-admin', name: `Local ${staffLabel(role)}`, role, demo: true }
     return next()
   }
-  safeError(res, 401, 'STAFF_ACCESS_REQUIRED', 'Sign in with an Admin account to continue.')
-}
-
-function requireSuperadmin(req, res, next) {
-  if (req.staff?.role !== 'Superadmin') return safeError(res, 403, 'SUPERADMIN_REQUIRED', 'Super Admin access is required.')
-  next()
-}
+  safeError(res, 401, `${role.toUpperCase()}_ACCESS_REQUIRED`, `Sign in with a ${staffLabel(role)} account to continue.`)
+} }
+const requireAdmin = requireStaffRole('Admin')
+const requireSuperadmin = requireStaffRole('Superadmin')
 
 function staffRoute(handler) {
   return (req, res) => Promise.resolve(handler(req, res)).catch((error) => {
@@ -1852,43 +1852,46 @@ function staffRoute(handler) {
   })
 }
 
-app.post('/api/admin/login', staffRoute(async (req, res) => {
+async function staffLogin(req, res, role) {
   if (!hasSupabaseAuth()) return safeError(res, 503, 'STAFF_LOGIN_UNAVAILABLE', 'Staff sign-in is not configured yet.')
-  if (!await limited(`staff-login:${req.ip}`, 10)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before trying again.')
+  if (!await limited(`${role.toLowerCase()}-login:${req.ip}`, 10)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before trying again.')
   const { data, error } = await supabaseSignIn({ email: req.body?.email, password: req.body?.password })
   if (error || !data?.user) return safeError(res, 401, 'INVALID_CREDENTIALS', 'Those details did not match an account.')
   const profile = await supabaseProfile(data.user.id)
-  if (!['Admin', 'Superadmin'].includes(profile?.role)) return safeError(res, 403, 'STAFF_ACCESS_REQUIRED', 'This account does not have staff access.')
+  if (profile?.role !== role) return safeError(res, 403, `${role.toUpperCase()}_ACCESS_REQUIRED`, `This account does not have ${staffLabel(role)} access.`)
   const sid = crypto.randomUUID()
   const staff = { id: profile.id, name: profile.name, email: profile.email, role: profile.role }
   await supabaseCreateAppSession(sid, profile.id, profile.role, userAgentLabel(req.headers['user-agent']))
-  res.setHeader('Set-Cookie', `${STAFF_COOKIE}=${sid}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`)
+  res.setHeader('Set-Cookie', `${staffCookie(role)}=${sid}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`)
   res.json({ staff })
-}))
-
-app.get('/api/admin/me', requireStaff, (req, res) => res.json({ staff: req.staff }))
-app.post('/api/admin/logout', requireStaff, staffRoute(async (req, res) => {
-  const sid = parseCookies(req.headers.cookie)[STAFF_COOKIE]
+}
+async function staffLogout(req, res, role) {
+  const sid = parseCookies(req.headers.cookie)[staffCookie(role)]
   if (sid) {
     if (hasSupabase()) await supabaseDeleteAppSession(sid)
     else staffSessions.delete(sid)
   }
-  res.setHeader('Set-Cookie', `${STAFF_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`)
+  res.setHeader('Set-Cookie', `${staffCookie(role)}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`)
   res.json({ ok: true })
-}))
-app.get('/api/admin/overview', requireStaff, staffRoute(async (_req, res) => res.json(await getAdminOverview())))
-app.get('/api/admin/conversations', requireStaff, staffRoute(async (_req, res) => {
+}
+
+app.post('/api/admin/login', staffRoute((req, res) => staffLogin(req, res, 'Admin')))
+
+app.get('/api/admin/me', requireAdmin, (req, res) => res.json({ staff: req.staff }))
+app.post('/api/admin/logout', requireAdmin, staffRoute((req, res) => staffLogout(req, res, 'Admin')))
+app.get('/api/admin/overview', requireAdmin, staffRoute(async (_req, res) => res.json(await getAdminOverview())))
+app.get('/api/admin/conversations', requireAdmin, staffRoute(async (_req, res) => {
   const state = await readTaskStore()
   const conversations = state.conversations.map((conversation) => ({ ...conversation, lastMessage: state.messages.filter((message) => message.conversationId === conversation.id).at(-1) || conversation.lastMessage })).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
   res.json({ conversations })
 }))
-app.get('/api/admin/conversations/:conversationId/messages', requireStaff, staffRoute(async (req, res) => {
+app.get('/api/admin/conversations/:conversationId/messages', requireAdmin, staffRoute(async (req, res) => {
   const state = await readTaskStore()
   const conversation = state.conversations.find((item) => item.id === req.params.conversationId)
   if (!conversation) return safeError(res, 404, 'CONVERSATION_NOT_FOUND', 'Conversation not found.')
   res.json({ conversation, messages: state.messages.filter((item) => item.conversationId === conversation.id) })
 }))
-app.post('/api/admin/conversations/:conversationId/messages', requireStaff, staffRoute(async (req, res) => {
+app.post('/api/admin/conversations/:conversationId/messages', requireAdmin, staffRoute(async (req, res) => {
   if (!await limited(`staff-message:${req.staff.id}`, 30)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before sending another message.')
   const body = String(req.body?.body || '').trim()
   if (!body || body.length > 4000) return safeError(res, 400, 'MESSAGE_INVALID', 'Message must be between 1 and 4000 characters.')
@@ -1910,7 +1913,7 @@ app.post('/api/admin/conversations/:conversationId/messages', requireStaff, staf
   publish(result.conversation.studentId, { type: 'MessageCreated', message: result.message })
   res.status(201).json({ message: result.message })
 }))
-app.post('/api/admin/conversations/:conversationId/read', requireStaff, staffRoute(async (req, res) => {
+app.post('/api/admin/conversations/:conversationId/read', requireAdmin, staffRoute(async (req, res) => {
   const changed = await withTaskStore((store) => {
     const conversation = store.conversations.find((item) => item.id === req.params.conversationId)
     if (!conversation) return false
@@ -1920,12 +1923,12 @@ app.post('/api/admin/conversations/:conversationId/read', requireStaff, staffRou
   if (!changed) return safeError(res, 404, 'CONVERSATION_NOT_FOUND', 'Conversation not found.')
   res.json({ ok: true })
 }))
-app.get('/api/admin/tasks/:taskId', requireStaff, staffRoute(async (req, res) => {
+app.get('/api/admin/tasks/:taskId', requireAdmin, staffRoute(async (req, res) => {
   const detail = await getAdminCase(req.params.taskId)
   if (!detail) return safeError(res, 404, 'TASK_NOT_FOUND', 'This task could not be found.')
   res.json(detail)
 }))
-app.get('/api/admin/tasks/:taskId/files/:fileId/download', requireStaff, staffRoute(async (req, res) => {
+app.get('/api/admin/tasks/:taskId/files/:fileId/download', requireAdmin, staffRoute(async (req, res) => {
   const store = await readTaskStore()
   const file = store.files.find((item) => item.id === req.params.fileId && item.taskId === req.params.taskId)
   if (!file?.storageKey) return safeError(res, 404, 'FILE_NOT_FOUND', 'Task file not found.')
@@ -1938,14 +1941,14 @@ app.get('/api/admin/tasks/:taskId/files/:fileId/download', requireStaff, staffRo
   if (!storagePath.startsWith(`${path.resolve(uploadDir)}${path.sep}`) || !fs.existsSync(storagePath)) return safeError(res, 404, 'FILE_CONTENT_MISSING', 'The file is no longer available.')
   res.download(storagePath, file.originalName)
 }))
-app.post('/api/admin/tasks/:taskId/review', requireStaff, staffRoute(async (req, res) => {
+app.post('/api/admin/tasks/:taskId/review', requireAdmin, staffRoute(async (req, res) => {
   if (!await limited(`admin-review:${req.staff.id}`, 30)) return safeError(res, 429, 'RATE_LIMITED', 'Too many review actions. Please wait a moment.')
   const result = await recordAdminReview(req.params.taskId, req.staff.id, req.body?.action, req.body?.note)
   if (result.error) return safeError(res, result.error === 'TASK_NOT_FOUND' ? 404 : result.error === 'NOTE_REQUIRED' || result.error === 'INVALID_ACTION' ? 400 : 409, result.error, result.error === 'NOTE_REQUIRED' ? 'Add an internal note of at least 10 characters.' : 'This review cannot be changed from its current state.')
   res.json(result)
 }))
 
-app.post('/api/admin/tasks/:taskId/plan', requireStaff, staffRoute(async (req, res) => {
+app.post('/api/admin/tasks/:taskId/plan', requireAdmin, staffRoute(async (req, res) => {
   if (!await limited(`admin-plan:${req.staff.id}`, 20)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before issuing another plan.')
   const result = await issueAdminPlan(req.params.taskId, req.staff.id, req.body)
   if (result.error) return safeError(res, result.error === 'TASK_NOT_FOUND' ? 404 : result.error === 'PLAN_INVALID' ? 400 : 409, result.error, result.error === 'PLAN_INVALID' ? 'Enter a scope of at least 20 characters, a positive whole-number price, a future delivery date, and a valid revision allowance.' : 'This task is not ready for a new plan.')
@@ -1954,7 +1957,7 @@ app.post('/api/admin/tasks/:taskId/plan', requireStaff, staffRoute(async (req, r
   res.status(201).json({ plan: result.plan })
 }))
 
-app.post('/api/admin/tasks/:taskId/scope-change', requireStaff, staffRoute(async (req, res) => {
+app.post('/api/admin/tasks/:taskId/scope-change', requireAdmin, staffRoute(async (req, res) => {
   if (!await limited(`admin-scope:${req.staff.id}`, 10)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before issuing another scope change.')
   const task = (await readTaskStore()).tasks.find((item) => item.id === req.params.taskId)
   if (!task) return safeError(res, 404, 'TASK_NOT_FOUND', 'Task not found.')
@@ -1970,7 +1973,7 @@ app.post('/api/admin/tasks/:taskId/scope-change', requireStaff, staffRoute(async
   res.status(201).json({ scopeChange: result.change })
 }))
 
-app.get('/api/admin/experts', requireStaff, staffRoute(async (req, res) => {
+app.get('/api/admin/experts', requireAdmin, staffRoute(async (req, res) => {
   const profiles = req.staff.demo ? [{ id: 'demo-expert', name: 'Alex Morgan', email: null, role: 'Expert' }] : await supabaseExpertProfiles()
   const experts = await Promise.all(profiles.map(async (profile) => {
     const store = await runForExpert(profile, readExpertStore)
@@ -1979,7 +1982,7 @@ app.get('/api/admin/experts', requireStaff, staffRoute(async (req, res) => {
   res.json({ experts })
 }))
 
-app.post('/api/admin/tasks/:taskId/assign', requireStaff, staffRoute(async (req, res) => {
+app.post('/api/admin/tasks/:taskId/assign', requireAdmin, staffRoute(async (req, res) => {
   if (!await limited(`admin-assign:${req.staff.id}`, 20)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before assigning another task.')
   const expertId = String(req.body?.expertId || '')
   const profile = req.staff.demo && expertId === 'demo-expert' ? { id: expertId, name: 'Alex Morgan', role: 'Expert' } : req.staff.demo ? null : await supabaseProfile(expertId)
@@ -2032,13 +2035,13 @@ app.post('/api/admin/tasks/:taskId/assign', requireStaff, staffRoute(async (req,
   res.status(201).json({ assignmentId: created.assignment.id, expert: { id: profile.id, name: profile.name } })
 }))
 
-app.get('/api/admin/support', requireStaff, staffRoute(async (_req, res) => res.json({ tickets: await listSupportTickets() })))
-app.get('/api/admin/support/:ticketId', requireStaff, staffRoute(async (req, res) => {
+app.get('/api/admin/support', requireAdmin, staffRoute(async (_req, res) => res.json({ tickets: await listSupportTickets() })))
+app.get('/api/admin/support/:ticketId', requireAdmin, staffRoute(async (req, res) => {
   const ticket = await getSupportTicket(req.params.ticketId)
   if (!ticket) return safeError(res, 404, 'TICKET_NOT_FOUND', 'Support request not found.')
   res.json({ ticket })
 }))
-app.post('/api/admin/support/:ticketId/status', requireStaff, staffRoute(async (req, res) => {
+app.post('/api/admin/support/:ticketId/status', requireAdmin, staffRoute(async (req, res) => {
   if (!await limited(`admin-support:${req.staff.id}`, 30)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before updating another request.')
   const result = await updateSupportTicket(req.params.ticketId, req.staff.id, req.body?.status, req.body?.note, req.body?.studentMessage)
   if (result.error) return safeError(res, result.error === 'TICKET_NOT_FOUND' ? 404 : result.error === 'STATUS_UNCHANGED' ? 409 : 400, result.error, result.error === 'NOTE_REQUIRED' ? 'Add an internal note of at least 10 characters.' : result.error === 'STUDENT_MESSAGE_REQUIRED' ? 'Explain what the Student needs to provide.' : 'This support request could not be updated.')
@@ -2056,13 +2059,13 @@ app.post('/api/admin/support/:ticketId/status', requireStaff, staffRoute(async (
   res.json(result)
 }))
 
-app.get('/api/admin/qa', requireStaff, staffRoute(async (_req, res) => res.json({ assignments: await listAdminQaAssignments() })))
-app.get('/api/admin/qa/:assignmentId', requireStaff, staffRoute(async (req, res) => {
+app.get('/api/admin/qa', requireAdmin, staffRoute(async (_req, res) => res.json({ assignments: await listAdminQaAssignments() })))
+app.get('/api/admin/qa/:assignmentId', requireAdmin, staffRoute(async (req, res) => {
   const detail = await getAdminQaCase(req.params.assignmentId)
   if (!detail) return safeError(res, 404, 'ASSIGNMENT_NOT_FOUND', 'Assignment not found.')
   res.json(detail)
 }))
-app.get('/api/admin/qa/:assignmentId/files/:fileId/download', requireStaff, staffRoute(async (req, res) => {
+app.get('/api/admin/qa/:assignmentId/files/:fileId/download', requireAdmin, staffRoute(async (req, res) => {
   const detail = await getAdminQaCase(req.params.assignmentId)
   if (!detail?.submissionFiles.some((file) => file.id === req.params.fileId)) return safeError(res, 404, 'FILE_NOT_FOUND', 'Submission file not found.')
   const file = await runForExpert(detail.assignment.expertId, () => findExpertFile(req.params.fileId))
@@ -2076,7 +2079,7 @@ app.get('/api/admin/qa/:assignmentId/files/:fileId/download', requireStaff, staf
   if (!storagePath.startsWith(`${path.resolve(uploadDir)}${path.sep}`) || !fs.existsSync(storagePath)) return safeError(res, 404, 'FILE_CONTENT_MISSING', 'The file is no longer available.')
   res.download(storagePath, file.name)
 }))
-app.post('/api/admin/qa/:assignmentId/outcome', requireStaff, staffRoute(async (req, res) => {
+app.post('/api/admin/qa/:assignmentId/outcome', requireAdmin, staffRoute(async (req, res) => {
   if (!await limited(`admin-qa:${req.staff.id}`, 20)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before recording another quality decision.')
   const outcome = String(req.body?.outcome || '')
   if (!['approved', 'changes_requested'].includes(outcome)) return safeError(res, 400, 'QA_OUTCOME_INVALID', 'Choose a valid quality decision.')
@@ -2091,7 +2094,10 @@ app.post('/api/admin/qa/:assignmentId/outcome', requireStaff, staffRoute(async (
   res.json(result)
 }))
 
-app.get('/api/superadmin/overview', requireStaff, requireSuperadmin, staffRoute(async (_req, res) => {
+app.post('/api/superadmin/login', staffRoute((req, res) => staffLogin(req, res, 'Superadmin')))
+app.get('/api/superadmin/me', requireSuperadmin, (req, res) => res.json({ staff: req.staff }))
+app.post('/api/superadmin/logout', requireSuperadmin, staffRoute((req, res) => staffLogout(req, res, 'Superadmin')))
+app.get('/api/superadmin/overview', requireSuperadmin, staffRoute(async (_req, res) => {
   const services = [
     { id: 'auth', label: 'Account sign in', configured: hasSupabaseAuth() },
     { id: 'data', label: 'Persistent data', configured: hasSupabase() },
@@ -2102,22 +2108,22 @@ app.get('/api/superadmin/overview', requireStaff, requireSuperadmin, staffRoute(
   ]
   res.json(await getSuperadminOverview(services))
 }))
-app.get('/api/superadmin/team', requireStaff, requireSuperadmin, staffRoute(async (req, res) => {
+app.get('/api/superadmin/team', requireSuperadmin, staffRoute(async (req, res) => {
   const page = Number(req.query.page || 1)
   if (!Number.isSafeInteger(page) || page < 1 || page > 10000) return safeError(res, 400, 'INVALID_PAGE', 'Choose a valid page.')
   res.json({ directory: req.staff.demo ? null : await supabaseTeam({ page, search: req.query.search }) })
 }))
-app.get('/api/superadmin/team/lookup', requireStaff, requireSuperadmin, staffRoute(async (req, res) => {
+app.get('/api/superadmin/team/lookup', requireSuperadmin, staffRoute(async (req, res) => {
   if (req.staff.demo || !hasSupabase()) return safeError(res, 503, 'TEAM_LOOKUP_UNAVAILABLE', 'Team lookup requires a real Super Admin account and Supabase.')
   if (!await limited(`staff-lookup:${req.staff.id}`, 30)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before looking up another account.')
   const email = String(req.query.email || '').trim().toLowerCase()
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 320) return safeError(res, 400, 'INVALID_EMAIL', 'Enter a valid account email.')
   res.json({ person: await supabaseFindProfileByEmail(email) })
 }))
-app.get('/api/superadmin/activity', requireStaff, requireSuperadmin, staffRoute(async (req, res) => {
+app.get('/api/superadmin/activity', requireSuperadmin, staffRoute(async (req, res) => {
   res.json({ activity: await getSuperadminActivity(!req.staff.demo && hasSupabase()) })
 }))
-app.post('/api/superadmin/team/:profileId/role', requireStaff, requireSuperadmin, staffRoute(async (req, res) => {
+app.post('/api/superadmin/team/:profileId/role', requireSuperadmin, staffRoute(async (req, res) => {
   if (req.staff.demo || !hasSupabase()) return safeError(res, 503, 'ROLE_MANAGEMENT_UNAVAILABLE', 'Role management requires a real Super Admin account and Supabase.')
   if (!await limited(`staff-role:${req.staff.id}`, 20)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before changing another role.')
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(req.params.profileId)) return safeError(res, 400, 'INVALID_PROFILE', 'Choose a valid account.')
