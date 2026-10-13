@@ -116,28 +116,64 @@ export async function supabaseChangeStaffRole(actorId, targetId, expectedRole, n
   if (error) throw error
   return data
 }
+const domainCollections = ['tasks', 'files', 'deliveryFiles', 'analyses', 'reviews', 'drafts', 'guestTransfers', 'conversations', 'messages', 'payments', 'plans', 'scopeChanges', 'explainSessions', 'explainArtifacts', 'explainRequests', 'supportTickets', 'activity', 'notifications']
+function emptyDomainState() { return Object.fromEntries([...domainCollections.map((name) => [name, []]), ['idempotency', {}]]) }
+function recordKey(item, index) { return String(item?.id || item?.token || `${index}`) }
+function flattenDomainState(state) {
+  const records = new Map()
+  for (const collection of domainCollections) {
+    const items = Array.isArray(state[collection]) ? state[collection] : []
+    items.forEach((payload, position) => records.set(`${collection}\0${recordKey(payload, position)}`, { collection, key: recordKey(payload, position), payload, position }))
+  }
+  for (const [key, payload] of Object.entries(state.idempotency || {})) records.set(`idempotency\0${key}`, { collection: 'idempotency', key, payload, position: 0 })
+  return records
+}
 export async function supabaseReadState() {
   if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED')
-  const { data, error } = await adminClient.from('app_state').select('state, revision').eq('id', 'default').maybeSingle()
-  if (error) throw error
-  const state = data?.state || { tasks: [], files: [], deliveryFiles: [], analyses: [], reviews: [], drafts: [], guestTransfers: [], conversations: [], messages: [], payments: [], plans: [], scopeChanges: [], explainSessions: [], explainArtifacts: [], explainRequests: [], supportTickets: [], idempotency: {}, activity: [], notifications: [] }
-  Object.defineProperty(state, '__revision', { value: data ? Number(data.revision) : null, configurable: true })
+  const [{ data: meta, error: metaError }, records] = await Promise.all([
+    adminClient.from('domain_state_meta').select('revision').eq('id', 'default').single(),
+    (async () => {
+      const rows = []
+      for (let offset = 0; ; offset += 1000) {
+        const { data, error } = await adminClient.from('domain_records').select('collection, record_key, payload, position').order('collection').order('position').range(offset, offset + 999)
+        if (error) throw error
+        rows.push(...(data || []))
+        if (!data || data.length < 1000) break
+      }
+      return rows
+    })(),
+  ])
+  if (metaError) throw new Error(metaError.code === '42P01' ? 'DOMAIN_RECORDS_MIGRATION_REQUIRED' : metaError.message)
+  const state = emptyDomainState()
+  for (const row of records) {
+    if (row.collection === 'idempotency') state.idempotency[row.record_key] = row.payload
+    else if (Array.isArray(state[row.collection])) state[row.collection].push(row.payload)
+  }
+  Object.defineProperty(state, '__revision', { value: Number(meta.revision), configurable: true })
+  Object.defineProperty(state, '__baseline', { value: flattenDomainState(state), configurable: true })
   return state
 }
 export async function supabaseWriteState(state) {
   if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED')
   const revision = state.__revision
-  const updated_at = new Date().toISOString()
-  if (revision === null) {
-    const { error } = await adminClient.from('app_state').insert({ id: 'default', state, revision: 1, updated_at })
-    if (error) throw error.code === '23505' ? new Error('APP_STATE_CONFLICT') : error
-    return state
-  }
   if (!Number.isSafeInteger(revision)) throw new Error('APP_STATE_REVISION_REQUIRED')
-  const { data, error } = await adminClient.from('app_state').update({ state, revision: revision + 1, updated_at }).eq('id', 'default').eq('revision', revision).select('revision').maybeSingle()
-  if (error) throw error
-  if (!data) throw new Error('APP_STATE_CONFLICT')
-  Object.defineProperty(state, '__revision', { value: data.revision, configurable: true })
+  const baseline = state.__baseline
+  if (!(baseline instanceof Map)) throw new Error('APP_STATE_BASELINE_REQUIRED')
+  const current = flattenDomainState(state)
+  const changes = []
+  for (const [identity, record] of current) {
+    const previous = baseline.get(identity)
+    if (!previous || previous.position !== record.position || JSON.stringify(previous.payload) !== JSON.stringify(record.payload)) changes.push(record)
+  }
+  for (const [identity, previous] of baseline) if (!current.has(identity)) changes.push({ collection: previous.collection, key: previous.key, payload: null, position: previous.position })
+  if (!changes.length) return state
+  const { data, error } = await adminClient.rpc('apply_domain_changes', { p_expected_revision: revision, p_changes: changes })
+  if (error) {
+    if (String(error.message).includes('APP_STATE_CONFLICT') || error.code === '40001') throw new Error('APP_STATE_CONFLICT')
+    throw error
+  }
+  Object.defineProperty(state, '__revision', { value: Number(data), configurable: true })
+  Object.defineProperty(state, '__baseline', { value: current, configurable: true })
   return state
 }
 export async function supabaseReadStudentAccount(studentId) { if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED'); const { data, error } = await adminClient.from('student_accounts').select('account').eq('student_id', studentId).maybeSingle(); if (error) throw error; return data?.account || null }

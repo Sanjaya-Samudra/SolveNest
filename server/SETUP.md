@@ -39,7 +39,7 @@ Required in production:
 4. Put the server-only service role key in `SUPABASE_SERVICE_ROLE_KEY`. Never add this key to `client/.env` or browser code.
 5. Set `SUPABASE_STORAGE_BUCKET=student-files`.
 6. Create a private Storage bucket with that name.
-7. In the Supabase SQL Editor, run `server/migrations/001_initial.sql` through `007_expert_workspaces.sql` in numeric order.
+7. In the Supabase SQL Editor, run every file in `server/migrations` from `001_initial.sql` through `008_domain_records.sql` in numeric order.
 8. In **Authentication > Providers**, enable Email/password. Decide whether email confirmation is required; if enabled, configure SMTP in Supabase Auth and complete confirmation before the first Student session.
 
 The migration creates a `profiles` table linked to `auth.users`, a signup trigger, Row Level Security policies, task/file/analysis/review tables, idempotency records, and guest-transfer records. The service role is used only by the trusted server for Storage and server-side operations.
@@ -73,7 +73,7 @@ npm run db:migrate
 
 `DATABASE_URL` and `npm run db:migrate` are optional if you run the SQL migration manually in Supabase. Do not create a second standalone users table; Supabase Auth is the identity source.
 
-When `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are configured, the active domain store persists its state in the Supabase `app_state` table. Without those keys, JSON files are used only as a local development fallback. Do not deploy without the Supabase variables.
+When `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are configured, the active domain store persists each task, payment, plan, message, support request, notification, and related entity as an individual row in `domain_records`. Migration 008 copies the old `app_state` document into these rows and retains the original document only as migration rollback data. Writes send only changed rows through a revision-checked PostgreSQL transaction, so concurrent API requests cannot partially overwrite one another. Without Supabase keys, JSON files are used only as a local development fallback. Do not deploy without the Supabase variables.
 
 ## 5. Private object storage
 
@@ -100,7 +100,7 @@ For work that changes after acceptance, an Admin can issue a scope change while 
 
 ## 9. HTTPS and process management
 
-Serve the built `client/dist` site over HTTPS. Route `/api` on that same origin to the Node API, because browser requests use relative `/api` paths and session cookies are scoped to the site. Terminate TLS at a trusted reverse proxy, set `TRUST_PROXY_HOPS` to its exact hop count, and keep the API private behind that proxy. Allow SSE connections through it with buffering disabled. Start with one API instance: sessions and rate limits are shared, but domain records still live in the single `app_state` JSON document and concurrent edits can return a conflict.
+Serve the built `client/dist` site over HTTPS. Route `/api` on that same origin to the Node API, because browser requests use relative `/api` paths and session cookies are scoped to the site. Terminate TLS at a trusted reverse proxy, set `TRUST_PROXY_HOPS` to its exact hop count, and keep the API private behind that proxy. Allow SSE connections through it with buffering disabled. Multiple API instances can share Supabase sessions, rate limits, Expert workspaces, and the revisioned domain record store.
 
 Use `/api/health` as the liveness probe and `/api/ready` as the traffic readiness probe. Readiness checks the domain store and malware scanner; it returns 503 if either is unavailable. Alert on repeated 503 responses, API errors, failed Stripe webhook deliveries, stale ClamAV signatures, and backup failures.
 
