@@ -11,7 +11,7 @@ export function ResetPasswordPage() {
 
   const submit = async (event) => {
     event.preventDefault()
-    if (password.length < 8) return setError('Use at least 8 characters.')
+    if (password.length < 12) return setError('Use at least 12 characters.')
     if (password !== confirm) return setError('The passwords do not match.')
     setError('')
     setStatus('saving')
@@ -30,8 +30,8 @@ export function ResetPasswordPage() {
     <h1>Choose a new<br /><em>password.</em></h1>
     {!validLink && status !== 'done' && <p className="sn-form-err" role="alert">This reset link is missing or invalid. Request a new link from Sign In.</p>}
     {status === 'done' ? <p role="status">Your password has been updated. <a href="/login">Sign in</a> to continue.</p> : validLink && <form className="sn-form" onSubmit={submit}>
-      <label className="sn-field">New password<input type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} required minLength={8} /></label>
-      <label className="sn-field">Confirm password<input type="password" autoComplete="new-password" value={confirm} onChange={(event) => setConfirm(event.target.value)} required minLength={8} /></label>
+      <label className="sn-field">New password<input type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} required minLength={12} /></label>
+      <label className="sn-field">Confirm password<input type="password" autoComplete="new-password" value={confirm} onChange={(event) => setConfirm(event.target.value)} required minLength={12} /></label>
       {error && <p className="sn-form-err" role="alert">{error}</p>}
       <button className="sn-cta" type="submit" disabled={status === 'saving'}>{status === 'saving' ? 'Updating…' : 'Update password'}</button>
     </form>}

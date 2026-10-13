@@ -78,7 +78,7 @@ function IdCardVisual({ step, name, email, password, verified, onSealClick, redu
 
   const showBack = step === 1 && !verified
   const active = step >= 2
-  const strength = password.length === 0 ? 0 : password.length < 6 ? 1 : password.length < 10 ? 2 : 3
+  const strength = password.length === 0 ? 0 : password.length < 8 ? 1 : password.length < 12 ? 2 : 3
 
   return (
     <div className="idc-wrap">
@@ -176,7 +176,7 @@ export function SignUpPage() {
   const timers = useRef([])
   useEffect(() => () => timers.current.forEach(clearTimeout), [])
 
-  const valid = { name: name.trim().length >= 2, email: EMAIL_RE.test(email.trim()), password: password.length > 0 }
+  const valid = { name: name.trim().length >= 2, email: EMAIL_RE.test(email.trim()), password: password.length >= 12 }
 
   const confirmVerification = () => {
     if (verified) return
@@ -191,7 +191,7 @@ export function SignUpPage() {
     if (!valid.name) errs.name = 'Enter your full name.'
     if (!email.trim()) errs.email = 'Enter your email address.'
     else if (!valid.email) errs.email = 'Enter a valid email address.'
-    if (!password) errs.password = 'Create a password.'
+    if (!valid.password) errs.password = 'Use at least 12 characters.'
     if (!confirmPw) errs.confirmPw = 'Confirm your password.'
     else if (confirmPw !== password) errs.confirmPw = 'Passwords do not match.'
     if (!agree) errs.agree = 'Please read and accept the policies to continue.'
@@ -264,7 +264,7 @@ export function SignUpPage() {
                   <label className="sn-field" htmlFor="su-password">
                     <span>Password</span>
                     <span className="sn-control has-toggle">
-                      <input id="su-password" type={showPw ? 'text' : 'password'} autoComplete="new-password" value={password} placeholder="Create a password"
+                      <input id="su-password" type={showPw ? 'text' : 'password'} autoComplete="new-password" value={password} placeholder="At least 12 characters" minLength={12}
                         aria-describedby="su-password-err" aria-invalid={!!errors.password}
                         onChange={(e) => { setPassword(e.target.value); setErrors((x) => ({ ...x, password: null })) }} />
                       <button type="button" className="sn-show" aria-label={showPw ? 'Hide password' : 'Show password'} aria-pressed={showPw} onClick={() => setShowPw((s) => !s)}>{showPw ? 'Hide' : 'Show'}</button>
@@ -274,7 +274,7 @@ export function SignUpPage() {
                   <label className="sn-field" htmlFor="su-confirm">
                     <span>Confirm Password</span>
                     <span className="sn-control has-toggle">
-                      <input id="su-confirm" type={showPw ? 'text' : 'password'} autoComplete="new-password" value={confirmPw} placeholder="Repeat your password"
+                      <input id="su-confirm" type={showPw ? 'text' : 'password'} autoComplete="new-password" value={confirmPw} placeholder="Repeat your password" minLength={12}
                         aria-describedby="su-confirm-err" aria-invalid={!!errors.confirmPw}
                         onChange={(e) => { setConfirmPw(e.target.value); setErrors((x) => ({ ...x, confirmPw: null })) }} />
                       <button type="button" className="sn-show" aria-label={showPw ? 'Hide password' : 'Show password'} aria-pressed={showPw} onClick={() => setShowPw((s) => !s)}>{showPw ? 'Hide' : 'Show'}</button>

@@ -6,7 +6,8 @@ import pg from 'pg'
 
 const { Pool } = pg
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const pool = process.env.DATABASE_URL ? new Pool({ connectionString: process.env.DATABASE_URL, ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : undefined }) : null
+const databaseTls = process.env.NODE_ENV === 'production' ? { rejectUnauthorized: true, ...(process.env.DATABASE_SSL_CA ? { ca: process.env.DATABASE_SSL_CA.replace(/\\n/g, '\n') } : {}) } : undefined
+const pool = process.env.DATABASE_URL ? new Pool({ connectionString: process.env.DATABASE_URL, ssl: databaseTls, connectionTimeoutMillis: 10_000, idleTimeoutMillis: 30_000 }) : null
 
 export function hasDatabase() { return Boolean(pool) }
 export function query(text, values) { if (!pool) throw new Error('DATABASE_NOT_CONFIGURED'); return pool.query(text, values) }

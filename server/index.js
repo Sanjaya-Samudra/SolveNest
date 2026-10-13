@@ -288,9 +288,13 @@ async function analyzeWithSolvy(files) {
 
 async function solvyOperation(operation, payload) {
   if (!process.env.SOLVY_API_URL) throw Object.assign(new Error('SOLVY_NOT_CONFIGURED'), { code: 'SOLVY_NOT_CONFIGURED' })
-  const response = await fetch(process.env.SOLVY_API_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-Solvy-Operation': operation, ...(process.env.SOLVY_API_KEY ? { Authorization: `Bearer ${process.env.SOLVY_API_KEY}` } : {}) }, body: JSON.stringify({ operation, ...payload }) })
-  if (!response.ok) throw Object.assign(new Error(`SOLVY_${response.status}`), { code: 'SOLVY_PROVIDER_ERROR' })
-  return response.json()
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 30_000)
+  try {
+    const response = await fetch(process.env.SOLVY_API_URL, { method: 'POST', signal: controller.signal, headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-Solvy-Operation': operation, ...(process.env.SOLVY_API_KEY ? { Authorization: `Bearer ${process.env.SOLVY_API_KEY}` } : {}) }, body: JSON.stringify({ operation, ...payload }) })
+    if (!response.ok) throw Object.assign(new Error(`SOLVY_${response.status}`), { code: 'SOLVY_PROVIDER_ERROR' })
+    return response.json()
+  } finally { clearTimeout(timeout) }
 }
 
 async function studentTaskPayload(task, studentId) {
@@ -1590,7 +1594,7 @@ app.post('/api/auth/register', async (req, res) => {
   const { name, email, password } = req.body || {}
   if (String(name || '').trim().length < 2) return safeError(res, 400, 'NAME_REQUIRED', 'Enter your full name.', { name: 'Enter your full name.' })
   if (!/^\S+@\S+\.\S+$/.test(String(email || ''))) return safeError(res, 400, 'EMAIL_INVALID', 'Enter a valid email address.', { email: 'Enter a valid email address.' })
-  if (String(password || '').length < 8) return safeError(res, 400, 'PASSWORD_TOO_SHORT', 'Password must be at least 8 characters.', { password: 'Use at least 8 characters.' })
+  if (String(password || '').length < 12) return safeError(res, 400, 'PASSWORD_TOO_SHORT', 'Password must be at least 12 characters.', { password: 'Use at least 12 characters.' })
   if (hasSupabaseAuth()) {
     const { data, error } = await supabaseSignUp({ name: String(name).trim(), email: String(email).trim(), password })
     if (error) return safeError(res, 400, 'AUTH_SIGNUP_FAILED', error.message)
@@ -1638,7 +1642,7 @@ app.post('/api/auth/password-reset', async (req, res) => {
 
 app.post('/api/auth/password-reset/complete', async (req, res) => {
   const { accessToken, refreshToken, password } = req.body || {}
-  if (!accessToken || !refreshToken || String(password || '').length < 8) return safeError(res, 400, 'RESET_INVALID', 'The reset link or new password is invalid.')
+  if (!accessToken || !refreshToken || String(password || '').length < 12) return safeError(res, 400, 'RESET_INVALID', 'The reset link or new password is invalid.')
   if (!await limited(`password-reset-complete:${req.ip}`, 5)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before trying again.')
   if (!hasSupabaseAuth()) return safeError(res, 503, 'RECOVERY_UNAVAILABLE', 'Password recovery is not configured yet.')
   try {
