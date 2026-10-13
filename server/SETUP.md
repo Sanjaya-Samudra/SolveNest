@@ -107,12 +107,12 @@ Use `/api/health` as the liveness probe and `/api/ready` as the traffic readines
 ## 10. Release sequence and remaining gates
 
 1. Choose a production host for the static React build and Node API, and connect an HTTPS domain with same-origin `/api` routing.
-2. Create Supabase, run all six migrations, create the private bucket, enable Email/password Auth, and make the first Superadmin through a trusted administrator.
+2. Create Supabase, run all eight migrations, create the private bucket, enable Email/password Auth, and make the first Superadmin through a trusted administrator.
 3. Configure an SMTP provider and the Supabase Auth email templates and redirect allowlist.
 4. Provide a real Solvy endpoint matching the documented analysis and Explain & Defend requests. The API cannot manufacture or configure that service.
-5. Create a Stripe account, configure PaymentIntent keys and the signed webhook, and verify that the chosen account supports the configured currency.
+5. Create a Stripe account, configure Checkout credentials and the signed webhook, and verify that the chosen account supports the configured currency.
 6. Set every production environment variable in the host secret manager. Keep the service-role, Stripe, Solvy, SMTP, and file-signing secrets out of the client build and Git.
 7. Build the client with `npm --prefix client run build`, start the API with `npm --prefix server start`, and confirm `/api/health` responds through the public HTTPS domain.
 8. Manually register and sign in a Student, upload a brief and rubric, run analysis, create a task, issue and accept a plan, complete a real payment, assign an Expert, submit for Admin QA, deliver, and request a revision. Confirm password recovery and signed file downloads.
 
-Do not open a public launch yet: the active task/payment domain model remains one `app_state` JSON document; upload validation checks file signatures but does not scan malware or archive contents; provider connectivity, email delivery, and live payment behavior cannot be verified until accounts and credentials exist. Complete these gates and repeat the manual flow before launch.
+The code-level production gates are implemented: transactional domain rows, authenticated malware scanning, exact staff role boundaries, durable sessions and rate limits, signed provider callbacks, health checks, and container deployment. A public launch still depends on the owner-created services and credentials above. Complete the manual launch flow with those live providers before accepting customers.
