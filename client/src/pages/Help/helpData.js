@@ -50,8 +50,8 @@ export const CATEGORIES = [
     links: [{ t: 'Plans & Estimates', to: '/plans' }],
     articles: [
       { q: 'When do I pay?', a: 'After you accept the official quote. Payment is confirmed before execution begins — no stage starts unfunded.' },
-      { q: 'How do prepaid milestones work?', a: 'Larger projects may use prepaid milestones (for example 40 / 35 / 25). Each stage is funded before its work begins; later stages stay locked until funded.', visual: 'milestones' },
-      { q: 'When does work begin?', a: 'Only after payment for the task — or for the active milestone stage — is confirmed. A student never provides unpaid work first.' },
+      { q: 'How do prepaid milestones work?', a: 'Larger projects may use two prepaid milestones (for example 40 / 60). The admin confirms the first percentage with the quote. The first payment starts expert work; the remaining balance is funded before approved delivery.', visual: 'milestones' },
+      { q: 'When does work begin?', a: 'Only after payment for the task — or for the active milestone stage — is confirmed. An expert is not asked to begin unfunded work.' },
       { q: 'What happens if a milestone is not funded?', a: 'The next stage stays locked until funding is confirmed. Already funded and completed work is unaffected.' },
     ],
   },

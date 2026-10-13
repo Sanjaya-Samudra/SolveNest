@@ -61,12 +61,10 @@ function MilestoneVisual() {
       <div className="hp-ms-stage is-funded"><b>MILESTONE 01</b><span>FUNDED · WORK ACTIVE</span></div>
       <span className="hp-ms-arrow">↓</span>
       <button className="hp-ms-stage" aria-expanded={tap} onClick={() => setTap((t) => !t)}>
-        <b>MILESTONE 02</b><span>NOT FUNDED · WORK LOCKED</span>
-        {tap && <em>“This stage does not begin until funding is confirmed.”</em>}
+        <b>MILESTONE 02 · FINAL</b><span>NOT FUNDED · DELIVERY LOCKED</span>
+        {tap && <em>“The approved delivery unlocks after the final milestone is funded.”</em>}
       </button>
-      <span className="hp-ms-arrow">↓</span>
-      <div className="hp-ms-stage is-next"><b>MILESTONE 03</b><span>UPCOMING</span></div>
-      <p className="hp-note">Work for a milestone begins only after that milestone has been funded.</p>
+      <p className="hp-note">The exact percentage split is confirmed in the official quote.</p>
     </div>
   )
 }

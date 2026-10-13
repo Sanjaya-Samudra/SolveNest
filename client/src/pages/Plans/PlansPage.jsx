@@ -196,8 +196,7 @@ function Payment() {
   const stdS = ['Official Quote', 'Payment', 'Funded', 'Work Begins']
   const msData = [
     { l: 'MILESTONE 1', p: '40%', a: 'LKR 12,000', d: 'Requirements + initial work' },
-    { l: 'MILESTONE 2', p: '35%', a: 'LKR 10,500', d: 'Core progress' },
-    { l: 'MILESTONE 3', p: '25%', a: 'LKR 7,500', d: 'Final stage + QA' },
+    { l: 'MILESTONE 2', p: '60%', a: 'LKR 18,000', d: 'Final work + QA' },
   ]
   return (
     <section className="pn-section pn-payment" id="pn-payment">
@@ -205,7 +204,7 @@ function Payment() {
         <div className="pn-section-head">
           <span className="pn-label">04 / PAYMENT</span>
           <h2>Every stage funded<br /><em>before work begins.</em></h2>
-          <p>No stage starts until its payment is confirmed. A student never provides unpaid work first.</p>
+          <p>No stage starts until its payment is confirmed. An expert is not asked to begin unfunded work.</p>
         </div>
         <div className="pn-pay-grid">
           <div className="pn-pay-card">
@@ -213,15 +212,15 @@ function Payment() {
             <div className="pn-pay-amount"><small>TOTAL</small><strong>LKR 8,750</strong><span>100% funding · quote expires {fmtShort(QUOTE_EXPIRY)}</span></div>
             <div className="pn-pay-steps">{stdS.map((s, i) => <button key={s} className={`pn-pay-step ${i < std ? 'is-done' : ''} ${i === std ? 'is-current' : ''}`} onClick={() => setStd(i)} disabled={i > std}><span className="pn-pay-dot">{i < std ? <Check size={8} /> : i === std ? <span className="pn-pay-dot-pulse" /> : null}</span><span>{s}</span></button>)}</div>
             <div className={`pn-gate ${std >= 3 ? 'is-open' : ''}`}><Lock size={12} /> {std >= 3 ? 'Work gate open — Funded' : 'Gate locked'}</div>
-            <button className="pn-cta-primary pn-demo-btn" onClick={() => setStd(std >= 4 ? 0 : std + 1)} disabled={std >= 4}>{std >= 4 ? 'Reset' : std === 0 ? 'Fund task' : std === 3 ? 'Open work gate' : 'Advance step'}</button>
+            <button className="pn-cta-primary pn-demo-btn" onClick={() => setStd(std >= 4 ? 0 : std + 1)}>{std >= 4 ? 'Reset' : std === 0 ? 'Fund task' : std === 3 ? 'Open work gate' : 'Advance step'}</button>
             <span className="pn-note">100% prepaid after acceptance</span>
           </div>
           <div className="pn-pay-card pn-pay-card--dark">
             <span className="pn-card-label">LARGER PROJECT · EXAMPLE</span>
-            <div className="pn-pay-amount"><small>TOTAL</small><strong>LKR 30,000</strong><span>40 / 35 / 25 — example only</span></div>
-            <div className="pn-ms-flow">{msData.map((m, i) => <button key={m.l} className={`pn-ms-chip ${i <= ms ? 'is-funded' : ''} ${i === ms + 1 && ms < 2 ? 'is-next' : ''}`} onClick={() => (i === ms || i === ms - 1) && setMs(i)} disabled={i > ms + 1}><span className="pn-ms-chip-dot">{i < ms ? <Check size={8} /> : i === ms && ms < 3 ? <span className="pn-pay-dot-pulse" /> : i === ms + 1 ? <span className="pn-ms-chip-ring" /> : <Lock size={8} />}</span><b>{m.p}</b><small>{m.a}</small><i>{m.d}</i><em>{i < ms ? 'Complete' : i === ms && ms < 3 ? 'Funded' : i === ms + 1 && ms < 2 ? 'Click to fund' : 'Locked'}</em></button>)}</div>
+            <div className="pn-pay-amount"><small>TOTAL</small><strong>LKR 30,000</strong><span>40 / 60 — example only</span></div>
+            <div className="pn-ms-flow">{msData.map((m, i) => <button key={m.l} className={`pn-ms-chip ${i < ms ? 'is-funded' : ''} ${i === ms ? 'is-next' : ''}`} onClick={() => i === ms && setMs(i + 1)} disabled={i !== ms}><span className="pn-ms-chip-dot">{i < ms ? <Check size={8} /> : i === ms ? <span className="pn-ms-chip-ring" /> : <Lock size={8} />}</span><b>{m.p}</b><small>{m.a}</small><i>{m.d}</i><em>{i < ms ? 'Funded' : i === ms ? 'Click to fund' : 'Locked'}</em></button>)}</div>
             <div className={`pn-gate ${ms >= 2 ? 'is-open' : ''}`}><Lock size={12} /> {ms >= 2 ? 'All stages complete — prepaid' : 'Stage 2 locked until funded'}</div>
-            <button className="pn-cta-primary pn-demo-btn" onClick={() => setMs(ms >= 2 ? 0 : ms + 1)}>{ms >= 2 ? 'Reset' : ms === 0 ? 'Fund Stage 1' : `Fund Stage ${ms + 1}`}</button>
+            <button className="pn-cta-primary pn-demo-btn" onClick={() => setMs(ms >= 2 ? 0 : ms + 1)}>{ms >= 2 ? 'Reset' : ms === 0 ? 'Fund Stage 1' : 'Fund final stage'}</button>
             <span className="pn-note">Prepaid milestones — not pay-after-work</span>
           </div>
         </div>
