@@ -29,6 +29,7 @@ Required in production:
 - `SOLVY_API_URL` and `SOLVY_API_KEY`
 - `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, and `STRIPE_CURRENCY` for real payments
 - `TRUST_PROXY_HOPS` set to the exact number of trusted reverse proxies in front of the API, so per-IP limits use the client address
+- `CLAMD_HOST` and `CLAMD_PORT` for a private ClamAV daemon with current signatures; configure its stream limit above the 100 MB application upload limit
 
 ## 3. Supabase project
 
@@ -77,6 +78,8 @@ When `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are configured, the active d
 ## 5. Private object storage
 
 Create a private Supabase Storage bucket named `student-files`. Do not enable public access. The server uses `SUPABASE_SERVICE_ROLE_KEY` to upload objects and generate short-lived signed access URLs. The `S3_*` variables are optional fallback settings for non-Supabase storage and can remain empty.
+
+All uploads are checked for supported file signatures. Office files are inspected for the required DOCX/PPTX structure, path traversal, symlinks, encryption, and excessive expansion. In production every upload must also pass a ClamAV `INSTREAM` scan before storage or email delivery; unavailable scanning rejects uploads. Keep the ClamAV TCP port on a private network because its protocol does not authenticate clients. Run signature updates with `freshclam` and monitor their freshness. Local development can omit `CLAMD_HOST` to work without a scanner.
 
 ## 6. SMTP
 
