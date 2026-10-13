@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Activity, ArrowRight, CheckCircle2, ClipboardList, Crown, Database, LogOut, Search, Settings2, ShieldCheck, Users, X } from 'lucide-react'
+import { Activity, ArrowRight, CheckCircle2, ChevronRight, ClipboardList, Crown, Database, LogOut, Menu, Search, Settings2, ShieldCheck, Users, X } from 'lucide-react'
 import { changeRole, getActivity, getSuperOverview, getSuperStaff, getTeam, loginSuperadmin, logoutSuperadmin, lookupTeamEmail } from '../../superadmin/superadminApi.js'
+import logo from '../../assets/logo-mark.webp'
 import '../Admin/admin-workspace.css'
 import './superadmin-workspace.css'
 
@@ -42,8 +43,9 @@ function Login({ onDone }) {
   </form></div>
 }
 
-function ControlNav({ active, staff, onSignOut }) {
-  return <header className="sad-control-nav"><div className="sad-control-inner"><a className="sad-wordmark" href="/superadmin"><span className="sad-wordmark-symbol">S</span><span>SOLVENEST<small>CONTROL ROOM</small></span></a><nav aria-label="Super Admin navigation">{tabs.map(([key, label, Icon]) => <button key={key} className={active === key ? 'is-active' : ''} onClick={() => go(key)}><Icon size={16} /> {label}</button>)}</nav><div className="sad-control-actions"><span className="sad-control-profile" title={staff.name}>{staff.name?.slice(0, 1) || 'S'}</span>{!staff.demo && <button onClick={onSignOut} aria-label="Sign out"><LogOut size={17} /></button>}</div></div></header>
+function ControlNav({ active, staff, onSignOut, mobileOpen, setMobileOpen }) {
+  const select = (key) => { setMobileOpen(false); go(key) }
+  return <><div className={`sad-nav-scrim ${mobileOpen ? 'is-open' : ''}`} onClick={() => setMobileOpen(false)} /><aside className={`sad-sidebar ${mobileOpen ? 'is-open' : ''}`} aria-label="Super Admin navigation"><div className="sad-sidebar-brand"><img src={logo} alt="SolveNest" /><span>SolveNest<small>SUPER ADMIN</small></span><button onClick={() => setMobileOpen(false)} aria-label="Close navigation"><X size={18} /></button></div><nav><p>GOVERNANCE</p>{tabs.map(([key, label, Icon]) => <button key={key} className={active === key ? 'is-active' : ''} onClick={() => select(key)}><Icon size={17} /><span>{label}</span></button>)}</nav><div className="sad-sidebar-profile"><span className="sad-control-profile">{staff.name?.slice(0, 1) || 'S'}</span><span><strong>{staff.name}</strong><small>{staff.demo ? 'Local preview' : 'Super Admin'}</small></span>{!staff.demo && <button onClick={onSignOut} aria-label="Sign out"><LogOut size={17} /></button>}</div></aside></>
 }
 
 function Overview({ data, team, setActive }) {
@@ -112,6 +114,7 @@ export function SuperAdminWorkspace() {
   const [overview, setOverview] = useState({ loading: true, data: null, error: null })
   const [team, setTeam] = useState({ loading: true, data: null, error: null })
   const [activity, setActivity] = useState({ loading: true, data: null, error: null })
+  const [mobileOpen, setMobileOpen] = useState(false)
   const loadStaff = useCallback(async () => { setStaff({ loading: true, data: null, error: null }); try { const result = await getSuperStaff(); setStaff({ loading: false, data: result.staff, error: null }) } catch (error) { setStaff({ loading: false, data: null, error }) } }, [])
   const loadOverview = useCallback(async () => { setOverview((prev) => ({ ...prev, loading: true, error: null })); try { setOverview({ loading: false, data: await getSuperOverview(), error: null }) } catch (error) { setOverview({ loading: false, data: null, error }) } }, [])
   const loadTeam = useCallback(async () => { setTeam((prev) => ({ ...prev, loading: true, error: null })); try { setTeam({ loading: false, data: await getTeam(), error: null }) } catch (error) { setTeam({ loading: false, data: null, error }) } }, [])
@@ -125,5 +128,7 @@ export function SuperAdminWorkspace() {
   if (staff.data?.role !== 'Superadmin') return <div className="adm-gate"><div className="adm-login"><div className="adm-login-mark"><ShieldCheck size={24} /></div><p className="adm-kicker">ACCESS RESTRICTED</p><h1>Super Admin access is required.</h1><p>Sign in with an approved Super Admin account.</p><a href="/">Return to SolveNest</a>{!staff.data?.demo && <button className="adm-secondary" onClick={async () => { await logoutSuperadmin().catch(() => {}); loadStaff() }}>Sign out</button>}</div></div>
   const current = active === 'team' ? team : active === 'activity' ? activity : overview
   const retry = active === 'team' ? loadTeam : active === 'activity' ? loadActivity : loadOverview
-  return <div className="sad-app"><ControlNav active={active} staff={staff.data} onSignOut={async () => { await logoutSuperadmin().catch(() => {}); loadStaff() }} /><main className="sad-main">{staff.data.demo && <div className="sad-preview">LOCAL PREVIEW · Team access changes require a real Superadmin account.</div>}{current.loading ? <div className="adm-loading" role="status">Loading {active}…</div> : current.error ? <LoadError error={current.error} retry={retry} /> : active === 'overview' ? <Overview data={overview.data} team={team.data} setActive={setActive} /> : active === 'team' ? <Team data={team.data} staff={staff.data} refresh={async () => { await Promise.all([loadTeam(), loadActivity()]) }} /> : active === 'activity' ? <ActivityView data={activity.data} /> : <Systems data={overview.data} />}</main></div>
+  const activeLabel = tabs.find(([key]) => key === active)?.[1] || 'Overview'
+  const signOut = async () => { await logoutSuperadmin().catch(() => {}); loadStaff() }
+  return <div className="sad-app"><ControlNav active={active} staff={staff.data} onSignOut={signOut} mobileOpen={mobileOpen} setMobileOpen={setMobileOpen} /><div className="sad-frame"><header className="sad-topbar"><div><button onClick={() => setMobileOpen(true)} aria-label="Open navigation"><Menu size={20} /></button><span>Super Admin</span><ChevronRight size={14} /><strong>{activeLabel}</strong></div><span className="sad-role-pill">GOVERNANCE</span></header><main className="sad-main">{staff.data.demo && <div className="sad-preview">LOCAL PREVIEW · Team access changes require a real Superadmin account.</div>}{current.loading ? <div className="adm-loading" role="status">Loading {active}…</div> : current.error ? <LoadError error={current.error} retry={retry} /> : active === 'overview' ? <Overview data={overview.data} team={team.data} setActive={setActive} /> : active === 'team' ? <Team data={team.data} staff={staff.data} refresh={async () => { await Promise.all([loadTeam(), loadActivity()]) }} /> : active === 'activity' ? <ActivityView data={activity.data} /> : <Systems data={overview.data} />}</main></div></div>
 }
