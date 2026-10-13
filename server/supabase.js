@@ -123,9 +123,9 @@ function flattenDomainState(state) {
   const records = new Map()
   for (const collection of domainCollections) {
     const items = Array.isArray(state[collection]) ? state[collection] : []
-    items.forEach((payload, position) => records.set(`${collection}\0${recordKey(payload, position)}`, { collection, key: recordKey(payload, position), payload, position }))
+    items.forEach((payload, position) => records.set(`${collection}\0${recordKey(payload, position)}`, { collection, key: recordKey(payload, position), payload: structuredClone(payload), position }))
   }
-  for (const [key, payload] of Object.entries(state.idempotency || {})) records.set(`idempotency\0${key}`, { collection: 'idempotency', key, payload, position: 0 })
+  for (const [key, payload] of Object.entries(state.idempotency || {})) records.set(`idempotency\0${key}`, { collection: 'idempotency', key, payload: structuredClone(payload), position: 0 })
   return records
 }
 export async function supabaseReadState() {
