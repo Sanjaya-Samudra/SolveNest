@@ -102,6 +102,8 @@ For work that changes after acceptance, an Admin can issue a scope change while 
 
 Serve the built `client/dist` site over HTTPS. Route `/api` on that same origin to the Node API, because browser requests use relative `/api` paths and session cookies are scoped to the site. Terminate TLS at a trusted reverse proxy, set `TRUST_PROXY_HOPS` to its exact hop count, and keep the API private behind that proxy. Allow SSE connections through it with buffering disabled. Start with one API instance: sessions and rate limits are shared, but domain records still live in the single `app_state` JSON document and concurrent edits can return a conflict.
 
+Use `/api/health` as the liveness probe and `/api/ready` as the traffic readiness probe. Readiness checks the domain store and malware scanner; it returns 503 if either is unavailable. Alert on repeated 503 responses, API errors, failed Stripe webhook deliveries, stale ClamAV signatures, and backup failures.
+
 ## 10. Release sequence and remaining gates
 
 1. Choose a production host for the static React build and Node API, and connect an HTTPS domain with same-origin `/api` routing.

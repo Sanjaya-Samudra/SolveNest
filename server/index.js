@@ -52,7 +52,7 @@ import { hasEmail, sendEmail } from './email.js'
 import { hasSupabase, hasSupabaseAuth, supabaseChangeStaffRole, supabaseConsumeRateLimit, supabaseCreateAppSession, supabaseDeleteAppSession, supabaseExpertProfiles, supabaseFindProfileByEmail, supabaseGetAppSession, supabaseProfile, supabaseRefresh, supabaseRequestPasswordReset, supabaseTeam, supabaseUpdatePassword, supabaseSignIn, supabaseSignUp, supabaseUser } from './supabase.js'
 import { getAdminCase, getAdminOverview, getAdminQaCase, issueAdminPlan, issueAdminScopeChange, listAdminQaAssignments, recordAdminReview } from './adminStore.js'
 import { getSuperadminActivity, getSuperadminOverview } from './superadminStore.js'
-import { inspectUpload } from './uploadSafety.js'
+import { checkMalwareScanner, inspectUpload } from './uploadSafety.js'
 
 const PORT = Number(process.env.PORT || 4174)
 const COOKIE = 'sn_sid'
@@ -1560,6 +1560,14 @@ app.post('/api/expert/logout', requireExpert, expertRoute(async (req, res) => {
 
 app.get('/api/health', (req, res) => {
   res.json({ ok: true, service: 'solvenest-server' })
+})
+app.get('/api/ready', async (_req, res) => {
+  const checks = await Promise.allSettled([
+    Promise.race([readTaskStore(), new Promise((_resolve, reject) => setTimeout(() => reject(new Error('DATABASE_TIMEOUT')), 5000))]),
+    checkMalwareScanner(),
+  ])
+  const ready = checks[0].status === 'fulfilled' && checks[1].status === 'fulfilled' && checks[1].value === true
+  res.status(ready ? 200 : 503).json({ ok: ready, service: 'solvenest-server' })
 })
 
 app.post('/api/auth/register', async (req, res) => {

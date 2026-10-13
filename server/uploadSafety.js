@@ -106,3 +106,18 @@ export async function inspectUpload(file) {
   if (!process.env.CLAMD_HOST) return process.env.NODE_ENV === 'production' ? 'unavailable' : 'clean'
   try { return await scanWithClamd(bytes) } catch { return 'unavailable' }
 }
+
+export function checkMalwareScanner() {
+  if (!process.env.CLAMD_HOST) return Promise.resolve(process.env.NODE_ENV !== 'production')
+  return new Promise((resolve) => {
+    const socket = net.createConnection({ host: process.env.CLAMD_HOST, port: Number(process.env.CLAMD_PORT || 3310) })
+    let result = ''
+    let done = false
+    const finish = (healthy) => { if (done) return; done = true; socket.destroy(); resolve(healthy) }
+    socket.setTimeout(3000, () => finish(false))
+    socket.on('error', () => finish(false))
+    socket.on('connect', () => socket.write('zPING\0'))
+    socket.on('data', (data) => { result += data.toString('utf8'); if (result.includes('PONG')) finish(true); else if (result.length > 128) finish(false) })
+    socket.on('end', () => finish(false))
+  })
+}
