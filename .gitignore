@@ -5,6 +5,9 @@ server/node_modules/
 server/*.log
 server/data/
 server/.env
+server/.env.*
+!server/.env.example
+!server/.env.production.example
 server/private-uploads/
 client/node_modules/
 client/dist/

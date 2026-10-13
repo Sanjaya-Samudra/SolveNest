@@ -1,0 +1,11 @@
+.git
+.env
+**/.env
+**/node_modules
+client/dist
+server/data
+server/private-uploads
+SolveNest_Final_Complete_Project_Pack
+outputs
+work
+*.log

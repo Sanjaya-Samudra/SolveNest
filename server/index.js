@@ -90,8 +90,22 @@ const upload = multer({
 })
 
 const app = express()
+app.disable('x-powered-by')
 const trustedProxyHops = Number(process.env.TRUST_PROXY_HOPS || 0)
 if (Number.isSafeInteger(trustedProxyHops) && trustedProxyHops > 0 && trustedProxyHops <= 3) app.set('trust proxy', trustedProxyHops)
+app.use((req, res, next) => {
+  const requestId = /^[a-zA-Z0-9._-]{8,100}$/.test(String(req.headers['x-request-id'] || '')) ? String(req.headers['x-request-id']) : crypto.randomUUID()
+  req.requestId = requestId
+  res.setHeader('X-Request-Id', requestId)
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin')
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=(self)')
+  res.setHeader('Content-Security-Policy', "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self'; worker-src 'self' blob:")
+  if (process.env.NODE_ENV === 'production') res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
+  const startedAt = Date.now()
+  res.on('finish', () => console.log(JSON.stringify({ level: 'info', type: 'request', requestId, method: req.method, path: req.path, status: res.statusCode, durationMs: Date.now() - startedAt })))
+  next()
+})
 function applyApprovedScopeChange(store, change, task, plan, stamp) {
   if (change.status === 'ACCEPTED') return null
   change.status = 'ACCEPTED'
@@ -209,7 +223,7 @@ app.post('/api/payments/stripe/webhook', express.raw({ type: 'application/json' 
     res.status(503).json({ error: 'PAYMENT_RECONCILIATION_PENDING' })
   }
 })
-app.use(express.json())
+app.use(express.json({ limit: '1mb' }))
 
 function now() { return new Date().toISOString() }
 
@@ -2141,17 +2155,33 @@ app.post('/api/superadmin/team/:profileId/role', requireSuperadmin, staffRoute(a
   }
 }))
 
+const clientDist = path.resolve(__dirname, '..', 'client', 'dist')
+if (process.env.NODE_ENV === 'production' && fs.existsSync(clientDist)) {
+  app.use(express.static(clientDist, { index: false, setHeaders: (res, assetPath) => {
+    if (assetPath.includes(`${path.sep}assets${path.sep}`)) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+    else res.setHeader('Cache-Control', 'no-cache')
+  } }))
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api/') || !String(req.headers.accept || '').includes('text/html')) return next()
+    res.setHeader('Cache-Control', 'no-cache')
+    res.sendFile(path.join(clientDist, 'index.html'))
+  })
+}
+
 app.use((req, res) => {
   res.status(404).json({ error: 'NOT_FOUND' })
 })
 
-app.use((error, _req, res, _next) => {
-  console.error('[api]', error.message)
+app.use((error, req, res, next) => {
+  if (res.headersSent) return next(error)
+  console.error(JSON.stringify({ level: 'error', type: 'api_error', requestId: req.requestId, method: req.method, path: req.path, message: error.message }))
   safeError(res, 500, 'INTERNAL_ERROR', 'The request could not be completed.')
 })
 
 if (process.env.NODE_ENV === 'production') {
   const missing = []
+  if (!Number.isSafeInteger(PORT) || PORT < 1 || PORT > 65535) missing.push('valid PORT')
+  if (!fs.existsSync(path.join(clientDist, 'index.html'))) missing.push('built client/dist application')
   if (!hasSupabase()) missing.push('Supabase Auth and service role')
   if (!hasObjectStorage()) missing.push('private object storage')
   if (String(process.env.FILE_SIGNING_SECRET || '').length < 32) missing.push('FILE_SIGNING_SECRET (32+ characters)')
@@ -2166,6 +2196,9 @@ if (process.env.NODE_ENV === 'production') {
 const server = app.listen(PORT, () => {
   console.log(`SolveNest API listening on http://127.0.0.1:${server.address().port}`)
 })
+server.requestTimeout = 5 * 60_000
+server.headersTimeout = 65_000
+server.keepAliveTimeout = 60_000
 let scopeSyncRunning = false
 const scopeSyncTimer = setInterval(async () => {
   if (scopeSyncRunning) return
@@ -2177,3 +2210,14 @@ const scopeSyncTimer = setInterval(async () => {
   finally { scopeSyncRunning = false }
 }, 60_000)
 scopeSyncTimer.unref()
+let shuttingDown = false
+function shutdown(signal) {
+  if (shuttingDown) return
+  shuttingDown = true
+  clearInterval(scopeSyncTimer)
+  console.log(JSON.stringify({ level: 'info', type: 'shutdown', signal }))
+  server.close((error) => process.exit(error ? 1 : 0))
+  setTimeout(() => { server.closeAllConnections?.(); process.exit(1) }, 10_000).unref()
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'))
+process.on('SIGINT', () => shutdown('SIGINT'))

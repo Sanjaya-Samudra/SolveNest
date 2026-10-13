@@ -25,9 +25,11 @@ The project is built for students, mentors, and admins, with a premium academic 
 
 Install dependencies in both `client` and `server`, then run `npm run dev` from the project root. This starts the API on port 4174 and Vite on its available development port. Starting only Vite leaves `/api` requests without a server, so the Student and Expert workspaces cannot load.
 
-The Admin review workspace is at `/admin`. Local development can preview it with `ADMIN_DEMO_SESSION=1` in `server/.env`; this preview is limited to loopback requests and never applies in production. A deployed Admin signs in with a Supabase profile whose role is `Admin` or `Superadmin`.
+The Admin review workspace is at `/admin`. Local development can preview it with `ADMIN_DEMO_SESSION=1` in `server/.env`; this preview is limited to loopback requests and never applies in production. A deployed Admin signs in with a Supabase profile whose role is exactly `Admin`.
 
-The Super Admin workspace is at `/superadmin`. It shows platform operations, service configuration, team access, and decision history. Set `SUPERADMIN_DEMO_SESSION=1` in `server/.env` for a loopback-only local preview; team access changes require a real Superadmin account and the staff governance migration.
+The Super Admin workspace is at `/superadmin`. It shows governance signals, service configuration, team access, and decision history. It uses separate authentication and cannot enter Admin operations. Set `SUPERADMIN_DEMO_SESSION=1` in `server/.env` for a loopback-only local preview; team access changes require a real Superadmin account and the staff governance migration.
+
+For production deployment, follow `PRODUCTION_CHECKLIST.md`. The included Docker Compose stack serves the built React application and API from one origin and runs ClamAV on a private container network.
 
 Admin operations are split into task intake (`/admin`), quality review (`/admin/qa`), and support requests (`/admin/support`). Reviewers can inspect files in the relevant case before acting. Support status changes and quality decisions are recorded for Super Admin oversight. The Super Admin control room uses live operational counts and clearly labels service configuration checks as configuration signals rather than uptime checks.
 

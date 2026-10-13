@@ -1,0 +1,35 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: server/.env.production
+    environment:
+      NODE_ENV: production
+      PORT: 4174
+      CLAMD_HOST: clamav
+      CLAMD_PORT: 3310
+    depends_on:
+      clamav:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:4174:4174"
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,noexec,nosuid
+      - /app/server/private-uploads:size=256m,noexec,nosuid
+    security_opt:
+      - no-new-privileges:true
+  clamav:
+    image: clamav/clamav:stable
+    restart: unless-stopped
+    volumes:
+      - clamav-signatures:/var/lib/clamav
+    healthcheck:
+      test: ["CMD", "clamdscan", "--ping", "3"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 2m
+
+volumes:
+  clamav-signatures:
