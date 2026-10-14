@@ -119,3 +119,23 @@ export async function signOut() {
   emit()
   return getSnapshot()
 }
+
+export async function downloadAccountExport() {
+  const response = await apiFetch('/api/student/account/export')
+  if (!response.ok) throw new Error('The export could not be downloaded. Please try again later.')
+  const url = URL.createObjectURL(await response.blob())
+  const link = document.createElement('a')
+  link.href = url
+  link.download = 'solvenest-account.json'
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+export async function requestAccountClosure() {
+  const response = await apiFetch('/api/student/account/closure-request', { method: 'POST' })
+  const payload = await response.json()
+  if (!response.ok) throw new Error(payload.message || 'The request could not be submitted.')
+  return payload
+}

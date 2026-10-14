@@ -25,16 +25,16 @@ export function readStore() {
     const parsed = JSON.parse(raw)
     if (!Array.isArray(parsed.notifications)) throw new Error('invalid')
     return parsed
-  } catch {
-    const fresh = emptyStore()
-    fs.writeFileSync(storePath, JSON.stringify(fresh, null, 2))
-    return fresh
+  } catch (cause) {
+    throw new Error('LOCAL_NOTIFICATION_STORE_UNREADABLE', { cause })
   }
 }
 
 export function writeStore(store) {
   ensureStore()
-  fs.writeFileSync(storePath, JSON.stringify(store, null, 2))
+  const temporary = `${storePath}.tmp`
+  fs.writeFileSync(temporary, JSON.stringify(store, null, 2))
+  fs.renameSync(temporary, storePath)
 }
 
 async function updateNotifications(mutator) {
@@ -72,11 +72,11 @@ export async function markRead(id, studentId = null) {
 }
 
 export async function markAllRead(studentId = null) {
-  if (hasSupabase()) return updateNotifications((notifications) => { for (const item of notifications) if (item.studentId === studentId) item.isRead = true; return notifications })
+  if (hasSupabase()) return updateNotifications((notifications) => { for (const item of notifications) if (item.studentId === studentId) item.isRead = true; return notifications.filter((item) => item.studentId === studentId) })
   const store = readStore()
   store.notifications = store.notifications.map((n) => (!studentId || n.studentId === studentId) ? { ...n, isRead: true } : n)
   writeStore(store)
-  return store.notifications
+  return store.notifications.filter((item) => !studentId || item.studentId === studentId)
 }
 
 export async function unreadCount(studentId = null) {

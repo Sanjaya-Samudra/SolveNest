@@ -219,6 +219,10 @@ export function useExpertRealtime({ onAssignmentChanged, onMessage, onQaUpdate, 
     bind('MessageCreated', 'onMessage')
     bind('QaUpdated', 'onQaUpdate')
     source.onerror = () => handlers.current.onFailure?.()
-    return () => source.close()
+    const refresh = () => { if (!document.hidden) handlers.current.onAssignmentChanged?.() }
+    const timer = window.setInterval(refresh, 60_000)
+    window.addEventListener('online', refresh)
+    document.addEventListener('visibilitychange', refresh)
+    return () => { source.close(); window.clearInterval(timer); window.removeEventListener('online', refresh); document.removeEventListener('visibilitychange', refresh) }
   }, [])
 }

@@ -18,6 +18,8 @@ import {
 } from 'lucide-react'
 import {
   loadAccount,
+  downloadAccountExport,
+  requestAccountClosure,
   saveAccountPreferences,
   saveAccountProfile,
   signOut,
@@ -128,6 +130,17 @@ export default function StudentAccountPage() {
   const [confirmDiscard, setConfirmDiscard] = useState(false)
   const [signingOut, setSigningOut] = useState(false)
   const [revokingId, setRevokingId] = useState(null)
+  const [privacyBusy, setPrivacyBusy] = useState(false)
+  const privacyAction = async (action) => {
+    if (privacyBusy) return
+    setPrivacyBusy(true)
+    setActionError('')
+    try {
+      const result = await action()
+      setToast(result?.message || 'Your account export has been downloaded.')
+    } catch (error) { setActionError(error.message) }
+    finally { setPrivacyBusy(false) }
+  }
 
   useEffect(() => subscribeAccount(setSnapshot), [])
 
@@ -534,7 +547,7 @@ export default function StudentAccountPage() {
                       </div>
                       <p>
                         {privacyControls?.dataExport
-                          ? 'Request a copy of the data tied to this account.'
+                          ? 'Download your account and workspace records as JSON. Files can be downloaded separately from Files.'
                           : 'Export is not open on this account right now.'}
                       </p>
                     </div>
@@ -556,7 +569,7 @@ export default function StudentAccountPage() {
                         {privacyControls?.accountClosure
                           ? privacyControls.activeTaskBlock
                             ? 'Finish or resolve active tasks before closing this account.'
-                            : 'Closure can be requested when no task blocks apply.'
+                            : 'Request a support review for closure. Your account stays active until the review is complete.'
                           : 'Account closure is not open on this account right now.'}
                       </p>
                     </div>
@@ -577,6 +590,8 @@ export default function StudentAccountPage() {
                     Privacy questions
                     <ArrowRight size={14} aria-hidden="true" />
                   </button>
+                  <button type="button" className="student-button student-button--secondary student-button--sm" disabled={privacyBusy || !privacyControls?.dataExport} onClick={() => privacyAction(downloadAccountExport)}>Download my data</button>
+                  <button type="button" className="student-button student-button--secondary student-button--sm" disabled={privacyBusy || !privacyControls?.accountClosure || privacyControls?.activeTaskBlock} onClick={() => privacyAction(requestAccountClosure)}>Request closure review</button>
                 </div>
               </section>
             )}

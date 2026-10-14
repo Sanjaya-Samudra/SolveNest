@@ -1,5 +1,5 @@
 import { useNavigationDialog } from '../../shared/useNavigationDialog.js'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { Bell, BookOpen, ChevronDown, ChevronRight, ClipboardList, CreditCard, FolderOpen, HelpCircle, Home, MessageCircle, PanelLeftClose, PanelLeftOpen, Plus, Settings, ShieldCheck, Sparkles, X, ArrowRight } from 'lucide-react'
 import { fetchStudentDashboard, formatDate, formatRelativeTime, getTaskJourney } from '../../student/studentDashboardData.js'
@@ -436,16 +436,36 @@ function UpcomingSection({ actions }) {
 }
 
 export function StudentDashboard() {
-  const [collapsed, setCollapsed] = useState(() => window.localStorage.getItem('sn-student-sidebar') === 'collapsed')
+  const [collapsed, setCollapsed] = useState(() => { try { return window.localStorage.getItem('sn-student-sidebar') === 'collapsed' } catch { return false } })
   const [notificationsOpen, setNotificationsOpen] = useState(false)
   const [studioOpen, setStudioOpen] = useState(false)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [state, setState] = useState({ loading: true, error: null, model: null })
   const [notificationState, setNotificationState] = useState({ items: [], unreadCount: 0 })
-  const load = () => { const controller = new AbortController(); setState((current) => ({ ...current, loading: true, error: null })); fetchStudentDashboard(controller.signal).then((model) => setState({ loading: false, error: null, model })).catch((error) => { if (error.name !== 'AbortError') setState({ loading: false, error, model: null }) }); return () => controller.abort() }
-  useEffect(() => load(), [])
-  useEffect(() => { const events = new EventSource('/api/student/events', { withCredentials: true }); const refresh = () => { load(); loadNotifications({ force: true }).catch(() => {}) }; ['TaskSubmittedForReview', 'AnalysisCompleted', 'PlanIssued', 'PlanAccepted', 'TaskFunded', 'ExpertAssigned', 'TaskDelivered', 'RevisionRequested', 'RevisionStarted', 'MessageCreated'].forEach((type) => events.addEventListener(type, refresh)); return () => events.close() }, [])
-  useEffect(() => { window.localStorage.setItem('sn-student-sidebar', collapsed ? 'collapsed' : 'expanded') }, [collapsed])
+  const activeRequest = useRef(null)
+  const load = useCallback((quiet = false) => {
+    activeRequest.current?.abort()
+    const controller = new AbortController()
+    activeRequest.current = controller
+    if (!quiet) setState((current) => ({ ...current, loading: true, error: null }))
+    fetchStudentDashboard(controller.signal).then((model) => {
+      if (!controller.signal.aborted) setState({ loading: false, error: null, model })
+    }).catch((error) => {
+      if (error.name !== 'AbortError' && !quiet) setState((current) => ({ ...current, loading: false, error }))
+    })
+  }, [])
+  useEffect(() => { load(); return () => activeRequest.current?.abort() }, [load])
+  useEffect(() => {
+    const events = new EventSource('/api/student/events', { withCredentials: true })
+    const refresh = () => { if (document.hidden) return; load(true); loadNotifications({ force: true }).catch(() => {}) }
+    const types = ['ready', 'TaskSubmittedForReview', 'AnalysisCompleted', 'PlanIssued', 'PlanAccepted', 'TaskFunded', 'ExpertAssigned', 'TaskDelivered', 'RevisionRequested', 'RevisionStarted', 'MessageCreated']
+    types.forEach((type) => events.addEventListener(type, refresh))
+    window.addEventListener('online', refresh)
+    document.addEventListener('visibilitychange', refresh)
+    const timer = setInterval(refresh, 60_000)
+    return () => { events.close(); clearInterval(timer); window.removeEventListener('online', refresh); document.removeEventListener('visibilitychange', refresh) }
+  }, [load])
+  useEffect(() => { try { window.localStorage.setItem('sn-student-sidebar', collapsed ? 'collapsed' : 'expanded') } catch {} }, [collapsed])
   useEffect(() => {
     const unsubscribe = subscribeNotifications((snapshot) => setNotificationState({ items: snapshot.items, unreadCount: snapshot.unreadCount }))
     loadNotifications().catch(() => {})

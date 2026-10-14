@@ -46,9 +46,10 @@ import {
   updateAssignmentWorkState,
 } from './expertStore.js'
 import { addActivity, buildTaskSummary, getStudentAnalysis, getStudentFiles, getStudentTask, getStudentTasks, readTaskStore, withTaskStore } from './taskStore.js'
-import { publish, subscribe } from './realtime.js'
+import { publish, subscribe, closeStreams } from './realtime.js'
 import { hasObjectStorage, persistUpload, removeStoredObject, signedObjectUrl } from './storage.js'
 import { hasEmail, sendEmail } from './email.js'
+import { exportStudentAccount } from './accountExport.js'
 import { hasSupabase, hasSupabaseAuth, supabaseChangeStaffRole, supabaseConsumeRateLimit, supabaseCreateAppSession, supabaseDeleteAppSession, supabaseExpertProfiles, supabaseFindProfileByEmail, supabaseGetAppSession, supabaseProfile, supabaseRefresh, supabaseRequestPasswordReset, supabaseTeam, supabaseUpdatePassword, supabaseSignIn, supabaseSignUp, supabaseUser } from './supabase.js'
 import { getAdminCase, getAdminOverview, getAdminQaCase, issueAdminPlan, issueAdminScopeChange, listAdminQaAssignments, recordAdminReview } from './adminStore.js'
 import { getSuperadminActivity, getSuperadminOverview } from './superadminStore.js'
@@ -137,12 +138,17 @@ function applyApprovedScopeChange(store, change, task, plan, stamp) {
   addActivity(store, { id: crypto.randomUUID(), studentId: task.studentId, taskId: task.id, type: 'ScopeChangeAccepted', text: task.latestUpdate.text, createdAt: stamp })
   return { id: task.id, studentId: task.studentId, title: task.title, at: stamp, scopeChangeId: change.id }
 }
-async function recordPaymentStatus(providerId, status, requireRecord = false) {
+async function recordPaymentStatus(providerId, status, requireRecord = false, provider = null) {
   return withTaskStore((store) => {
     const payment = store.payments.find((item) => item.providerId === providerId)
     if (!payment) {
       if (requireRecord) throw new Error('PAYMENT_RECORD_PENDING')
       return null
+    }
+    if (status === 'succeeded') {
+      const amount = provider?.amount_total ?? provider?.amount_received
+      if (!provider || amount !== Math.round(payment.amount * 100) || String(provider.currency).toLowerCase() !== String(payment.currency).toLowerCase()) throw new Error('PAYMENT_VERIFICATION_MISMATCH')
+      if (provider.metadata?.studentId && provider.metadata.studentId !== payment.studentId) throw new Error('PAYMENT_OWNER_MISMATCH')
     }
     if (payment.status === 'succeeded') {
       const change = payment.scopeChangeId ? store.scopeChanges.find((item) => item.id === payment.scopeChangeId) : null
@@ -153,8 +159,7 @@ async function recordPaymentStatus(providerId, status, requireRecord = false) {
     const task = store.tasks.find((item) => item.id === payment.taskId && item.studentId === payment.studentId)
     const plan = store.plans.find((item) => item.id === payment.planId && item.status === 'ACCEPTED')
     if (!task || !plan) {
-      if (payment.scopeChangeId) throw new Error('SCOPE_PAYMENT_PLAN_MISSING')
-      return null
+      throw new Error('PAYMENT_PLAN_MISSING')
     }
     const stamp = now()
     if (payment.scopeChangeId) {
@@ -185,7 +190,7 @@ async function recordPaymentStatus(providerId, status, requireRecord = false) {
     if (task.status !== 'PAYMENT_PENDING') return null
     task.status = 'PAID'
     task.amountDue = 0
-    task.funding = { state: 'funded', amountTotal: plan.amount, amountDue: 0 }
+    task.funding = { state: 'funded', amountTotal: plan.amount, amountFunded: plan.amount, amountDue: 0 }
     task.latestUpdate = { text: 'Your task is funded and ready for Expert assignment.', createdAt: stamp }
     task.nextAction = null
     task.updatedAt = stamp
@@ -228,7 +233,7 @@ app.post('/api/payments/stripe/webhook', express.raw({ type: 'application/json' 
           : event.type === 'payment_intent.succeeded' ? 'succeeded'
             : event.type === 'payment_intent.payment_failed' ? 'failed' : null
   try {
-    const fundedTask = status && (sessionEvent || object.id.startsWith('pi_')) ? await recordPaymentStatus(object.id, status, Boolean(object.metadata?.taskId)) : null
+    const fundedTask = status && (sessionEvent || object.id.startsWith('pi_')) ? await recordPaymentStatus(object.id, status, sessionEvent && Boolean(object.metadata?.taskId), object) : null
     await announceFundedTask(fundedTask)
     res.json({ received: true })
   } catch (error) {
@@ -377,7 +382,7 @@ app.get('/api/student/me', requireStudent, (req, res) => {
 })
 
 app.get('/api/student/events', requireStudent, (req, res) => {
-  res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' })
+  res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'private, no-store', 'X-Accel-Buffering': 'no', Connection: 'keep-alive' })
   res.flushHeaders()
   res.write(`event: ready\ndata: ${JSON.stringify({ connectedAt: now() })}\n\n`)
   const unsubscribe = subscribe(req.student.studentId, res)
@@ -764,7 +769,8 @@ app.get('/api/student/payments/tasks/:taskId/funding', requireStudent, asyncRout
   const plan = state.plans.find((item) => item.taskId === task.id && item.studentId === req.student.studentId && item.status === 'ACCEPTED')
   const milestones = plan?.milestones || []
   const next = milestones.find((item) => item.fundingState === 'payment_required')
-  const amountFunded = milestones.length ? milestones.filter((item) => item.fundingState === 'funded').reduce((total, item) => total + item.amount, 0) : Number(task.funding?.amountFunded || 0)
+  const scopeFunded = state.payments.filter((item) => item.planId === plan?.id && item.studentId === req.student.studentId && item.scopeChangeId && item.status === 'succeeded').reduce((total, item) => total + item.amount, 0)
+  const amountFunded = milestones.length ? scopeFunded + milestones.filter((item) => item.fundingState === 'funded').reduce((total, item) => total + item.amount, 0) : Number(task.funding?.amountFunded || 0)
   res.json({ taskId: task.id, model: plan?.paymentModel || 'full', currency: plan?.currency || 'LKR', amountTotal: plan?.amount || 0, amountFunded, amountDue: next?.amount ?? task.amountDue ?? 0, planConfirmed: plan?.status === 'ACCEPTED', workLocked: task.status === 'PAYMENT_PENDING', milestones, providerAvailable: Boolean(stripe), afterFunding: next?.sequence === 2 ? 'The approved delivery is released after this milestone is paid.' : null })
 }))
 
@@ -773,6 +779,7 @@ app.post('/api/student/payments/checkout', requireStudent, asyncRoute(async (req
   const task = await getStudentTask(req.student.studentId, req.body?.taskId)
   const plan = (await readTaskStore()).plans.find((item) => item.id === req.body?.planId && item.studentId === req.student.studentId)
   if (!task || !plan || plan.taskId !== task.id || plan.status !== 'ACCEPTED') return safeError(res, 409, 'PLAN_NOT_ACCEPTED', 'Accept the current official plan before funding this task.')
+  if (String(plan.currency).toLowerCase() !== (process.env.STRIPE_CURRENCY || 'lkr').toLowerCase()) return safeError(res, 503, 'CURRENCY_UNAVAILABLE', 'Checkout is not configured for this quote currency. Contact support.')
   const nextMilestone = plan.paymentModel === 'milestone' ? plan.milestones?.find((item) => item.fundingState === 'payment_required') : null
   if (plan.paymentModel === 'milestone' && (!nextMilestone || nextMilestone.id !== req.body?.milestoneId)) return safeError(res, 409, 'MILESTONE_NOT_PAYABLE', 'Choose the next unpaid milestone.')
   if (plan.paymentModel !== 'milestone' && req.body?.milestoneId) return safeError(res, 400, 'MILESTONE_NOT_APPLICABLE', 'This plan requires one full payment.')
@@ -790,7 +797,7 @@ app.post('/api/student/payments/checkout', requireStudent, asyncRoute(async (req
     if (active.providerId.startsWith('cs_')) {
       const session = await stripe.checkout.sessions.retrieve(active.providerId)
       if (session.payment_status === 'paid') {
-        await announceFundedTask(await recordPaymentStatus(active.providerId, 'succeeded'))
+        await announceFundedTask(await recordPaymentStatus(active.providerId, 'succeeded', true, session))
         return safeError(res, 409, 'PLAN_ALREADY_FUNDED', 'This plan has already been funded. Refresh the task to see its new status.')
       }
       if (session.status !== 'expired') return res.json({ paymentId: active.id, checkoutUrl: session.url, status: active.status, provider: 'stripe' })
@@ -842,7 +849,7 @@ app.get('/api/student/payments/payments/:paymentId/status', requireStudent, asyn
       const provider = payment.providerId.startsWith('cs_') ? await stripe.checkout.sessions.retrieve(payment.providerId) : await stripe.paymentIntents.retrieve(payment.providerId)
       const status = payment.providerId.startsWith('cs_') ? provider.payment_status === 'paid' ? 'succeeded' : provider.status === 'expired' ? 'canceled' : 'pending' : provider.status
       payment.status = status
-      const fundedTask = await recordPaymentStatus(payment.providerId, status)
+      const fundedTask = await recordPaymentStatus(payment.providerId, status, true, provider)
       await announceFundedTask(fundedTask)
     } catch (error) { console.error('[payment-status] reconciliation pending', error); return safeError(res, 503, 'PAYMENT_STATUS_PENDING', 'Payment status could not be finalized yet. Please try again.') }
   }
@@ -888,6 +895,7 @@ app.post('/api/student/payments/scope-changes/:scopeChangeId/accept', requireStu
   const task = state.tasks.find((item) => item.id === change.taskId && item.studentId === req.student.studentId)
   const plan = state.plans.find((item) => item.id === change.planId && item.status === 'ACCEPTED')
   if (!task || !plan) return safeError(res, 409, 'SCOPE_CHANGE_NOT_READY', 'The original accepted plan is unavailable.')
+  if (change.requested.priceDelta > 0 && String(plan.currency).toLowerCase() !== (process.env.STRIPE_CURRENCY || 'lkr').toLowerCase()) return safeError(res, 503, 'CURRENCY_UNAVAILABLE', 'Checkout is not configured for this quote currency. Contact support.')
   if (change.requested.priceDelta === 0) {
     const result = await withTaskStore((store) => {
       const current = store.scopeChanges.find((item) => item.id === change.id)
@@ -906,7 +914,7 @@ app.post('/api/student/payments/scope-changes/:scopeChangeId/accept', requireStu
   if (active?.providerId) {
     const existing = await stripe.checkout.sessions.retrieve(active.providerId)
     if (existing.payment_status === 'paid') {
-      try { await announceFundedTask(await recordPaymentStatus(active.providerId, 'succeeded')) }
+      try { await announceFundedTask(await recordPaymentStatus(active.providerId, 'succeeded', true, existing)) }
       catch (error) { console.error('[scope-change] payment reconciliation pending', error); return safeError(res, 503, 'SCOPE_CHANGE_PENDING', 'Payment was received; the scope update is still being finalized.') }
       return res.json({ scopeChange: (await readTaskStore()).scopeChanges.find((item) => item.id === change.id) })
     }
@@ -1242,14 +1250,7 @@ app.patch('/api/expert/availability', requireExpert, expertRoute(async (req, res
   res.json({ ok: true, availability })
 }))
 
-function publishExpert(expertId, type, payload) {
-  const listeners = expertSessions.get('__sse__')?.get(expertId)
-  if (!listeners || !listeners.size) return
-  const data = JSON.stringify({ type, ...payload })
-  for (const response of listeners) {
-    if (!response.writableEnded) response.write(`event: ${type}\ndata: ${data}\n\n`)
-  }
-}
+function publishExpert(expertId, type, payload) { publish('expert:' + expertId, { type, ...payload }) }
 
 const EXPERT_ERROR_STATUS = {
   ASSIGNMENT_NOT_FOUND: 404,
@@ -1568,19 +1569,10 @@ app.get('/api/expert/movement', requireExpert, expertRoute(async (_req, res) => 
 }))
 
 app.get('/api/expert/events', requireExpert, (req, res) => {
-  res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' })
+  res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'private, no-store', 'X-Accel-Buffering': 'no', Connection: 'keep-alive' })
   res.flushHeaders()
   res.write(`event: ready\ndata: ${JSON.stringify({ connectedAt: now() })}\n\n`)
-  const key = req.expert.expertId
-  const set = expertSessions.get('__sse__') || new Map()
-  if (!set.has(key)) set.set(key, new Set())
-  expertSessions.set('__sse__', set)
-  const listeners = set.get(key)
-  listeners.add(res)
-  req.on('close', () => {
-    listeners.delete(res)
-    if (!listeners.size) set.delete(key)
-  })
+  subscribe('expert:' + req.expert.expertId, res)
 })
 
 app.post('/api/expert/logout', requireExpert, expertRoute(async (req, res) => {
@@ -1718,6 +1710,25 @@ app.post('/api/student/notifications/read-all', requireStudent, asyncRoute(async
 }))
 
 const accountRoute = (handler) => (req, res, next) => Promise.resolve(handler(req, res)).catch(next)
+app.get('/api/student/account/export', requireStudent, accountRoute(async (req, res) => {
+  if (!await limited(`account-export:${req.student.studentId}`, 2)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before downloading another export.')
+  res.setHeader('Content-Disposition', 'attachment; filename="solvenest-account.json"')
+  res.json(await exportStudentAccount(req.student))
+}))
+app.post('/api/student/account/closure-request', requireStudent, accountRoute(async (req, res) => {
+  if (!await limited(`account-closure:${req.student.studentId}`, 2)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before requesting closure again.')
+  const result = await withTaskStore((store) => {
+    if (store.tasks.some((task) => task.studentId === req.student.studentId && !['COMPLETED', 'DECLINED'].includes(task.status))) return { blocked: true }
+    const existing = store.supportTickets.find((ticket) => ticket.context?.studentId === req.student.studentId && ticket.issue === 'account_closure' && ticket.status !== 'resolved')
+    if (existing) return { id: existing.id }
+    const stamp = now()
+    const ticket = { id: `SN-SUP-${crypto.randomUUID().slice(0, 8).toUpperCase()}`, status: 'received', category: 'privacy', categoryLabel: 'Privacy', issue: 'account_closure', issueLabel: 'Account closure request', message: 'Please review my account for closure and contact me about any records that must be retained.', context: { studentId: req.student.studentId, studentName: req.student.name }, createdAt: stamp, updatedAt: stamp, history: [], studentUpdates: [] }
+    store.supportTickets.unshift(ticket)
+    return { id: ticket.id }
+  })
+  if (result.blocked) return safeError(res, 409, 'ACTIVE_TASKS', 'Resolve active tasks before requesting account closure.')
+  res.json({ ticketId: result.id, message: 'Your closure request is in the support queue. Your account remains active until the request is reviewed.' })
+}))
 app.get('/api/student/account', requireStudent, accountRoute(async (req, res) => {
   const activeTasks = (await getStudentTasks(req.student.studentId)).filter((task) => !['COMPLETED', 'DECLINED'].includes(task.status)).length
   res.json({
@@ -2173,6 +2184,16 @@ app.post('/api/superadmin/team/:profileId/role', requireSuperadmin, staffRoute(a
 }))
 
 const clientDist = path.resolve(__dirname, '..', 'client', 'dist')
+app.get('/robots.txt', (_req, res) => {
+  res.type('text/plain').send('User-agent: *\nDisallow: /api/\nDisallow: /student\nDisallow: /expert\nDisallow: /admin\nDisallow: /superadmin\nDisallow: /reset-password\n')
+})
+app.get('/sitemap.xml', (_req, res) => {
+  let origin
+  try { origin = new URL(process.env.PUBLIC_APP_URL).origin } catch { return res.status(503).type('text/plain').send('Public URL is not configured.') }
+  const escapeXml = (value) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;')
+  const pages = ['/', '/method', '/domains', '/plans', '/why-solvenest', '/help', '/connect']
+  res.type('application/xml').send(`<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${pages.map((page) => `<url><loc>${escapeXml(origin + page)}</loc></url>`).join('')}</urlset>`)
+})
 if (process.env.NODE_ENV === 'production' && fs.existsSync(clientDist)) {
   app.use(express.static(clientDist, { index: false, setHeaders: (res, assetPath) => {
     if (assetPath.includes(`${path.sep}assets${path.sep}`)) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
@@ -2180,6 +2201,7 @@ if (process.env.NODE_ENV === 'production' && fs.existsSync(clientDist)) {
   } }))
   app.get('*', (req, res, next) => {
     if (req.path.startsWith('/api/') || !String(req.headers.accept || '').includes('text/html')) return next()
+    if (/^\/(student|expert|admin|superadmin|login|signin|signup|register|reset-password)(\/|$)/.test(req.path)) res.setHeader('X-Robots-Tag', 'noindex, nofollow')
     res.setHeader('Cache-Control', 'no-cache')
     res.sendFile(path.join(clientDist, 'index.html'))
   })
@@ -2235,6 +2257,7 @@ function shutdown(signal) {
   if (shuttingDown) return
   shuttingDown = true
   clearInterval(scopeSyncTimer)
+  closeStreams()
   console.log(JSON.stringify({ level: 'info', type: 'shutdown', signal }))
   server.close((error) => process.exit(error ? 1 : 0))
   setTimeout(() => { server.closeAllConnections?.(); process.exit(1) }, 10_000).unref()
