@@ -1,0 +1,41 @@
+name: Build and package
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            client/package-lock.json
+            server/package-lock.json
+      - run: npm ci --prefix client
+      - run: npm ci --prefix server
+      - name: Validate server syntax
+        run: |
+          for file in server/*.js; do
+            [[ "$file" == *.test.js ]] && continue
+            node --check "$file" || exit 1
+          done
+      - run: npm run build
+      - run: npm audit --prefix server --omit=dev --audit-level=high
+      - run: npm audit --prefix client --omit=dev --audit-level=high
+      - name: Build release image
+        run: docker build --tag solvenest:${{ github.sha }} .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-${{ github.sha }}
+          path: client/dist
+          retention-days: 14

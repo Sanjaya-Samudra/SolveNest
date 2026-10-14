@@ -1,6 +1,6 @@
 # SolveNest production handoff
 
-The application code, role boundaries, transactional persistence, upload inspection, health checks, container runtime, and responsive workspace navigation are prepared for deployment. The remaining steps require accounts, credentials, a domain, and decisions that only the project owner can provide.
+Deployment scaffolding and application safeguards are implemented, but production readiness is not yet verified. Live provider configuration, database migration execution, browser checks, and the launch verification below remain required.
 
 ## Services to create
 
@@ -39,3 +39,23 @@ Perform these checks in Stripe test mode and with non-sensitive sample files bef
 - Send container logs to a retained log service. The API emits JSON request and error records with request IDs.
 - Rotate Supabase, Stripe, SMTP, Solvy, and file-signing secrets on a documented schedule and immediately after suspected exposure.
 - Publish privacy, retention, refund, academic-integrity, and terms policies reviewed for the countries where SolveNest operates.
+
+## Latest implementation and verification status
+
+- Apply migrations 001 through 009 in order. Migration 009 preserves Admin audit records in domain storage; do not deploy this application version without it.
+- After building the client and configuring server/.env.production, run `npm run preflight --prefix server`. It reports configuration names only and does not validate provider connectivity.
+- For the supplied HTTPS proxy, set APP_DOMAIN and run `docker compose -f compose.production.yml -f compose.https.yml up -d --build`. Point DNS to the host first and configure the exact proxy hop count. See server/SETUP.md.
+- Student Account provides a JSON data export and a staff-reviewed closure request. Closure does not delete data or disable the account. Define retention and deletion policies before adding automatic deletion.
+- Confirm refunds, disputes, retention, staff account suspension, and notification delivery requirements before declaring the full product complete. Automatic refunds and irreversible account deletion are not implemented by this batch.
+- The frontend production build and server syntax checks passed locally. No automated tests were written or run, as requested.
+- Browser inspection could not connect to the local preview. Check all four roles at mobile, tablet, and desktop widths, keyboard navigation, drawer focus, and error/reconnect states before release.
+- Database migrations, Docker runtime, SMTP, Stripe, Supabase, and Solvy still require verification with configured services. The preflight command cannot certify these integrations.
+- The optional WhyHeroCanvas bundle remains large (approximately 885 kB minified); evaluate its loading performance on mobile connections.
+
+## Role navigation
+
+- Student: enter the Student sign-in flow and use `/student` for tasks, payments, messages, files, and account settings.
+- Expert: use `/expert/login`, then `/expert/dashboard` for assigned work.
+- Admin: use `/admin` for operational task review, assignment, quality review, and support.
+- Superadmin: use `/superadmin` for governance and role management.
+- Admin and Superadmin are separate roles and sessions. Provision the appropriate role through the controlled governance process; neither workspace should offer a shortcut that grants access to the other role.

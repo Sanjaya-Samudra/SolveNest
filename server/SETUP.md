@@ -39,7 +39,7 @@ Required in production:
 4. Put the server-only service role key in `SUPABASE_SERVICE_ROLE_KEY`. Never add this key to `client/.env` or browser code.
 5. Set `SUPABASE_STORAGE_BUCKET=student-files`.
 6. Create a private Storage bucket with that name.
-7. In the Supabase SQL Editor, run every file in `server/migrations` from `001_initial.sql` through `008_domain_records.sql` in numeric order.
+7. In the Supabase SQL Editor, run every file in `server/migrations` from `001_initial.sql` through `009_admin_audit_records.sql` in numeric order.
 8. In **Authentication > Providers**, enable Email/password. Decide whether email confirmation is required; if enabled, configure SMTP in Supabase Auth and complete confirmation before the first Student session.
 
 The migration creates a `profiles` table linked to `auth.users`, a signup trigger, Row Level Security policies, task/file/analysis/review tables, idempotency records, and guest-transfer records. The service role is used only by the trusted server for Storage and server-side operations.
@@ -107,7 +107,7 @@ Use `/api/health` as the liveness probe and `/api/ready` as the traffic readines
 ## 10. Release sequence and remaining gates
 
 1. Choose a production host for the static React build and Node API, and connect an HTTPS domain with same-origin `/api` routing.
-2. Create Supabase, run all eight migrations, create the private bucket, enable Email/password Auth, and make the first Superadmin through a trusted administrator.
+2. Create Supabase, run all nine migrations, create the private bucket, enable Email/password Auth, and make the first Superadmin through a trusted administrator.
 3. Configure an SMTP provider and the Supabase Auth email templates and redirect allowlist.
 4. Provide a real Solvy endpoint matching the documented analysis and Explain & Defend requests. The API cannot manufacture or configure that service.
 5. Create a Stripe account, configure Checkout credentials and the signed webhook, and verify that the chosen account supports the configured currency.
@@ -115,4 +115,14 @@ Use `/api/health` as the liveness probe and `/api/ready` as the traffic readines
 7. Build the client with `npm --prefix client run build`, start the API with `npm --prefix server start`, and confirm `/api/health` responds through the public HTTPS domain.
 8. Manually register and sign in a Student, upload a brief and rubric, run analysis, create a task, issue and accept a plan, complete a real payment, assign an Expert, submit for Admin QA, deliver, and request a revision. Confirm password recovery and signed file downloads.
 
-The code-level production gates are implemented: transactional domain rows, authenticated malware scanning, exact staff role boundaries, durable sessions and rate limits, signed provider callbacks, health checks, and container deployment. A public launch still depends on the owner-created services and credentials above. Complete the manual launch flow with those live providers before accepting customers.
+The code-level production gates are implemented: transactional domain rows, mandatory malware scanning over a private network, exact staff role boundaries, durable sessions and rate limits, signed provider callbacks, health checks, and container deployment. A public launch still depends on the owner-created services and credentials above. Complete the manual launch flow with those live providers before accepting customers.
+
+## 11. Release preparation additions
+
+Run `npm --prefix server run preflight` from the repository root after filling `server/.env.production`. This reports missing configuration names without printing secret values. It validates configuration format only; it does not contact providers.
+
+Migration 009 adds durable Admin audit events and explicit service-role execution permission for domain changes. Apply it before deploying this release.
+
+For the included HTTPS proxy, export `APP_DOMAIN` on the host and use `docker compose -f compose.production.yml -f compose.https.yml up -d --build`. Set `PUBLIC_APP_URL=https://YOUR_DOMAIN` and `TRUST_PROXY_HOPS=1` for a single Caddy proxy; adjust the hop count if another trusted proxy is added. Ports 80 and 443 must reach the proxy. The database and ClamAV stay private.
+
+The GitHub build workflow compiles the UI, checks server syntax, audits production dependencies, and builds the container. It does not run automated tests or deploy the application.
