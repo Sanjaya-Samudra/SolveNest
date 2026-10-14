@@ -116,7 +116,7 @@ export async function supabaseChangeStaffRole(actorId, targetId, expectedRole, n
   if (error) throw error
   return data
 }
-const domainCollections = ['tasks', 'files', 'deliveryFiles', 'analyses', 'reviews', 'drafts', 'guestTransfers', 'conversations', 'messages', 'payments', 'plans', 'scopeChanges', 'explainSessions', 'explainArtifacts', 'explainRequests', 'supportTickets', 'activity', 'notifications']
+const domainCollections = ['tasks', 'files', 'deliveryFiles', 'analyses', 'reviews', 'drafts', 'guestTransfers', 'conversations', 'messages', 'payments', 'plans', 'scopeChanges', 'explainSessions', 'explainArtifacts', 'explainRequests', 'supportTickets', 'activity', 'notifications', 'adminAudit']
 function emptyDomainState() { return Object.fromEntries([...domainCollections.map((name) => [name, []]), ['idempotency', {}]]) }
 function recordKey(item, index) { return String(item?.id || item?.token || `${index}`) }
 function flattenDomainState(state) {
@@ -130,28 +130,30 @@ function flattenDomainState(state) {
 }
 export async function supabaseReadState() {
   if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED')
-  const [{ data: meta, error: metaError }, records] = await Promise.all([
-    adminClient.from('domain_state_meta').select('revision').eq('id', 'default').single(),
-    (async () => {
-      const rows = []
-      for (let offset = 0; ; offset += 1000) {
-        const { data, error } = await adminClient.from('domain_records').select('collection, record_key, payload, position').order('collection').order('position').range(offset, offset + 999)
-        if (error) throw error
-        rows.push(...(data || []))
-        if (!data || data.length < 1000) break
-      }
-      return rows
-    })(),
-  ])
-  if (metaError) throw new Error(metaError.code === '42P01' ? 'DOMAIN_RECORDS_MIGRATION_REQUIRED' : metaError.message)
-  const state = emptyDomainState()
-  for (const row of records) {
-    if (row.collection === 'idempotency') state.idempotency[row.record_key] = row.payload
-    else if (Array.isArray(state[row.collection])) state[row.collection].push(row.payload)
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const { data: before, error: beforeError } = await adminClient.from('domain_state_meta').select('revision').eq('id', 'default').single()
+    if (beforeError) throw beforeError
+    const records = []
+    for (let offset = 0; ; offset += 1000) {
+      const { data, error } = await adminClient.from('domain_records').select('collection, record_key, payload, position').order('collection').order('position').order('record_key').range(offset, offset + 999)
+      if (error) throw error
+      records.push(...(data || []))
+      if (!data || data.length < 1000) break
+    }
+    const { data: after, error: afterError } = await adminClient.from('domain_state_meta').select('revision').eq('id', 'default').single()
+    if (afterError) throw afterError
+    // A writer can move records between pages; retry instead of returning a torn snapshot.
+    if (String(before.revision) !== String(after.revision)) continue
+    const state = emptyDomainState()
+    for (const row of records) {
+      if (row.collection === 'idempotency') state.idempotency[row.record_key] = row.payload
+      else if (Array.isArray(state[row.collection])) state[row.collection].push(row.payload)
+    }
+    Object.defineProperty(state, '__revision', { value: Number(after.revision), configurable: true })
+    Object.defineProperty(state, '__baseline', { value: flattenDomainState(state), configurable: true })
+    return state
   }
-  Object.defineProperty(state, '__revision', { value: Number(meta.revision), configurable: true })
-  Object.defineProperty(state, '__baseline', { value: flattenDomainState(state), configurable: true })
-  return state
+  throw new Error('APP_STATE_CONFLICT')
 }
 export async function supabaseWriteState(state) {
   if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED')
@@ -178,12 +180,12 @@ export async function supabaseWriteState(state) {
 }
 export async function supabaseReadStudentAccount(studentId) { if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED'); const { data, error } = await adminClient.from('student_accounts').select('account').eq('student_id', studentId).maybeSingle(); if (error) throw error; return data?.account || null }
 export async function supabaseWriteStudentAccount(studentId, account) { if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED'); const { error } = await adminClient.from('student_accounts').upsert({ student_id: studentId, account, updated_at: new Date().toISOString() }); if (error) throw error; return account }
-export async function supabaseSignUp({ email, password, name }) { if (!authClient) throw new Error('SUPABASE_NOT_CONFIGURED'); return authClient.auth.signUp({ email, password, options: { data: { name, role: 'Student' } } }) }
-export async function supabaseSignIn({ email, password }) { if (!authClient) throw new Error('SUPABASE_NOT_CONFIGURED'); return authClient.auth.signInWithPassword({ email, password }) }
+export async function supabaseSignUp({ email, password, name }) { if (!authClient) throw new Error('SUPABASE_NOT_CONFIGURED'); return createClient(url, anonKey, { auth: { persistSession: false, autoRefreshToken: false } }).auth.signUp({ email, password, options: { data: { name, role: 'Student' } } }) }
+export async function supabaseSignIn({ email, password }) { if (!authClient) throw new Error('SUPABASE_NOT_CONFIGURED'); return createClient(url, anonKey, { auth: { persistSession: false, autoRefreshToken: false } }).auth.signInWithPassword({ email, password }) }
 export async function supabaseRequestPasswordReset(email) { if (!authClient) throw new Error('SUPABASE_NOT_CONFIGURED'); return authClient.auth.resetPasswordForEmail(email, process.env.PUBLIC_APP_URL ? { redirectTo: `${process.env.PUBLIC_APP_URL.replace(/\/$/, '')}/reset-password` } : undefined) }
 export async function supabaseUpdatePassword(accessToken, refreshToken, password) { if (!url || !anonKey) throw new Error('SUPABASE_NOT_CONFIGURED'); const client = createClient(url, anonKey, { auth: { persistSession: false, autoRefreshToken: false } }); const { error: sessionError } = await client.auth.setSession({ access_token: accessToken, refresh_token: refreshToken }); if (sessionError) return { error: sessionError }; return client.auth.updateUser({ password }) }
 export async function supabaseUser(accessToken) { if (!authClient || !accessToken) return null; const { data, error } = await authClient.auth.getUser(accessToken); if (error) return null; return data.user }
-export async function supabaseRefresh(refreshToken) { if (!authClient || !refreshToken) return null; const { data } = await authClient.auth.refreshSession({ refresh_token: refreshToken }); return data.session || null }
+export async function supabaseRefresh(refreshToken) { if (!authClient || !refreshToken) return null; const { data } = await createClient(url, anonKey, { auth: { persistSession: false, autoRefreshToken: false } }).auth.refreshSession({ refresh_token: refreshToken }); return data.session || null }
 export async function supabaseUpload(file, key) { if (!adminClient) return false; const { error } = await adminClient.storage.from(bucket).upload(key, fs.readFileSync(file.path), { contentType: file.mimetype, upsert: false }); if (error) throw error; try { fs.unlinkSync(file.path) } catch {} return true }
 export async function supabaseRemove(key) { if (!adminClient) return false; const { error } = await adminClient.storage.from(bucket).remove([key]); if (error) throw error; return true }
 export async function supabaseSignedUrl(key, expiresIn = 600) { if (!adminClient) return null; const { data, error } = await adminClient.storage.from(bucket).createSignedUrl(key, expiresIn); if (error) throw error; return data.signedUrl }
