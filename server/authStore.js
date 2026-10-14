@@ -9,7 +9,7 @@ const dataDir = path.join(__dirname, 'data')
 const usersPath = path.join(dataDir, 'users.json')
 const sessionsPath = path.join(dataDir, 'sessions.json')
 const ensure = () => { if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true }) }
-const read = (file, fallback) => { ensure(); try { return JSON.parse(fs.readFileSync(file, 'utf8')) } catch { fs.writeFileSync(file, JSON.stringify(fallback, null, 2)); return fallback } }
+const read = (file, fallback) => { ensure(); try { return JSON.parse(fs.readFileSync(file, 'utf8')) } catch (error) { if (error.code !== 'ENOENT') throw new Error('LOCAL_AUTH_STORE_UNREADABLE', { cause: error }); fs.writeFileSync(file, JSON.stringify(fallback, null, 2)); return fallback } }
 const write = (file, value) => { ensure(); const temporary = `${file}.tmp`; fs.writeFileSync(temporary, JSON.stringify(value, null, 2)); fs.renameSync(temporary, file) }
 const hash = (password, salt = crypto.randomBytes(16).toString('hex')) => ({ salt, digest: crypto.scryptSync(password, salt, 64).toString('hex') })
 const same = (left, right) => left.length === right.length && crypto.timingSafeEqual(Buffer.from(left), Buffer.from(right))
@@ -50,6 +50,7 @@ export function getSession(id) {
   const sessions = read(sessionsPath, [])
   const session = sessions.find((item) => item.id === id)
   if (!session) return null
+  if (Date.now() - Date.parse(session.createdAt) > 7 * 24 * 60 * 60 * 1000 || !Number.isFinite(Date.parse(session.createdAt))) { deleteSession(id); return null }
   session.lastActiveAt = new Date().toISOString()
   write(sessionsPath, sessions)
   return session

@@ -90,7 +90,20 @@ const upload = multer({
 })
 
 const app = express()
+function asyncRoute(handler) { return (req, res, next) => Promise.resolve().then(() => handler(req, res, next)).catch(next) }
 app.disable('x-powered-by')
+app.use('/api', (req, res, next) => {
+  res.setHeader('Cache-Control', 'private, no-store')
+  res.setHeader('X-Robots-Tag', 'noindex, nofollow')
+  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method) || req.path === '/payments/stripe/webhook') return next()
+  const origin = req.headers.origin
+  const allowed = process.env.PUBLIC_APP_URL || `${req.protocol}://${req.get('host')}`
+  let trusted = !origin
+  try { if (origin) trusted = new URL(origin).origin === new URL(allowed).origin } catch { trusted = false }
+  if (process.env.NODE_ENV !== 'production' && ['http://localhost:5173', 'http://127.0.0.1:5173'].includes(origin)) trusted = true
+  if (req.headers['sec-fetch-site'] === 'cross-site' || !trusted) return safeError(res, 403, 'ORIGIN_REJECTED', 'This request must come from the SolveNest website.')
+  next()
+})
 const trustedProxyHops = Number(process.env.TRUST_PROXY_HOPS || 0)
 if (Number.isSafeInteger(trustedProxyHops) && trustedProxyHops > 0 && trustedProxyHops <= 3) app.set('trust proxy', trustedProxyHops)
 app.use((req, res, next) => {
@@ -202,7 +215,7 @@ async function syncApprovedScopeChange(scopeChangeId) {
   publishExpert(task.assignedExpertId, 'AssignmentChanged', { assignmentId: task.assignmentId, at: now() })
 }
 
-app.post('/api/payments/stripe/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+app.post('/api/payments/stripe/webhook', express.raw({ type: 'application/json' }), asyncRoute(async (req, res) => {
   if (!stripe || !process.env.STRIPE_WEBHOOK_SECRET) return res.status(503).json({ error: 'PAYMENTS_NOT_CONFIGURED' })
   let event
   try { event = stripe.webhooks.constructEvent(req.body, req.headers['stripe-signature'], process.env.STRIPE_WEBHOOK_SECRET) } catch { return res.status(400).json({ error: 'INVALID_WEBHOOK' }) }
@@ -222,7 +235,7 @@ app.post('/api/payments/stripe/webhook', express.raw({ type: 'application/json' 
     console.error('[stripe-webhook] reconciliation failed', error)
     res.status(503).json({ error: 'PAYMENT_RECONCILIATION_PENDING' })
   }
-})
+}))
 app.use(express.json({ limit: '1mb' }))
 
 function now() { return new Date().toISOString() }
@@ -371,22 +384,22 @@ app.get('/api/student/events', requireStudent, (req, res) => {
   req.on('close', unsubscribe)
 })
 
-app.post('/api/student/task-creation/session', requireStudent, async (req, res) => {
+app.post('/api/student/task-creation/session', requireStudent, asyncRoute(async (req, res) => {
   const session = { id: crypto.randomUUID(), studentId: req.student.studentId, status: 'ACTIVE', expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), createdAt: now(), updatedAt: now() }
   await withTaskStore((store) => store.drafts.push(session))
   res.status(201).json({ session })
-})
+}))
 
-app.get('/api/student/task-creation/session/:sessionId', requireStudent, async (req, res) => {
+app.get('/api/student/task-creation/session/:sessionId', requireStudent, asyncRoute(async (req, res) => {
   const state = await readTaskStore()
   const session = state.drafts.find((draft) => draft.id === req.params.sessionId && draft.studentId === req.student.studentId)
   if (!session) return safeError(res, 404, 'SESSION_NOT_FOUND', 'Task setup session not found.')
   const files = (await getStudentFiles(req.student.studentId)).filter((file) => file.analysisSessionId === session.id || file.taskId === null)
   const analysis = state.analyses.find((item) => item.sessionId === session.id && item.studentId === req.student.studentId) || null
   res.json({ session, files, analysis: analysis?.result || null })
-})
+}))
 
-app.post('/api/guest/analysis-transfer', async (req, res) => {
+app.post('/api/guest/analysis-transfer', asyncRoute(async (req, res) => {
   if (!await limited(`guest-transfer:${req.ip}`, 10)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before creating another transfer.')
   const analysis = req.body?.analysis
   if (!analysis || typeof analysis !== 'object' || Array.isArray(analysis)) return safeError(res, 400, 'ANALYSIS_REQUIRED', 'A structured analysis is required.')
@@ -395,9 +408,9 @@ app.post('/api/guest/analysis-transfer', async (req, res) => {
   const transfer = { tokenHash: hashTransferToken(token), analysis: preview, expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), claimedBy: null, createdAt: now() }
   await withTaskStore((store) => { store.guestTransfers = store.guestTransfers.filter((item) => new Date(item.expiresAt).getTime() > Date.now()); store.guestTransfers.push(transfer) })
   res.status(201).json({ transferToken: token, expiresAt: transfer.expiresAt })
-})
+}))
 
-app.post('/api/student/analysis-transfer/claim', requireStudent, async (req, res) => {
+app.post('/api/student/analysis-transfer/claim', requireStudent, asyncRoute(async (req, res) => {
   const token = String(req.body?.transferToken || '')
   const transfer = await withTaskStore((store) => {
     const item = store.guestTransfers.find((candidate) => candidate.tokenHash === hashTransferToken(token) && !candidate.claimedBy && new Date(candidate.expiresAt).getTime() > Date.now())
@@ -406,7 +419,7 @@ app.post('/api/student/analysis-transfer/claim', requireStudent, async (req, res
   })
   if (!transfer) return safeError(res, 404, 'TRANSFER_NOT_FOUND', 'This analysis transfer is expired or invalid.')
   res.json({ analysis: transfer.analysis, claimed: true })
-})
+}))
 
 app.post('/api/student/task-creation/files', requireStudent, (req, res, next) => {
   upload.single('file')(req, res, (error) => {
@@ -439,7 +452,7 @@ app.post('/api/student/task-creation/files', requireStudent, (req, res, next) =>
   res.status(201).json({ file: { id: file.id, name: file.originalName, kind: file.role === 'BRIEF' ? 'brief' : 'supporting', size: file.size, status: 'ready', createdAt: file.createdAt } })
 })
 
-app.delete('/api/student/task-creation/files/:fileId', requireStudent, async (req, res) => {
+app.delete('/api/student/task-creation/files/:fileId', requireStudent, asyncRoute(async (req, res) => {
   const result = await withTaskStore((store) => {
     const index = store.files.findIndex((file) => file.id === req.params.fileId && file.studentId === req.student.studentId && !file.taskId)
     if (index === -1) return null
@@ -449,16 +462,16 @@ app.delete('/api/student/task-creation/files/:fileId', requireStudent, async (re
   if (!result) return safeError(res, 404, 'FILE_NOT_FOUND', 'File not found.')
   try { await removeStoredObject(result.storageKey); fs.unlinkSync(path.join(uploadDir, result.storageKey)) } catch {}
   res.json({ ok: true })
-})
+}))
 
-app.get('/api/student/files/:fileId/access', requireStudent, async (req, res) => {
+app.get('/api/student/files/:fileId/access', requireStudent, asyncRoute(async (req, res) => {
   const file = await ownedFile(req.student.studentId, req.params.fileId)
   if (!file) return safeError(res, 404, 'FILE_NOT_FOUND', 'File not found.')
   const objectUrl = await signedObjectUrl(file.storageKey, file.originalName)
   res.json({ signedUrl: objectUrl || signedFileUrl(file.id), expiresAt: Date.now() + 10 * 60 * 1000 })
-})
+}))
 
-app.get('/api/student/files/:fileId/download', requireStudent, async (req, res) => {
+app.get('/api/student/files/:fileId/download', requireStudent, asyncRoute(async (req, res) => {
   const file = await ownedFile(req.student.studentId, req.params.fileId)
   const expiresAt = Number(req.query.expires)
   const providedToken = Buffer.from(String(req.query.token || ''))
@@ -469,9 +482,9 @@ app.get('/api/student/files/:fileId/download', requireStudent, async (req, res) 
   if (hasObjectStorage()) return safeError(res, 409, 'OBJECT_STORAGE_REDIRECT_REQUIRED', 'Use the signed object-storage URL.')
   if (!fs.existsSync(storagePath)) return safeError(res, 404, 'FILE_CONTENT_MISSING', 'The file is no longer available.')
   res.download(storagePath, file.originalName)
-})
+}))
 
-app.delete('/api/student/files/:fileId', requireStudent, async (req, res) => {
+app.delete('/api/student/files/:fileId', requireStudent, asyncRoute(async (req, res) => {
   const owned = await ownedFile(req.student.studentId, req.params.fileId)
   if (!owned) return safeError(res, 404, 'FILE_NOT_FOUND', 'File not found.')
   const task = owned.taskId ? await getStudentTask(req.student.studentId, owned.taskId) : null
@@ -485,9 +498,9 @@ app.delete('/api/student/files/:fileId', requireStudent, async (req, res) => {
   if (!removed) return safeError(res, 404, 'FILE_NOT_FOUND', 'File not found.')
   try { await removeStoredObject(removed.storageKey); fs.unlinkSync(path.join(uploadDir, removed.storageKey)) } catch {}
   res.json({ ok: true })
-})
+}))
 
-app.post('/api/student/dossiers/:taskId/files', requireStudent, async (req, res, next) => {
+app.post('/api/student/dossiers/:taskId/files', requireStudent, asyncRoute(async (req, res, next) => {
   const task = await getStudentTask(req.student.studentId, req.params.taskId)
   if (!task) return safeError(res, 404, 'TASK_NOT_FOUND', 'Task not found.')
   if (task.assignedExpertId) return safeError(res, 409, 'TASK_FILES_LOCKED', 'Contact support to add materials after Expert assignment.')
@@ -501,9 +514,9 @@ app.post('/api/student/dossiers/:taskId/files', requireStudent, async (req, res,
   try { await persistUpload(req.file, file.storageKey) } catch { return safeError(res, 503, 'STORAGE_UNAVAILABLE', 'The file could not be stored securely.') }
   await withTaskStore((store) => store.files.push(file))
   res.status(201).json({ file: { id: file.id, name: file.originalName, type: file.mimeType, size: file.size, role: file.role, origin: 'student', taskId: file.taskId, createdAt: file.createdAt } })
-})
+}))
 
-app.put('/api/student/files/:fileId/replace', requireStudent, async (req, res, next) => {
+app.put('/api/student/files/:fileId/replace', requireStudent, asyncRoute(async (req, res, next) => {
   const file = await ownedFile(req.student.studentId, req.params.fileId)
   if (!file) return safeError(res, 404, 'FILE_NOT_FOUND', 'File not found.')
   const task = file.taskId ? await getStudentTask(req.student.studentId, file.taskId) : null
@@ -525,9 +538,9 @@ app.put('/api/student/files/:fileId/replace', requireStudent, async (req, res, n
   if (!replacement) return safeError(res, 404, 'FILE_NOT_FOUND', 'File not found.')
   try { await removeStoredObject(replacement.previousKey); fs.unlinkSync(path.join(uploadDir, replacement.previousKey)) } catch {}
   res.json({ file: { id: replacement.file.id, name: replacement.file.originalName, type: replacement.file.mimeType, size: replacement.file.size, role: replacement.file.role, origin: 'student', taskId: replacement.file.taskId, createdAt: replacement.file.createdAt } })
-})
+}))
 
-app.post('/api/student/task-creation/analyze', requireStudent, async (req, res) => {
+app.post('/api/student/task-creation/analyze', requireStudent, asyncRoute(async (req, res) => {
   if (!await limited(`analysis:${req.student.studentId}`, 5)) return safeError(res, 429, 'ANALYSIS_RATE_LIMITED', 'Analysis requests are temporarily limited. Please try again shortly.')
   const fileIds = Array.isArray(req.body?.fileIds) ? req.body.fileIds.map(String) : []
   const files = (await getStudentFiles(req.student.studentId)).filter((file) => fileIds.includes(file.id) && !file.taskId)
@@ -541,9 +554,9 @@ app.post('/api/student/task-creation/analyze', requireStudent, async (req, res) 
   await withTaskStore((store) => { store.analyses.push(analysis); addActivity(store, { id: crypto.randomUUID(), studentId: req.student.studentId, type: 'AnalysisCompleted', text: 'Task analysis completed.', createdAt: analysis.createdAt }) })
   publish(req.student.studentId, { type: 'AnalysisCompleted', analysisId: analysis.id, status: analysis.status })
   res.status(201).json({ analysis: { ...analysis.result, id: analysis.id, status: analysis.status } })
-})
+}))
 
-app.post('/api/student/task-creation/tasks', requireStudent, async (req, res) => {
+app.post('/api/student/task-creation/tasks', requireStudent, asyncRoute(async (req, res) => {
   const idempotencyKey = String(req.get('Idempotency-Key') || req.body?.idempotencyKey || '').trim()
   if (!idempotencyKey) return safeError(res, 400, 'IDEMPOTENCY_KEY_REQUIRED', 'A task creation key is required.')
   const state = await readTaskStore()
@@ -569,41 +582,41 @@ app.post('/api/student/task-creation/tasks', requireStudent, async (req, res) =>
   const summary = await studentTaskPayload(task, req.student.studentId)
   publish(req.student.studentId, { type: 'TaskSubmittedForReview', task: summary })
   res.status(201).json({ task: summary, nextAction: null })
-})
+}))
 
-app.get('/api/student/tasks', requireStudent, async (req, res) => {
+app.get('/api/student/tasks', requireStudent, asyncRoute(async (req, res) => {
   const tasks = await Promise.all((await getStudentTasks(req.student.studentId)).map((task) => studentTaskPayload(task, req.student.studentId)))
   res.json({ tasks, meta: { page: Number(req.query.page || 1), perPage: Number(req.query.per_page || 20), total: tasks.length } })
-})
+}))
 
-app.get('/api/student/tasks/:taskId/preview', requireStudent, async (req, res) => {
+app.get('/api/student/tasks/:taskId/preview', requireStudent, asyncRoute(async (req, res) => {
   const task = await getStudentTask(req.student.studentId, req.params.taskId)
   if (!task) return safeError(res, 404, 'TASK_NOT_FOUND', 'Task not found.')
   res.json({ task: await studentTaskPayload(task, req.student.studentId) })
-})
+}))
 
-app.get('/api/student/dossiers', requireStudent, async (req, res) => {
+app.get('/api/student/dossiers', requireStudent, asyncRoute(async (req, res) => {
   const dossiers = await Promise.all((await getStudentTasks(req.student.studentId)).map(async (task) => dossierPayload(task, await getStudentFiles(req.student.studentId, task.id))))
   res.json({ dossiers, meta: { total: dossiers.length } })
-})
+}))
 
-app.get('/api/student/dossiers/:taskId', requireStudent, async (req, res) => {
+app.get('/api/student/dossiers/:taskId', requireStudent, asyncRoute(async (req, res) => {
   const task = await getStudentTask(req.student.studentId, req.params.taskId)
   if (!task) return safeError(res, 404, 'TASK_NOT_FOUND', 'Task not found.')
   const files = await getStudentFiles(req.student.studentId, task.id)
   res.json({ dossier: dossierPayload(task, files) })
-})
+}))
 
-app.get('/api/student/dossiers/:taskId/delivery', requireStudent, async (req, res) => {
+app.get('/api/student/dossiers/:taskId/delivery', requireStudent, asyncRoute(async (req, res) => {
   const task = await getStudentTask(req.student.studentId, req.params.taskId)
   if (!task) return safeError(res, 404, 'TASK_NOT_FOUND', 'Task not found.')
   const version = req.query.version ? Number(req.query.version) : null
   const delivery = version ? (task.deliveryVersions || []).find((item) => item.version === version) : (task.deliveryVersions || []).at(-1)
   if (!delivery) return safeError(res, 404, 'DELIVERY_NOT_FOUND', 'No delivery is available for this task.')
   res.json({ delivery })
-})
+}))
 
-app.post('/api/student/dossiers/:taskId/revision', requireStudent, async (req, res) => {
+app.post('/api/student/dossiers/:taskId/revision', requireStudent, asyncRoute(async (req, res) => {
   const note = String(req.body?.note || '').trim()
   if (note.length < 10 || note.length > 2000) return safeError(res, 400, 'REVISION_NOTE_REQUIRED', 'Describe the requested revision in 10 to 2000 characters.')
   const result = await withTaskStore((store) => {
@@ -629,17 +642,17 @@ app.post('/api/student/dossiers/:taskId/revision', requireStudent, async (req, r
   publishExpert(result.expertId, 'RevisionRequested', { assignmentId: result.assignmentId, note, at: result.revision.requestedAt })
   publish(req.student.studentId, { type: 'RevisionRequested', taskId: req.params.taskId })
   res.status(201).json({ revision: result.revision })
-})
+}))
 
-app.get('/api/student/dashboard', requireStudent, async (req, res) => {
+app.get('/api/student/dashboard', requireStudent, asyncRoute(async (req, res) => {
   const tasks = await Promise.all((await getStudentTasks(req.student.studentId)).map((task) => studentTaskPayload(task, req.student.studentId)))
   const notifications = await listNotifications(req.student.studentId)
   const activity = (await readTaskStore()).activity.filter((item) => item.studentId === req.student.studentId).slice(0, 10)
   const unreadMessages = (await readTaskStore()).conversations.filter((item) => item.studentId === req.student.studentId).reduce((total, item) => total + Number(item.unread || 0), 0)
   res.json({ student: { id: req.student.studentId, name: req.student.name, role: req.student.role, email: req.student.email || null }, tasks, notifications, recentActivity: activity, upcomingActions: [], unreadMessages })
-})
+}))
 
-app.get('/api/student/conversations', requireStudent, async (req, res) => {
+app.get('/api/student/conversations', requireStudent, asyncRoute(async (req, res) => {
   const tasks = await getStudentTasks(req.student.studentId)
   const conversations = await withTaskStore((store) => tasks.map((task) => {
     let existing = store.conversations.find((item) => item.studentId === req.student.studentId && item.taskId === task.id)
@@ -648,17 +661,17 @@ app.get('/api/student/conversations', requireStudent, async (req, res) => {
     return { ...existing, lastMessage: messages.at(-1) || existing.lastMessage }
   }))
   res.json({ conversations })
-})
+}))
 
-app.get('/api/student/conversations/:conversationId/messages', requireStudent, async (req, res) => {
+app.get('/api/student/conversations/:conversationId/messages', requireStudent, asyncRoute(async (req, res) => {
   const state = await readTaskStore()
   const conversation = state.conversations.find((item) => item.id === req.params.conversationId && item.studentId === req.student.studentId)
   if (!conversation) return safeError(res, 404, 'CONVERSATION_NOT_FOUND', 'Conversation not found.')
   const messages = state.messages.filter((message) => message.conversationId === conversation.id)
   res.json({ messages, meta: { total: messages.length, page: Number(req.query.page || 1), perPage: Number(req.query.per_page || 50) } })
-})
+}))
 
-app.post('/api/student/conversations/:conversationId/messages', requireStudent, async (req, res) => {
+app.post('/api/student/conversations/:conversationId/messages', requireStudent, asyncRoute(async (req, res) => {
   const text = String(req.body?.body || '').trim()
   if (!text || text.length > 4000) return safeError(res, 400, 'MESSAGE_INVALID', 'Message must be between 1 and 4000 characters.', { body: 'Enter a message.' })
   const message = await withTaskStore((store) => {
@@ -675,9 +688,9 @@ app.post('/api/student/conversations/:conversationId/messages', requireStudent, 
   if (!message) return safeError(res, 404, 'CONVERSATION_NOT_FOUND', 'Conversation not found.')
   publish(req.student.studentId, { type: 'MessageCreated', message })
   res.status(201).json({ message })
-})
+}))
 
-app.patch('/api/student/conversations/:conversationId/read', requireStudent, async (req, res) => {
+app.patch('/api/student/conversations/:conversationId/read', requireStudent, asyncRoute(async (req, res) => {
   const changed = await withTaskStore((store) => {
     const conversation = store.conversations.find((item) => item.id === req.params.conversationId && item.studentId === req.student.studentId)
     if (!conversation) return false
@@ -686,7 +699,7 @@ app.patch('/api/student/conversations/:conversationId/read', requireStudent, asy
   })
   if (!changed) return safeError(res, 404, 'CONVERSATION_NOT_FOUND', 'Conversation not found.')
   res.json({ ok: true })
-})
+}))
 
 app.post('/api/student/conversations/:conversationId/files', requireStudent, (req, res, next) => {
   upload.single('file')(req, res, async (error) => {
@@ -702,21 +715,21 @@ app.post('/api/student/conversations/:conversationId/files', requireStudent, (re
   })
 })
 
-app.get('/api/student/payments/tasks', requireStudent, async (req, res) => {
+app.get('/api/student/payments/tasks', requireStudent, asyncRoute(async (req, res) => {
   const tasks = await getStudentTasks(req.student.studentId)
   const state = await readTaskStore()
   const rows = tasks.map((task) => { const plan = state.plans.find((item) => item.taskId === task.id && item.studentId === req.student.studentId) || null; return { id: task.id, taskId: task.id, title: task.title, status: task.status, amountDue: task.amountDue ?? null, funding: task.funding || null, plan, milestones: plan?.milestones || [], paymentModel: plan?.paymentModel || 'full', paymentStatus: state.payments.find((payment) => payment.taskId === task.id && payment.studentId === req.student.studentId)?.status || null } })
   res.json({ tasks: rows })
-})
+}))
 
-app.get('/api/student/payments/tasks/:taskId/plan', requireStudent, async (req, res) => {
+app.get('/api/student/payments/tasks/:taskId/plan', requireStudent, asyncRoute(async (req, res) => {
   const task = await getStudentTask(req.student.studentId, req.params.taskId)
   const plan = (await readTaskStore()).plans.find((item) => item.taskId === req.params.taskId && item.studentId === req.student.studentId && !['SUPERSEDED', 'REVISED'].includes(item.status))
   if (!task || !plan) return safeError(res, 404, 'PLAN_NOT_FOUND', 'No official plan is available yet.')
   res.json({ plan })
-})
+}))
 
-app.post('/api/student/payments/plans/:planId/accept', requireStudent, async (req, res) => {
+app.post('/api/student/payments/plans/:planId/accept', requireStudent, asyncRoute(async (req, res) => {
   const result = await withTaskStore((store) => {
     const plan = store.plans.find((candidate) => candidate.id === req.params.planId && candidate.studentId === req.student.studentId)
     if (!plan) return { error: 'PLAN_NOT_FOUND' }
@@ -742,9 +755,9 @@ app.post('/api/student/payments/plans/:planId/accept', requireStudent, async (re
     publish(req.student.studentId, { type: 'PlanAccepted', task: await studentTaskPayload(result.task, req.student.studentId) })
   }
   res.json({ plan: result.plan })
-})
+}))
 
-app.get('/api/student/payments/tasks/:taskId/funding', requireStudent, async (req, res) => {
+app.get('/api/student/payments/tasks/:taskId/funding', requireStudent, asyncRoute(async (req, res) => {
   const task = await getStudentTask(req.student.studentId, req.params.taskId)
   const state = await readTaskStore()
   if (!task) return safeError(res, 404, 'TASK_NOT_FOUND', 'Task not found.')
@@ -753,9 +766,9 @@ app.get('/api/student/payments/tasks/:taskId/funding', requireStudent, async (re
   const next = milestones.find((item) => item.fundingState === 'payment_required')
   const amountFunded = milestones.length ? milestones.filter((item) => item.fundingState === 'funded').reduce((total, item) => total + item.amount, 0) : Number(task.funding?.amountFunded || 0)
   res.json({ taskId: task.id, model: plan?.paymentModel || 'full', currency: plan?.currency || 'LKR', amountTotal: plan?.amount || 0, amountFunded, amountDue: next?.amount ?? task.amountDue ?? 0, planConfirmed: plan?.status === 'ACCEPTED', workLocked: task.status === 'PAYMENT_PENDING', milestones, providerAvailable: Boolean(stripe), afterFunding: next?.sequence === 2 ? 'The approved delivery is released after this milestone is paid.' : null })
-})
+}))
 
-app.post('/api/student/payments/checkout', requireStudent, async (req, res) => {
+app.post('/api/student/payments/checkout', requireStudent, asyncRoute(async (req, res) => {
   if (!stripe) return safeError(res, 503, 'PROVIDER_UNAVAILABLE', 'Payments are not configured yet.')
   const task = await getStudentTask(req.student.studentId, req.body?.taskId)
   const plan = (await readTaskStore()).plans.find((item) => item.id === req.body?.planId && item.studentId === req.student.studentId)
@@ -819,9 +832,9 @@ app.post('/api/student/payments/checkout', requireStudent, async (req, res) => {
     if (!stored) throw error
   }
   res.status(stored.id === payment.id ? 201 : 200).json({ paymentId: stored.id, checkoutUrl: session.url, provider: 'stripe', status: stored.status })
-})
+}))
 
-app.get('/api/student/payments/payments/:paymentId/status', requireStudent, async (req, res) => {
+app.get('/api/student/payments/payments/:paymentId/status', requireStudent, asyncRoute(async (req, res) => {
   const payment = (await readTaskStore()).payments.find((item) => item.id === req.params.paymentId && item.studentId === req.student.studentId)
   if (!payment) return safeError(res, 404, 'PAYMENT_NOT_FOUND', 'Payment not found.')
   if (stripe && payment.providerId) {
@@ -834,20 +847,20 @@ app.get('/api/student/payments/payments/:paymentId/status', requireStudent, asyn
     } catch (error) { console.error('[payment-status] reconciliation pending', error); return safeError(res, 503, 'PAYMENT_STATUS_PENDING', 'Payment status could not be finalized yet. Please try again.') }
   }
   res.json(payment)
-})
+}))
 
-app.get('/api/student/payments/history', requireStudent, async (req, res) => {
+app.get('/api/student/payments/history', requireStudent, asyncRoute(async (req, res) => {
   const payments = (await readTaskStore()).payments.filter((item) => item.studentId === req.student.studentId && (!req.query.task || item.taskId === req.query.task))
   res.json({ payments })
-})
+}))
 
-app.get('/api/student/payments/payments/:paymentId', requireStudent, async (req, res) => {
+app.get('/api/student/payments/payments/:paymentId', requireStudent, asyncRoute(async (req, res) => {
   const payment = (await readTaskStore()).payments.find((item) => item.id === req.params.paymentId && item.studentId === req.student.studentId)
   if (!payment) return safeError(res, 404, 'PAYMENT_NOT_FOUND', 'Payment not found.')
   res.json(payment)
-})
+}))
 
-app.get('/api/student/payments/payments/:paymentId/receipt', requireStudent, async (req, res) => {
+app.get('/api/student/payments/payments/:paymentId/receipt', requireStudent, asyncRoute(async (req, res) => {
   const payment = (await readTaskStore()).payments.find((item) => item.id === req.params.paymentId && item.studentId === req.student.studentId)
   if (!payment || payment.status !== 'succeeded') return safeError(res, 404, 'RECEIPT_NOT_FOUND', 'Receipt is not available yet.')
   if (!stripe || !payment.providerId) return safeError(res, 503, 'RECEIPT_UNAVAILABLE', 'The payment provider is unavailable.')
@@ -857,14 +870,14 @@ app.get('/api/student/payments/payments/:paymentId/receipt', requireStudent, asy
   const charge = typeof intent.latest_charge === 'string' ? await stripe.charges.retrieve(intent.latest_charge) : intent.latest_charge
   if (!charge?.receipt_url) return safeError(res, 404, 'RECEIPT_NOT_FOUND', 'The payment provider has not issued a receipt yet.')
   res.json({ url: charge.receipt_url, filename: null })
-})
+}))
 
-app.get('/api/student/payments/tasks/:taskId/scope-change', requireStudent, async (req, res) => {
+app.get('/api/student/payments/tasks/:taskId/scope-change', requireStudent, asyncRoute(async (req, res) => {
   const task = await getStudentTask(req.student.studentId, req.params.taskId)
   const change = (await readTaskStore()).scopeChanges.find((item) => item.taskId === req.params.taskId && item.studentId === req.student.studentId && ['REQUESTED', 'AWAITING_PAYMENT'].includes(item.status))
   if (!task || !change) return safeError(res, 404, 'SCOPE_CHANGE_NOT_FOUND', 'No scope change is waiting for you.')
   res.json({ scopeChange: { ...change, canAccept: true } })
-})
+}))
 
 app.post('/api/student/payments/scope-changes/:scopeChangeId/accept', requireStudent, studentRoute(async (req, res) => {
   const state = await readTaskStore()
@@ -924,7 +937,7 @@ app.post('/api/student/payments/scope-changes/:scopeChangeId/accept', requireStu
   res.json({ scopeChange: { ...stored, checkoutUrl: session.url } })
 }))
 
-app.post('/api/student/explain/tasks/:taskId/explain', requireStudent, async (req, res) => {
+app.post('/api/student/explain/tasks/:taskId/explain', requireStudent, asyncRoute(async (req, res) => {
   const task = await getStudentTask(req.student.studentId, req.params.taskId)
   if (!task) return safeError(res, 404, 'TASK_NOT_FOUND', 'Task not found.')
   if (!task.deliveryVersions?.length) return safeError(res, 409, 'DELIVERY_REQUIRED', 'Explain & Defend becomes available after delivery.')
@@ -945,28 +958,28 @@ app.post('/api/student/explain/tasks/:taskId/explain', requireStudent, async (re
     await withTaskStore((store) => { const stamp = now(); const item = store.explainSessions.find((entry) => entry.id === session.id); if (item) Object.assign(item, { updatedAt: stamp, lastResult: result }); store.explainRequests = (store.explainRequests || []).filter((entry) => new Date(entry.createdAt).getTime() > since); store.explainRequests.push({ studentId: req.student.studentId, taskId: task.id, createdAt: stamp }); addActivity(store, { id: crypto.randomUUID(), studentId: req.student.studentId, taskId: task.id, type: 'ExplainRequest', text: 'Explain & Defend request completed.', createdAt: stamp }) })
     res.json({ ...result, sessionId: session.id })
   } catch (error) { safeError(res, 503, 'EXPLAIN_UNAVAILABLE', 'Explain & Defend is not configured or temporarily unavailable.') }
-})
+}))
 
-app.get('/api/student/explain/tasks/:taskId/rubric', requireStudent, async (req, res) => {
+app.get('/api/student/explain/tasks/:taskId/rubric', requireStudent, asyncRoute(async (req, res) => {
   const task = await getStudentTask(req.student.studentId, req.params.taskId)
   if (!task) return safeError(res, 404, 'TASK_NOT_FOUND', 'Task not found.')
   res.json({ criteria: task.analysis?.rubric?.criteria || [], source: task.analysis?.rubric?.sourceFileId || null })
-})
+}))
 
-app.get('/api/student/explain/tasks/:taskId/sessions', requireStudent, async (req, res) => {
+app.get('/api/student/explain/tasks/:taskId/sessions', requireStudent, asyncRoute(async (req, res) => {
   const task = await getStudentTask(req.student.studentId, req.params.taskId)
   if (!task) return safeError(res, 404, 'TASK_NOT_FOUND', 'Task not found.')
   const sessions = (await readTaskStore()).explainSessions.filter((item) => item.taskId === task.id && item.studentId === req.student.studentId)
   res.json({ sessions })
-})
+}))
 
-app.get('/api/student/explain/sessions/:sessionId', requireStudent, async (req, res) => {
+app.get('/api/student/explain/sessions/:sessionId', requireStudent, asyncRoute(async (req, res) => {
   const session = (await readTaskStore()).explainSessions.find((item) => item.id === req.params.sessionId && item.studentId === req.student.studentId)
   if (!session) return safeError(res, 404, 'EXPLAIN_SESSION_NOT_FOUND', 'Explain session not found.')
   res.json({ session })
-})
+}))
 
-app.patch('/api/student/explain/sessions/:sessionId', requireStudent, async (req, res) => {
+app.patch('/api/student/explain/sessions/:sessionId', requireStudent, asyncRoute(async (req, res) => {
   const patch = req.body || {}
   if (patch.artifactId) {
     const artifact = await ownedFile(req.student.studentId, String(patch.artifactId))
@@ -986,22 +999,22 @@ app.patch('/api/student/explain/sessions/:sessionId', requireStudent, async (req
   })
   if (!session) return safeError(res, 404, 'EXPLAIN_SESSION_NOT_FOUND', 'Explain session not found.')
   res.json({ session })
-})
+}))
 
-app.get('/api/student/explain/usage', requireStudent, async (req, res) => {
+app.get('/api/student/explain/usage', requireStudent, asyncRoute(async (req, res) => {
   const state = await readTaskStore()
   const since = Date.now() - 24 * 60 * 60 * 1000
   const used = (state.explainRequests || []).filter((item) => item.studentId === req.student.studentId && new Date(item.createdAt).getTime() > since).length
   const limit = Number(process.env.EXPLAIN_DAILY_LIMIT || 30)
   res.json({ remaining: Math.max(0, limit - used), limit, periodLabel: 'Today' })
-})
+}))
 
-app.get('/api/student/explain/artifacts/:artifactId/content', requireStudent, async (req, res) => {
+app.get('/api/student/explain/artifacts/:artifactId/content', requireStudent, asyncRoute(async (req, res) => {
   const file = await ownedFile(req.student.studentId, req.params.artifactId)
   if (!file) return safeError(res, 404, 'ARTIFACT_NOT_FOUND', 'Artifact not found.')
   const url = await signedObjectUrl(file.storageKey, file.originalName)
   res.json({ kind: 'document', title: file.originalName, sourceUrl: url, text: null })
-})
+}))
 
 function parseCookies(header) {
   const out = {}
@@ -1011,7 +1024,7 @@ function parseCookies(header) {
     if (idx === -1) continue
     const key = part.slice(0, idx).trim()
     const value = part.slice(idx + 1).trim()
-    if (key) out[key] = decodeURIComponent(value)
+    if (key) { try { out[key] = decodeURIComponent(value) } catch { /* Ignore a malformed cookie without rejecting the request. */ } }
   }
   return out
 }
@@ -1077,9 +1090,9 @@ async function ensureStudentSession(req, res) {
     lastActiveAt: now,
     device: userAgentLabel(req.headers['user-agent']),
   }
-  createSession({ id: session.studentId, role: session.role, name: session.name, email: null }, session.device)
-  setSessionCookie(res, sid)
-  return session
+  const saved = createSession({ id: session.studentId, role: session.role, name: session.name, email: null }, session.device)
+  setSessionCookie(res, saved.id)
+  return saved
 }
 
 function userAgentLabel(agent = '') {
@@ -1148,7 +1161,7 @@ async function ensureExpertSession(req, res) {
   return session
 }
 
-app.post('/api/expert/auth/login', async (req, res) => {
+app.post('/api/expert/auth/login', asyncRoute(async (req, res) => {
   const email = String(req.body?.email || '').trim()
   const password = String(req.body?.password || '')
   if (!email || !password) return safeError(res, 400, 'CREDENTIALS_REQUIRED', 'Enter your email and password.')
@@ -1167,7 +1180,7 @@ app.post('/api/expert/auth/login', async (req, res) => {
     console.error('[expert-login]', error)
     safeError(res, 503, 'EXPERT_LOGIN_UNAVAILABLE', 'Expert sign-in could not be completed. Please try again later.')
   }
-})
+}))
 
 async function requireExpert(req, res, next) {
   try {
@@ -1580,16 +1593,16 @@ app.post('/api/expert/logout', requireExpert, expertRoute(async (req, res) => {
 app.get('/api/health', (req, res) => {
   res.json({ ok: true, service: 'solvenest-server' })
 })
-app.get('/api/ready', async (_req, res) => {
+app.get('/api/ready', asyncRoute(async (_req, res) => {
   const checks = await Promise.allSettled([
     Promise.race([readTaskStore(), new Promise((_resolve, reject) => setTimeout(() => reject(new Error('DATABASE_TIMEOUT')), 5000))]),
     checkMalwareScanner(),
   ])
   const ready = checks[0].status === 'fulfilled' && checks[1].status === 'fulfilled' && checks[1].value === true
   res.status(ready ? 200 : 503).json({ ok: ready, service: 'solvenest-server' })
-})
+}))
 
-app.post('/api/auth/register', async (req, res) => {
+app.post('/api/auth/register', asyncRoute(async (req, res) => {
   if (!await limited(`student-register:${req.ip}`, 5)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before creating another account.')
   const { name, email, password } = req.body || {}
   if (String(name || '').trim().length < 2) return safeError(res, 400, 'NAME_REQUIRED', 'Enter your full name.', { name: 'Enter your full name.' })
@@ -1607,9 +1620,9 @@ app.post('/api/auth/register', async (req, res) => {
   setSessionCookie(res, session.id)
   sendEmail({ to: user.email, subject: 'Welcome to SolveNest', text: `Your SolveNest Student account is ready, ${user.name}.` }).catch((error) => console.error('[email]', error.message))
   res.status(201).json({ user })
-})
+}))
 
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', asyncRoute(async (req, res) => {
   if (!await limited(`student-login:${req.ip}`, 10)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before trying to sign in again.')
   if (hasSupabaseAuth()) {
     const { data, error } = await supabaseSignIn({ email: req.body?.email, password: req.body?.password })
@@ -1624,9 +1637,9 @@ app.post('/api/auth/login', async (req, res) => {
   const session = createSession(user, userAgentLabel(req.headers['user-agent']))
   setSessionCookie(res, session.id)
   res.json({ user })
-})
+}))
 
-app.post('/api/auth/password-reset', async (req, res) => {
+app.post('/api/auth/password-reset', asyncRoute(async (req, res) => {
   const email = String(req.body?.email || '').trim().toLowerCase()
   if (!/^\S+@\S+\.\S+$/.test(email)) return safeError(res, 400, 'EMAIL_INVALID', 'Enter a valid email address.')
   if (!await limited(`password-reset:${req.ip}`, 5)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before trying again.')
@@ -1638,9 +1651,9 @@ app.post('/api/auth/password-reset', async (req, res) => {
   } catch {
     safeError(res, 503, 'RECOVERY_UNAVAILABLE', 'The reset email could not be requested. Please try again later.')
   }
-})
+}))
 
-app.post('/api/auth/password-reset/complete', async (req, res) => {
+app.post('/api/auth/password-reset/complete', asyncRoute(async (req, res) => {
   const { accessToken, refreshToken, password } = req.body || {}
   if (!accessToken || !refreshToken || String(password || '').length < 12) return safeError(res, 400, 'RESET_INVALID', 'The reset link or new password is invalid.')
   if (!await limited(`password-reset-complete:${req.ip}`, 5)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before trying again.')
@@ -1652,10 +1665,10 @@ app.post('/api/auth/password-reset/complete', async (req, res) => {
   } catch {
     safeError(res, 503, 'RECOVERY_UNAVAILABLE', 'Your password could not be updated. Please try again later.')
   }
-})
+}))
 
 const contactUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 1 }, fileFilter: (_req, file, callback) => callback(null, /\.(pdf|png|jpe?g|docx)$/i.test(file.originalname)) })
-app.post('/api/contact', (req, res, next) => contactUpload.single('attachment')(req, res, (error) => error ? safeError(res, 400, 'ATTACHMENT_INVALID', 'Choose a PDF, PNG, JPG or DOCX file smaller than 5 MB.') : next()), async (req, res) => {
+app.post('/api/contact', (req, res, next) => contactUpload.single('attachment')(req, res, (error) => error ? safeError(res, 400, 'ATTACHMENT_INVALID', 'Choose a PDF, PNG, JPG or DOCX file smaller than 5 MB.') : next()), asyncRoute(async (req, res) => {
   if (req.file && await rejectInvalidUpload(res, req.file)) return
   const { intent, name, email, message, ...details } = req.body || {}
   if (!['general', 'task', 'payment', 'technical', 'business'].includes(intent) || !String(name || '').trim() || !/^\S+@\S+\.\S+$/.test(String(email || '')) || !String(message || '').trim()) return safeError(res, 400, 'CONTACT_INVALID', 'Complete the required contact fields.')
@@ -1669,7 +1682,7 @@ app.post('/api/contact', (req, res, next) => contactUpload.single('attachment')(
   } catch {
     safeError(res, 503, 'CONTACT_UNAVAILABLE', 'Your message could not be sent. Please try again later.')
   }
-})
+}))
 
 app.post('/api/auth/logout', requireStudent, (req, res) => {
   deleteSession(req.student.id)
@@ -1677,32 +1690,32 @@ app.post('/api/auth/logout', requireStudent, (req, res) => {
   res.json({ ok: true })
 })
 
-app.get('/api/student/notifications', requireStudent, async (req, res) => {
+app.get('/api/student/notifications', requireStudent, asyncRoute(async (req, res) => {
   const notifications = await listNotifications(req.student.studentId)
   res.json({
     notifications,
     unreadCount: notifications.filter((n) => !n.isRead).length,
     total: notifications.length,
   })
-})
+}))
 
-app.get('/api/student/notifications/unread-count', requireStudent, async (req, res) => {
+app.get('/api/student/notifications/unread-count', requireStudent, asyncRoute(async (req, res) => {
   res.json({ unreadCount: await unreadCount(req.student.studentId) })
-})
+}))
 
-app.patch('/api/student/notifications/:id/read', requireStudent, async (req, res) => {
+app.patch('/api/student/notifications/:id/read', requireStudent, asyncRoute(async (req, res) => {
   const item = await markRead(req.params.id, req.student.studentId)
   if (!item) {
     res.status(404).json({ error: 'NOTIFICATION_NOT_FOUND' })
     return
   }
   res.json({ ok: true, notification: item, unreadCount: await unreadCount(req.student.studentId) })
-})
+}))
 
-app.post('/api/student/notifications/read-all', requireStudent, async (req, res) => {
+app.post('/api/student/notifications/read-all', requireStudent, asyncRoute(async (req, res) => {
   const notifications = await markAllRead(req.student.studentId)
   res.json({ ok: true, notifications, unreadCount: 0 })
-})
+}))
 
 const accountRoute = (handler) => (req, res, next) => Promise.resolve(handler(req, res)).catch(next)
 app.get('/api/student/account', requireStudent, accountRoute(async (req, res) => {
@@ -2178,6 +2191,9 @@ app.use((req, res) => {
 
 app.use((error, req, res, next) => {
   if (res.headersSent) return next(error)
+  if (error.type === 'entity.parse.failed') return safeError(res, 400, 'INVALID_JSON', 'The request contains invalid JSON.')
+  if (error.type === 'entity.too.large') return safeError(res, 413, 'REQUEST_TOO_LARGE', 'The request is too large.')
+  if (error instanceof multer.MulterError) return safeError(res, error.code === 'LIMIT_FILE_SIZE' ? 413 : 400, error.code, error.code === 'LIMIT_FILE_SIZE' ? 'Files must be 100 MB or smaller.' : 'The upload could not be accepted.')
   console.error(JSON.stringify({ level: 'error', type: 'api_error', requestId: req.requestId, method: req.method, path: req.path, message: error.message }))
   safeError(res, 500, 'INTERNAL_ERROR', 'The request could not be completed.')
 })

@@ -19,10 +19,8 @@ export async function readTaskStore() {
   try {
     const value = JSON.parse(fs.readFileSync(storePath, 'utf8'))
     return { ...emptyStore(), ...value }
-  } catch {
-    const fresh = emptyStore()
-    fs.writeFileSync(storePath, JSON.stringify(fresh, null, 2))
-    return fresh
+  } catch (cause) {
+    throw new Error('LOCAL_TASK_STORE_UNREADABLE', { cause })
   }
 }
 
@@ -34,10 +32,18 @@ export async function writeTaskStore(store) {
   fs.renameSync(temporaryPath, storePath)
 }
 
-export async function withTaskStore(mutator) {
+let localWriteQueue = Promise.resolve()
+export function withTaskStore(mutator) {
+  if (hasSupabase()) return mutateTaskStore(mutator)
+  const operation = localWriteQueue.then(() => mutateTaskStore(mutator))
+  localWriteQueue = operation.catch(() => {})
+  return operation
+}
+
+async function mutateTaskStore(mutator) {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const store = await readTaskStore()
-    const result = mutator(store)
+    const result = await mutator(store)
     try { await writeTaskStore(store); return result }
     catch (error) { if (error.message !== 'APP_STATE_CONFLICT' || attempt === 2) throw error }
   }
