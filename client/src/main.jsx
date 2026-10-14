@@ -26,4 +26,5 @@ import './styles/pages/why-page.css'
 import './styles/pages/help-page.css'
 import './styles/pages/connect-page.css'
 import './styles/pages/signin-page.css'
+import './styles/components/workspace-accessibility.css'
 createRoot(document.getElementById('app')).render(<React.StrictMode><AppErrorBoundary><App /></AppErrorBoundary></React.StrictMode>)

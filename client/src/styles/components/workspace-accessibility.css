@@ -1,0 +1,19 @@
+.student-app main,.expert-app main,.adm-frame,.sad-frame{min-width:0}
+.student-app :focus-visible,.expert-app :focus-visible,.adm-app :focus-visible,.sad-app :focus-visible{outline:2px solid #3684a0;outline-offset:3px}
+.adm-conversation-list p,.sad-person strong,.sad-person small,.adm-panel p{overflow-wrap:anywhere}
+.adm-sidebar,.sad-sidebar{height:100dvh}
+.adm-sidebar nav,.sad-sidebar nav{min-height:0;overflow-y:auto;overscroll-behavior:contain}
+.student-nav-drawer,.exp-drawer{max-height:100dvh;overflow-y:auto;overscroll-behavior:contain}
+@media(max-width:760px){
+  .adm-sidebar,.sad-sidebar{visibility:hidden}
+  .adm-sidebar.is-open,.sad-sidebar.is-open{visibility:visible}
+  .adm-app input,.adm-app select,.adm-app textarea,.sad-app input,.sad-app select,.sad-app textarea,.student-app input,.student-app select,.student-app textarea,.expert-app input,.expert-app select,.expert-app textarea{font-size:16px}
+  .adm-topbar button,.sad-topbar button,.adm-sidebar button,.sad-sidebar button{min-height:44px;min-width:44px}
+  .adm-panel-head,.sad-lookup form,.sn-acc__card-actions{flex-wrap:wrap}
+  .adm-conversation-list article{max-width:100%}
+  .adm-conversation-list article>div{flex-wrap:wrap;gap:6px}
+  .adm-content,.sad-main{padding-bottom:max(30px,env(safe-area-inset-bottom))}
+}
+@media(prefers-reduced-motion:reduce){
+  .student-app *,.expert-app *,.adm-app *,.sad-app *{scroll-behavior:auto!important;animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
+}
