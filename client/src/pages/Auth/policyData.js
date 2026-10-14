@@ -53,8 +53,8 @@ export const POLICIES = [
     body: [
       'Initial Solvy prices are estimates only. The official SolveNest price, scope and delivery arrangement are confirmed after human review.',
       'Standard tasks may require full payment before work begins. Larger projects may use prepaid milestones. Work for a milestone does not begin until that milestone is funded.',
-      'Refunds and cancellations depend on the accepted scope, payment status, work already completed, applicable SolveNest policy and any rights provided by applicable law. Not every payment is automatically non-refundable.',
-      'Where work has already started, completed work, committed Expert time and other relevant circumstances may affect the available cancellation or refund outcome.',
+      'If the agreed work has not been completed, you are eligible for a refund. Submit a refund request with the task reference so SolveNest can verify the work and payment records.',
+      'If work has been completed but you believe it does not match the accepted scope, staff will review the agreed requirements, delivered work and your explanation before deciding whether a refund is appropriate. Submitting a request does not itself issue a refund.',
     ],
   },
   {

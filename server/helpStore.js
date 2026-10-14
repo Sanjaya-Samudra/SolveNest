@@ -23,6 +23,8 @@ const issues = {
     { key: 'processing', label: 'Payment is still processing' },
     { key: 'failed', label: 'Payment failed' },
     { key: 'receipt', label: 'I need a receipt' },
+    { key: 'refund-incomplete', label: 'Request a refund for unfinished work' },
+    { key: 'refund-dispute', label: 'Completed work does not match the agreed scope' },
     { key: 'other', label: 'Something else' },
   ],
   files: [
@@ -137,7 +139,7 @@ const articles = [
 
 const policies = [
   { id: 'pol-integrity', title: 'Academic integrity', summary: 'Work supports your learning. Submitting delivered work as your own without understanding it, or requesting work that breaks your institution rules, is not allowed.' },
-  { id: 'pol-payments', title: 'Payments, refunds & cancellation', summary: 'You are charged only after accepting an official plan. Cancellations and refunds follow the status of work already completed on the task.' },
+  { id: 'pol-payments', title: 'Payments, refunds & cancellation', summary: 'Unfinished agreed work is eligible for a refund after staff verifies the task and payment records. Disputes about completed work are reviewed against the accepted scope and delivery. Request a review through Payment & official plan in Help; submitting a request does not issue a refund.' },
   { id: 'pol-revisions', title: 'Revisions & scope changes', summary: 'Revisions within the agreed scope are handled on the task. Extra scope is proposed as a scope change with updated price and timeline for your approval.' },
   { id: 'pol-privacy', title: 'Privacy', summary: 'Task files and messages stay on your student workspace and are visible only to you and assigned SolveNest participants for that task.' },
   { id: 'pol-comms', title: 'Communication rules', summary: 'Keep communication on the platform task conversation. Requests for direct contact outside SolveNest or for academic misconduct are not permitted.' },
