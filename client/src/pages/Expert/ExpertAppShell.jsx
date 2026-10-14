@@ -1,3 +1,4 @@
+import { useNavigationDialog } from '../../shared/useNavigationDialog.js'
 import { useEffect } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
@@ -148,6 +149,7 @@ export function ExpertTopBar({ path, expert, unreadNotifications, onOpenMenu, me
 }
 
 export function ExpertMobileNav({ open, onClose, path, expert, availability, unreadNotifications, onSignOut }) {
+  useNavigationDialog(open, onClose, '.exp-drawer')
   useEffect(() => {
     if (!open) return undefined
     const onKey = (event) => {

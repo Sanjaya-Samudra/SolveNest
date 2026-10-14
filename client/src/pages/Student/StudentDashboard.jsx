@@ -1,3 +1,4 @@
+import { useNavigationDialog } from '../../shared/useNavigationDialog.js'
 import { useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { Bell, BookOpen, ChevronDown, ChevronRight, ClipboardList, CreditCard, FolderOpen, HelpCircle, Home, MessageCircle, PanelLeftClose, PanelLeftOpen, Plus, Settings, ShieldCheck, Sparkles, X, ArrowRight } from 'lucide-react'
@@ -122,6 +123,7 @@ function NotificationDrawer({ notifications, onClose, unreadCount }) {
 function DashboardError({ onRetry, access }) { return <section className="student-local-error" role="alert"><p className="student-overline">{access ? 'ACCESS REQUIRED' : 'COULD NOT LOAD'}</p><h2>{access ? 'Sign in to open your student workspace.' : 'We could not load your workspace.'}</h2><p>{access ? 'Your student session is missing or has expired.' : 'We could not retrieve the current workspace data.'}</p><ActionButton onClick={() => access ? go('/login') : onRetry()}>{access ? 'Sign in' : 'Try again'}</ActionButton></section> }
 function DashboardSkeleton() { return <div className="student-dashboard-skeleton" aria-label="Loading student workspace"><span /><span /><div><span /><span /></div><span /><span /></div> }
 function MobileNavDrawer({ open, onClose, path, model, unreadNotifications, onNewTask }) {
+  useNavigationDialog(open, onClose, '.student-nav-drawer')
   useEffect(() => {
     if (!open) return undefined
     const onKey = (e) => { if (e.key === 'Escape') onClose() }

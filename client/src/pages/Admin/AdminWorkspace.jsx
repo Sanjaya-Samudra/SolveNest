@@ -1,3 +1,4 @@
+import { useNavigationDialog } from '../../shared/useNavigationDialog.js'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, ArrowRight, Bell, CheckCircle2, ChevronDown, ClipboardList, Clock3, Download, FileText, LayoutDashboard, LifeBuoy, LogOut, Menu, MessageCircle, Search, ShieldCheck, X } from 'lucide-react'
 import { assignExpert, getAssignableExperts, getCase, getConversation, getConversations, getOverview, getQaCase, getQaQueue, getStaff, getSupportCase, getSupportQueue, issuePlan, issueScopeChange, loginStaff, logoutStaff, markConversationRead, recordQaOutcome, recordReview, sendConversationReply, updateSupportStatus } from '../../admin/adminApi.js'
@@ -55,8 +56,9 @@ function Login({ onDone }) {
 function ReviewPill({ status }) { return <span className="adm-status" data-state={status || 'QUEUED'}>{reviewLabel[status] || status || 'Needs review'}</span> }
 
 function AdminSidebar({ section, filter, setFilter, staff, mobileOpen, setMobileOpen }) {
+  useNavigationDialog(mobileOpen, () => setMobileOpen(false), '.adm-sidebar')
   return <><div className={`adm-scrim ${mobileOpen ? 'is-open' : ''}`} onClick={() => setMobileOpen(false)} />
-    <aside className={`adm-sidebar ${mobileOpen ? 'is-open' : ''}`}>
+    <aside id="admin-navigation" role={mobileOpen ? "dialog" : undefined} aria-modal={mobileOpen || undefined} aria-label="Admin navigation" className={`adm-sidebar ${mobileOpen ? 'is-open' : ''}`}>
       <div className="adm-brand"><img className="adm-brand-logo" src={logo} alt="SolveNest" /><span>SolveNest<small>ADMIN</small></span><button className="adm-mobile-close" onClick={() => setMobileOpen(false)} aria-label="Close menu"><X size={18} /></button></div>
       <nav aria-label="Admin navigation">
         <p className="adm-nav-label">OPERATIONS</p>
@@ -324,5 +326,5 @@ export function AdminWorkspace() {
   }
   if (!content && state.loading) content = <div className="adm-loading" role="status">Loading {route.section}…</div>
   if (!content && state.error) content = <div className="adm-panel adm-error"><h2>Could not load {route.section}</h2><p>{state.error.message}</p><button className="adm-primary" onClick={retry}>Try again</button></div>
-  return <div className="adm-app"><AdminSidebar section={route.section} filter={filter} setFilter={setFilter} staff={staffState.staff} mobileOpen={mobileOpen} setMobileOpen={setMobileOpen} /><div className="adm-frame"><div className="adm-topbar"><button className="adm-menu" onClick={() => setMobileOpen(true)} aria-label="Open menu"><Menu size={20} /></button><span>Admin <ChevronDown size={14} /> {route.section === 'tasks' ? 'Task intake' : route.section === 'qa' ? 'Quality review' : route.section === 'messages' ? 'Task messages' : 'Support'}</span><div><span className="adm-role">{staffState.staff.demo ? 'LOCAL PREVIEW' : staffState.staff.role.toUpperCase()}</span>{!staffState.staff.demo && <button className="adm-icon" onClick={async () => { await logoutStaff().catch(() => {}); loadStaff() }} aria-label="Sign out"><LogOut size={18} /></button>}</div></div><main className="adm-content">{content}</main></div></div>
+  return <div className="adm-app"><AdminSidebar section={route.section} filter={filter} setFilter={setFilter} staff={staffState.staff} mobileOpen={mobileOpen} setMobileOpen={setMobileOpen} /><div className="adm-frame"><div className="adm-topbar"><button className="adm-menu" onClick={() => setMobileOpen(true)} aria-label="Open menu" aria-expanded={mobileOpen} aria-controls="admin-navigation"><Menu size={20} /></button><span>Admin <ChevronDown size={14} /> {route.section === 'tasks' ? 'Task intake' : route.section === 'qa' ? 'Quality review' : route.section === 'messages' ? 'Task messages' : 'Support'}</span><div><span className="adm-role">{staffState.staff.demo ? 'LOCAL PREVIEW' : staffState.staff.role.toUpperCase()}</span>{!staffState.staff.demo && <button className="adm-icon" onClick={async () => { await logoutStaff().catch(() => {}); loadStaff() }} aria-label="Sign out"><LogOut size={18} /></button>}</div></div><main className="adm-content">{content}</main></div></div>
 }

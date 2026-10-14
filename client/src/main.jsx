@@ -1,5 +1,6 @@
 import React from 'react'
 import { createRoot } from 'react-dom/client'
+import { AppErrorBoundary } from './components/common/AppErrorBoundary.jsx'
 import { App } from './app/App.jsx'
 
 import './styles/base/style.css'
@@ -25,4 +26,4 @@ import './styles/pages/why-page.css'
 import './styles/pages/help-page.css'
 import './styles/pages/connect-page.css'
 import './styles/pages/signin-page.css'
-createRoot(document.getElementById('app')).render(<React.StrictMode><App /></React.StrictMode>)
+createRoot(document.getElementById('app')).render(<React.StrictMode><AppErrorBoundary><App /></AppErrorBoundary></React.StrictMode>)
