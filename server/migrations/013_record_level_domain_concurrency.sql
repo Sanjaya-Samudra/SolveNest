@@ -40,11 +40,15 @@ begin
     if change->'payload' is null or change->'payload' = 'null'::jsonb then
       delete from public.domain_records
       where collection = change->>'collection' and record_key = change->>'key';
+    elsif current_exists then
+      update public.domain_records
+      set payload = change->'payload',
+          position = coalesce((change->>'position')::bigint, 0),
+          updated_at = now()
+      where collection = change->>'collection' and record_key = change->>'key';
     else
       insert into public.domain_records (collection, record_key, payload, position, updated_at)
-      values (change->>'collection', change->>'key', change->'payload', coalesce((change->>'position')::bigint, 0), now())
-      on conflict (collection, record_key) do update
-      set payload = excluded.payload, position = excluded.position, updated_at = now();
+      values (change->>'collection', change->>'key', change->'payload', coalesce((change->>'position')::bigint, 0), now());
     end if;
   end loop;
 
