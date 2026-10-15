@@ -2446,6 +2446,33 @@ app.post('/api/superadmin/team/:profileId/role', requireSuperadmin, staffRoute(a
 }))
 
 const clientDist = path.resolve(__dirname, '..', 'client', 'dist')
+const publicMetadata = {
+  '/': ['SolveNest | Understand your assignment before you commit', 'Analyze an academic brief, receive a human-reviewed scope and price, and follow delivery in one clear workspace.'],
+  '/method': ['The SolveNest Method | From brief to reviewed delivery', 'See how SolveNest turns an academic brief into clear requirements, human review, milestone funding, expert work, and quality-checked delivery.'],
+  '/domains': ['Study Domains | SolveNest', 'Explore the study areas SolveNest supports through structured analysis, matched expertise, and accountable delivery.'],
+  '/plans': ['Plans and Pricing | SolveNest', 'Understand SolveNest estimates, human-confirmed quotes, milestone payments, revisions, and refund review before you commit.'],
+  '/why-solvenest': ['Why SolveNest | Clear, accountable academic support', 'Learn how SolveNest combines AI-assisted clarity with human decisions, expert work, visible quality checks, and student ownership.'],
+  '/help': ['Help Centre | SolveNest', 'Find clear answers about task analysis, accounts, payments, delivery, revisions, privacy, and support.'],
+  '/connect': ['Contact SolveNest | Get the right support', 'Contact SolveNest for task, payment, technical, partnership, or general support.'],
+  '/analyze': ['Analyze Your Academic Brief | SolveNest', 'Upload a supported brief for a private first analysis before creating a SolveNest account.'],
+}
+const publicAliases = { '/how-it-works': '/method', '/categories': '/domains', '/pricing': '/plans', '/about': '/why-solvenest', '/faq': '/help', '/contact': '/connect', '/submit': '/analyze' }
+function escapeHtml(value) { return String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;') }
+function renderApplicationHtml(template, pathname) {
+  const canonicalPath = publicAliases[pathname] || pathname
+  const metadata = publicMetadata[canonicalPath] || ['SolveNest | Academic support with clarity', 'Secure access to your SolveNest workspace.']
+  const privateRoute = /^\/(student|expert|admin|superadmin|login|signin|signup|register|reset-password|policy)(\/|$)/.test(pathname)
+  let origin = ''
+  try { origin = new URL(process.env.PUBLIC_APP_URL).origin } catch {}
+  const canonical = publicMetadata[canonicalPath] && origin ? `${origin}${canonicalPath}` : null
+  let html = template
+    .replace(/<title>[^<]*<\/title>/i, `<title>${escapeHtml(metadata[0])}</title>`)
+    .replace(/<meta name="description" content="[^"]*"\s*\/?>/i, `<meta name="description" content="${escapeHtml(metadata[1])}" />`)
+    .replace(/<meta property="og:title" content="[^"]*"\s*\/?>/i, `<meta property="og:title" content="${escapeHtml(metadata[0])}" />`)
+    .replace(/<meta property="og:description" content="[^"]*"\s*\/?>/i, `<meta property="og:description" content="${escapeHtml(metadata[1])}" />`)
+  const extra = [canonical ? `<link rel="canonical" href="${escapeHtml(canonical)}" /><meta property="og:url" content="${escapeHtml(canonical)}" />` : '', privateRoute ? '<meta name="robots" content="noindex, nofollow" />' : ''].join('')
+  return html.replace('</head>', `${extra}</head>`)
+}
 app.get('/robots.txt', (_req, res) => {
   res.type('text/plain').send('User-agent: *\nDisallow: /api/\nDisallow: /student\nDisallow: /expert\nDisallow: /admin\nDisallow: /superadmin\nDisallow: /reset-password\n')
 })
@@ -2453,19 +2480,21 @@ app.get('/sitemap.xml', (_req, res) => {
   let origin
   try { origin = new URL(process.env.PUBLIC_APP_URL).origin } catch { return res.status(503).type('text/plain').send('Public URL is not configured.') }
   const escapeXml = (value) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;')
-  const pages = ['/', '/method', '/domains', '/plans', '/why-solvenest', '/help', '/connect']
+  const pages = ['/', '/method', '/domains', '/plans', '/why-solvenest', '/help', '/connect', '/analyze']
   res.type('application/xml').send(`<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${pages.map((page) => `<url><loc>${escapeXml(origin + page)}</loc></url>`).join('')}</urlset>`)
 })
 if (process.env.NODE_ENV === 'production' && fs.existsSync(clientDist)) {
+  const applicationTemplate = fs.readFileSync(path.join(clientDist, 'index.html'), 'utf8')
   app.use(express.static(clientDist, { index: false, setHeaders: (res, assetPath) => {
     if (assetPath.includes(`${path.sep}assets${path.sep}`)) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
     else res.setHeader('Cache-Control', 'no-cache')
   } }))
   app.get('*', (req, res, next) => {
     if (req.path.startsWith('/api/') || !String(req.headers.accept || '').includes('text/html')) return next()
-    if (/^\/(student|expert|admin|superadmin|login|signin|signup|register|reset-password)(\/|$)/.test(req.path)) res.setHeader('X-Robots-Tag', 'noindex, nofollow')
+    if (/^\/(student|expert|admin|superadmin|login|signin|signup|register|reset-password|policy)(\/|$)/.test(req.path)) res.setHeader('X-Robots-Tag', 'noindex, nofollow')
     res.setHeader('Cache-Control', 'no-cache')
-    res.sendFile(path.join(clientDist, 'index.html'))
+    const known = Boolean(publicMetadata[publicAliases[req.path] || req.path]) || /^\/(student|expert|admin|superadmin|login|signin|signup|register|reset-password|policy)(\/|$)/.test(req.path)
+    res.status(known ? 200 : 404).type('html').send(renderApplicationHtml(applicationTemplate, req.path))
   })
 }
 

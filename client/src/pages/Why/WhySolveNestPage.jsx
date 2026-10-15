@@ -1,8 +1,6 @@
-import { Suspense, lazy, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { ArrowRight, Check, ChevronDown, FileText, Lock, ShieldCheck, Sparkles } from 'lucide-react'
-
-const WhyHeroCanvas = lazy(() => import('./WhyHeroCanvas.jsx').then((m) => ({ default: m.WhyHeroCanvas })))
 
 const nav = (p) => { window.history.pushState({}, '', p); window.dispatchEvent(new PopStateEvent('popstate')) }
 const scrollTo = (id) => { document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }
@@ -19,28 +17,6 @@ function useReducedMotion() {
   }, [])
   return r
 }
-function useIsMobile() {
-  const [m, setM] = useState(false)
-  useEffect(() => {
-    const q = window.matchMedia('(max-width: 800px)')
-    setM(q.matches)
-    const on = (e) => setM(e.matches)
-    q.addEventListener('change', on)
-    return () => q.removeEventListener('change', on)
-  }, [])
-  return m
-}
-function useWebGL() {
-  const [ok, setOk] = useState(true)
-  useEffect(() => {
-    try {
-      const c = document.createElement('canvas')
-      setOk(!!(c.getContext('webgl2') || c.getContext('webgl')))
-    } catch { setOk(false) }
-  }, [])
-  return ok
-}
-
 /* ─── scroll reveal ─── */
 function Reveal({ children, delay = 0, className = '' }) {
   const ref = useRef(null)
@@ -95,13 +71,12 @@ const ANCHORS = [
   { k: 'quality', label: 'QUALITY', hint: 'Verification structure appears' },
   { k: 'understanding', label: 'UNDERSTANDING', hint: 'Learning annotations appear' },
 ]
-function Hero({ concept, setConcept, reduced, mobile, webgl, heroVisible, exitT, pointer }) {
+function Hero({ concept, setConcept, pointer }) {
   const wrap = useRef(null)
   const fallbackRef = useRef(null)
-  const useCanvas = !reduced && !mobile && webgl
   const tiltFallback = (x, y) => {
     const el = fallbackRef.current
-    if (!el || useCanvas) return
+    if (!el) return
     el.style.transform = `perspective(800px) rotateY(${(x * 6).toFixed(2)}deg) rotateX(${(-y * 6).toFixed(2)}deg)`
   }
   const resetFallback = () => {
@@ -113,6 +88,7 @@ function Hero({ concept, setConcept, reduced, mobile, webgl, heroVisible, exitT,
     if (!r) return
     pointer.current.x = ((e.clientX - r.left) / r.width) * 2 - 1
     pointer.current.y = ((e.clientY - r.top) / r.height) * 2 - 1
+    tiltFallback(pointer.current.x, pointer.current.y)
   }
   const onTouch = (e) => {
     const t = e.touches[0]
@@ -144,15 +120,9 @@ function Hero({ concept, setConcept, reduced, mobile, webgl, heroVisible, exitT,
           <ul className="wy-sr" aria-label="Document contents">
             <li>Assessment 2, Research Report, 2,500 words, APA 7, Rubric, Due 28 September</li>
           </ul>
-          {useCanvas ? (
-            <Suspense fallback={<KnowledgeDoc state={concept === 'raw' ? 'raw' : concept === 'clarity' ? 'layers' : concept === 'accountability' ? 'approved' : concept === 'quality' ? 'verified' : 'open'} />}>
-              <WhyHeroCanvas concept={concept} exitT={exitT} pointer={pointer} reduced={reduced} visible={heroVisible} />
-            </Suspense>
-          ) : (
-            <div ref={fallbackRef} className="wy-fallback-tilt">
-              <KnowledgeDoc state={concept === 'raw' ? 'raw' : concept === 'clarity' ? 'layers' : concept === 'accountability' ? 'approved' : concept === 'quality' ? 'verified' : 'open'} />
-            </div>
-          )}
+          <div ref={fallbackRef} className="wy-fallback-tilt">
+            <KnowledgeDoc state={concept === 'raw' ? 'raw' : concept === 'clarity' ? 'layers' : concept === 'accountability' ? 'approved' : concept === 'quality' ? 'verified' : 'open'} />
+          </div>
           <div className="wy-anchors" role="group" aria-label="Document concepts">
             {ANCHORS.map(({ k, label, hint }) => (
               <button key={k} className={`wy-anchor ${concept === k ? 'is-active' : ''}`} aria-pressed={concept === k} title={hint}
@@ -568,12 +538,7 @@ export function WhySolveNestPage() {
   const [concept, setConcept] = useState('raw')
   const [active, setActive] = useState('wy-hero')
   const reduced = useReducedMotion()
-  const mobile = useIsMobile()
-  const webgl = useWebGL()
   const pointer = useRef({ x: 0, y: 0 })
-  const [heroVisible, setHeroVisible] = useState(true)
-  const [exitT, setExitT] = useState(0)
-  const heroRef = useRef(null)
 
   useEffect(() => {
     const o = new IntersectionObserver((es) => {
@@ -581,20 +546,6 @@ export function WhySolveNestPage() {
     }, { rootMargin: '-40% 0px -55% 0px' })
     SECTIONS.forEach(([id]) => { const el = document.getElementById(id); if (el) o.observe(el) })
     return () => o.disconnect()
-  }, [])
-
-  useEffect(() => {
-    const onScroll = () => {
-      const el = heroRef.current
-      if (!el) return
-      const r = el.getBoundingClientRect()
-      setHeroVisible(r.bottom > 0 && r.top < window.innerHeight)
-      const next = Math.max(0, Math.min(1, -r.top / (r.height || 1)))
-      setExitT((prev) => (Math.abs(next - prev) > 0.02 ? next : prev))
-    }
-    onScroll()
-    window.addEventListener('scroll', onScroll, { passive: true })
-    return () => window.removeEventListener('scroll', onScroll)
   }, [])
 
   return (
@@ -605,8 +556,8 @@ export function WhySolveNestPage() {
             className={active === id ? 'is-on' : ''} onClick={() => scrollTo(id)}><i /><span>{label}</span></button>
         ))}
       </nav>
-      <div ref={heroRef}>
-        <Hero concept={concept} setConcept={setConcept} reduced={reduced} mobile={mobile} webgl={webgl} heroVisible={heroVisible} exitT={exitT} pointer={pointer} />
+      <div>
+        <Hero concept={concept} setConcept={setConcept} pointer={pointer} />
       </div>
       <Clarity />
       <Accountability />
