@@ -30,6 +30,7 @@ import {
   listAvailableTasks,
   listMovement,
   markAssignmentMessagesRead,
+  markExpertNotificationsRead,
   notifyAssignmentRevision,
   postAssignmentMessage,
   provisionAssignment,
@@ -95,6 +96,9 @@ function asyncRoute(...handlers) {
   return handlers.map((handler) => (req, res, next) => Promise.resolve().then(() => handler(req, res, next)).catch(next))
 }
 app.disable('x-powered-by')
+function configuredOrigin(value) {
+  try { return value ? new URL(value).origin : null } catch { return null }
+}
 app.use('/api', (req, res, next) => {
   res.setHeader('Cache-Control', 'private, no-store')
   res.setHeader('X-Robots-Tag', 'noindex, nofollow')
@@ -103,7 +107,7 @@ app.use('/api', (req, res, next) => {
   const allowed = process.env.PUBLIC_APP_URL || `${req.protocol}://${req.get('host')}`
   let trusted = !origin
   try { if (origin) trusted = new URL(origin).origin === new URL(allowed).origin } catch { trusted = false }
-  if (process.env.NODE_ENV !== 'production' && ['http://localhost:5173', 'http://127.0.0.1:5173'].includes(origin)) trusted = true
+  if (process.env.NODE_ENV !== 'production' && /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin || '')) trusted = true
   if (req.headers['sec-fetch-site'] === 'cross-site' || !trusted) return safeError(res, 403, 'ORIGIN_REJECTED', 'This request must come from the SolveNest website.')
   next()
 })
@@ -116,7 +120,8 @@ app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff')
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin')
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=(self)')
-  res.setHeader('Content-Security-Policy', "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self'; worker-src 'self' blob:")
+  const assetOrigins = [...new Set([configuredOrigin(process.env.SUPABASE_URL), configuredOrigin(process.env.S3_ENDPOINT)].filter(Boolean))].join(' ')
+  res.setHeader('Content-Security-Policy', `default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob: ${assetOrigins}; frame-src 'self' ${assetOrigins}; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' ${assetOrigins}; worker-src 'self' blob:`)
   if (process.env.NODE_ENV === 'production') res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
   const startedAt = Date.now()
   res.on('finish', () => console.log(JSON.stringify({ level: 'info', type: 'request', requestId, method: req.method, path: req.path, status: res.statusCode, durationMs: Date.now() - startedAt })))
@@ -1720,6 +1725,7 @@ app.get('/api/expert/events', requireExpert, (req, res) => {
   res.write(`event: ready\ndata: ${JSON.stringify({ connectedAt: now() })}\n\n`)
   subscribe('expert:' + req.expert.expertId, res)
 })
+app.post('/api/expert/notifications/read-all', requireExpert, expertRoute(async (_req, res) => res.json(await markExpertNotificationsRead())))
 
 app.post('/api/expert/logout', requireExpert, expertRoute(async (req, res) => {
   if (hasSupabase() && req.expert.expertId !== 'demo-expert') await supabaseDeleteAppSession(req.expert.id)

@@ -117,6 +117,17 @@ export async function submitHelpTicket({ category, issue, taskId, message }) {
   return ticket
 }
 
+export async function replyToHelpTicket(ticketId, message) {
+  const response = await apiFetch(`/api/student/help/tickets/${encodeURIComponent(ticketId)}/replies`, { method: 'POST', body: { message } })
+  if (!response.ok) throw new Error(`HELP_REPLY_${response.status}`)
+  const payload = await response.json()
+  const ticket = payload.ticket
+  state = { ...state, tickets: state.tickets.map((item) => item.id === ticket.id ? ticket : item) }
+  if (state.catalog) state = { ...state, catalog: { ...state.catalog, tickets: state.tickets } }
+  emit()
+  return ticket
+}
+
 export function findTaskById(tasks, taskId) {
   if (!taskId) return null
   return (tasks || []).find((t) => String(t.id) === String(taskId)) || null

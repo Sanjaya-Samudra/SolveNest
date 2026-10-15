@@ -1,6 +1,8 @@
 export async function apiFetch(url, { signal, method = 'GET', body } = {}) {
   let response
   try {
+    const timeoutSignal = AbortSignal.timeout(30_000)
+    const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal
     response = await fetch(url, {
     method,
     credentials: 'include',
@@ -9,7 +11,7 @@ export async function apiFetch(url, { signal, method = 'GET', body } = {}) {
       ...(body ? { 'Content-Type': 'application/json' } : {}),
     },
     body: body ? JSON.stringify(body) : undefined,
-    signal,
+    signal: requestSignal,
     })
   } catch (cause) {
     if (cause?.name === 'AbortError') throw cause

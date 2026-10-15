@@ -178,11 +178,7 @@ export function SignUpPage() {
 
   const valid = { name: name.trim().length >= 2, email: EMAIL_RE.test(email.trim()), password: password.length >= 12 }
 
-  const confirmVerification = () => {
-    if (verified) return
-    setVerified(true)
-    timers.current.push(setTimeout(() => setStep(2), 650))
-  }
+  const confirmVerification = () => nav('/login')
 
   const submitAccount = async (e) => {
     e.preventDefault()
@@ -198,7 +194,12 @@ export function SignUpPage() {
     setErrors(errs)
     if (Object.keys(errs).length) return
     setStatus('sending')
-    try { await registerStudent({ name: name.trim(), email: email.trim(), password }); setStatus('idle'); setStep(1) } catch (error) { setStatus('idle'); setErrors({ form: error.message, ...(error.fieldErrors || {}) }) }
+    try {
+      const result = await registerStudent({ name: name.trim(), email: email.trim(), password })
+      setStatus('idle')
+      if (result.emailConfirmationRequired) setStep(1)
+      else { setVerified(true); setStep(2) }
+    } catch (error) { setStatus('idle'); setErrors({ form: error.message, ...(error.fieldErrors || {}) }) }
   }
 
   return (
@@ -297,7 +298,7 @@ export function SignUpPage() {
               <motion.div key="s1" initial={{ opacity: 0, x: reduced ? 0 : 14 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: reduced ? 0 : -14 }} transition={{ duration: 0.25 }}>
                 <span className="sn-eyebrow">02 · VERIFY</span>
                 <h1>Verify your<br /><em>access.</em></h1>
-                <p className="sn-lede">We sent a verification link to your email. Open it to confirm it’s really you — the demo continues once confirmed.</p>
+                <p className="sn-lede">We sent a verification link to your email. Open it to confirm your address, then sign in.</p>
                 <div className="sn-verify-rows">
                   <div className={`sn-verify-row ${verified ? 'is-done' : ''}`}>
                     <span className="sn-card-label">EMAIL</span>
@@ -306,7 +307,7 @@ export function SignUpPage() {
                   </div>
                 </div>
                 {!verified ? (
-                  <button className="sn-cta" onClick={confirmVerification}>I’ve Verified — Continue <ArrowRight size={15} /></button>
+                  <button className="sn-cta" onClick={confirmVerification}>Continue to sign in <ArrowRight size={15} /></button>
                 ) : (
                   <p className="sn-note">Email confirmed — assembling your workspace…</p>
                 )}

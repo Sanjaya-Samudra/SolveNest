@@ -24,6 +24,7 @@ import {
   findTaskById,
   loadHelpCatalog,
   searchHelpQuery,
+  replyToHelpTicket,
   submitHelpTicket,
   subscribeHelp,
   topicToCategory,
@@ -104,6 +105,8 @@ export default function StudentHelpPage() {
   const [submitting, setSubmitting] = useState(false)
   const [ticket, setTicket] = useState(null)
   const [formError, setFormError] = useState('')
+  const [reply, setReply] = useState('')
+  const [replying, setReplying] = useState(false)
   const [openPolicy, setOpenPolicy] = useState(null)
 
   useEffect(() => {
@@ -885,6 +888,7 @@ export default function StudentHelpPage() {
                 Status: {ticket.status === 'received' ? 'Received' : String(ticket.status || '').replaceAll('_', ' ')}. Track updates here and in notifications.
               </p>
               {ticket.studentUpdates?.length > 0 && <p className="sn-hlp__result-body"><strong>Latest update:</strong> {ticket.studentUpdates[0].message}</p>}
+              {ticket.status === 'waiting_on_student' && <div className="sn-hlp__field"><label className="sn-hlp__field-label" htmlFor="support-reply">Your reply</label><textarea id="support-reply" rows={3} className="sn-hlp__textarea" value={reply} onChange={(event) => setReply(event.target.value)} /><button type="button" className="student-button student-button--sm" disabled={replying || reply.trim().length < 2} onClick={async () => { setReplying(true); try { const updated = await replyToHelpTicket(ticket.id, reply); setTicket(updated); setReply('') } finally { setReplying(false) } }}>{replying ? 'Sending…' : 'Send reply'}</button></div>}
               <div className="sn-hlp__actions">
                 <button
                   type="button"

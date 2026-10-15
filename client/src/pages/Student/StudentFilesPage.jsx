@@ -5,7 +5,7 @@ import {
   FILE_VIEWS, FILE_SORT_OPTIONS, mapDossierFile, mapDeliveryFile, mapDossier,
   resolveDossierSections, resolveDeliveryPackage, resolveRevisionState,
   taskHasNewDelivery, buildDossierRoute, parseDossierUrlState, syncDossierUrlState,
-  fetchTaskDossiers, fetchTaskDossierDetail, fetchDeliveryPackage,
+  fetchTaskDossiers, fetchTaskDossierDetail, fetchDeliveryPackage, markDeliveryRead, acceptDelivery,
   requestFileAccess, uploadTaskFile, removeTaskFile, replaceTaskFile,
   requestRevision, filterDossiers, sortDossiers, formatFileSize, getFileIcon,
   canPreviewFile, formatDate, formatRelativeTime
@@ -192,8 +192,8 @@ function FileLedgerRow({ file, section, onPreview, onDownload, onReplace, onRemo
   const actions = []
   actions.push({ label: 'Preview', icon: Eye, onClick: () => { onPreview(file); setMenuOpen(false) } })
   actions.push({ label: 'Download', icon: Download, onClick: () => { onDownload(file); setMenuOpen(false) } })
-  if (section === 'source' && file.origin === 'you' && file.canReplace) actions.push({ label: 'Replace', icon: RefreshCw, onClick: () => { onReplace(file); setMenuOpen(false) } })
-  if (section === 'source' && file.origin === 'you' && file.canRemove) actions.push({ label: 'Remove', icon: X, onClick: () => { onRemove(file); setMenuOpen(false) } })
+  if (section === 'source' && ['you', 'student'].includes(file.origin) && file.canReplace) actions.push({ label: 'Replace', icon: RefreshCw, onClick: () => { onReplace(file); setMenuOpen(false) } })
+  if (section === 'source' && ['you', 'student'].includes(file.origin) && file.canRemove) actions.push({ label: 'Remove', icon: X, onClick: () => { onRemove(file); setMenuOpen(false) } })
   if (section === 'exchanges' && file.conversationId) actions.push({ label: 'View in Conversation', icon: MessageCircle, onClick: () => { onConversation(file.conversationId); setMenuOpen(false) } })
   return (
     <div className={`sn-files-row ${file.locked ? 'is-locked' : ''}`}>
@@ -305,7 +305,7 @@ function DeliveryVersionRail({ versions, current, onSelect }) {
   )
 }
 
-function DeliveryPackage({ dossier, version, onPreview, onDownload, onRevision }) {
+function DeliveryPackage({ dossier, version, onPreview, onDownload, onRevision, onAccept }) {
   const delivery = resolveDeliveryPackage(dossier, version)
   const revState = resolveRevisionState(delivery)
   if (!delivery) return (
@@ -359,6 +359,7 @@ function DeliveryPackage({ dossier, version, onPreview, onDownload, onRevision }
               {revState.status === 'available' && <button className="sn-files-strip-btn" onClick={() => onRevision(dossier.taskId)}>Request Revision →</button>}
             </span>
           )}
+          {delivery.status === 'ready_to_review' && <button className="sn-files-strip-btn" onClick={() => onAccept(dossier.taskId)}>Accept delivery →</button>}
           {delivery.explainAndDefend && (
             <button className="sn-files-strip-btn sn-files-strip-btn--explain" onClick={() => go(delivery.explainAndDefend.route || '/student/explain')}>Explain & Defend →</button>
           )}
@@ -589,8 +590,10 @@ export function StudentFilesPage() {
   const handleSelectTask = useCallback((taskId) => {
     setSelectedTaskId(taskId)
     setActiveSection(null)
+    const selected = dossiers.find((item) => item.taskId === taskId)
+    if (selected?.hasNewDelivery) markDeliveryRead(taskId).then(load).catch(() => {})
     if (isMobile) setMobileBackToList(true)
-  }, [isMobile])
+  }, [dossiers, isMobile, load])
 
   const handlePreview = useCallback((file) => {
     setInspectorFile(file)
@@ -627,6 +630,13 @@ export function StudentFilesPage() {
     } catch { /* toast */ }
   }, [])
 
+  const handleAcceptDelivery = useCallback(async (taskId) => {
+    await acceptDelivery(taskId)
+    const d = await fetchTaskDossierDetail(taskId)
+    setDetail(d)
+    load()
+  }, [load])
+
   const handleUpload = useCallback(async () => {
     if (selectedTaskId) {
       const d = await fetchTaskDossierDetail(selectedTaskId)
@@ -658,7 +668,7 @@ export function StudentFilesPage() {
             <button className="sn-files-back-btn" onClick={() => { setSelectedTaskId(null); setMobileBackToList(false); setDetail(null) }}><ArrowLeft size={18} /> Files & Deliveries</button>
           </div>
           <div className="sn-files-mobile-detail">
-            <DossierWorkspace dossier={selectedDossier} detail={detailLoading ? null : detail} sections={sections} activeSection={activeSection} onSectionChange={setActiveSection} onPreview={handlePreview} onDownload={handleDownload} onReplace={() => {}} onRemove={setRemoveFile} onConversation={handleConversation} onRevision={handleRevision} onUpload={handleUpload} taskId={selectedTaskId} />
+            <DossierWorkspace dossier={selectedDossier} detail={detailLoading ? null : detail} sections={sections} activeSection={activeSection} onSectionChange={setActiveSection} onPreview={handlePreview} onDownload={handleDownload} onReplace={() => {}} onRemove={setRemoveFile} onConversation={handleConversation} onRevision={handleRevision} onAccept={handleAcceptDelivery} onUpload={handleUpload} taskId={selectedTaskId} />
           </div>
           <AnimatePresence>{inspectorFile && <FileInspector file={inspectorFile} onClose={() => setInspectorFile(null)} onDownload={handleDownload} />}</AnimatePresence>
           <AnimatePresence>{removeFile && <RemoveConfirm file={removeFile} onConfirm={handleRemove} onCancel={() => setRemoveFile(null)} />}</AnimatePresence>
@@ -697,7 +707,7 @@ export function StudentFilesPage() {
         <TaskDossierNavigator dossiers={sortDossiers(filterDossiers(dossiers, { search, view }), sort)} selectedId={selectedTaskId} onSelect={handleSelectTask} loading={false} />
         <div className="sn-files-workspace">
           {search ? <SearchResultLedger dossiers={dossiers} search={search} onSelectTask={(id) => { setSearch(''); handleSelectTask(id) }} onPreview={handlePreview} /> : selectedDossier ? (
-            <DossierWorkspace dossier={selectedDossier} detail={detailLoading ? null : detail} sections={sections} activeSection={activeSection} onSectionChange={setActiveSection} onPreview={handlePreview} onDownload={handleDownload} onReplace={() => {}} onRemove={setRemoveFile} onConversation={handleConversation} onRevision={handleRevision} onUpload={handleUpload} taskId={selectedTaskId} />
+            <DossierWorkspace dossier={selectedDossier} detail={detailLoading ? null : detail} sections={sections} activeSection={activeSection} onSectionChange={setActiveSection} onPreview={handlePreview} onDownload={handleDownload} onReplace={() => {}} onRemove={setRemoveFile} onConversation={handleConversation} onRevision={handleRevision} onAccept={handleAcceptDelivery} onUpload={handleUpload} taskId={selectedTaskId} />
           ) : (
             <div className="sn-files-placeholder"><FolderOpen size={40} strokeWidth={1} /><p>Select a task to view its dossier.</p></div>
           )}
@@ -711,7 +721,7 @@ export function StudentFilesPage() {
 
 /* ── DOSSIER WORKSPACE COMPOSER ────────────────────────────────────────── */
 
-function DossierWorkspace({ dossier, detail, sections, activeSection, onSectionChange, onPreview, onDownload, onReplace, onRemove, onConversation, onRevision, onUpload, taskId }) {
+function DossierWorkspace({ dossier, detail, sections, activeSection, onSectionChange, onPreview, onDownload, onReplace, onRemove, onConversation, onRevision, onAccept, onUpload, taskId }) {
   const source = detail?.sourceFiles || dossier.sourceFiles
   const exchanges = detail?.exchangeFiles || dossier.exchangeFiles
   const versions = detail?.deliveryVersions || dossier.deliveryVersions
@@ -741,7 +751,7 @@ function DossierWorkspace({ dossier, detail, sections, activeSection, onSectionC
       <div className="sn-files-dossier-content">
         {(!activeSection || activeSection === 'source') && <FileLedger files={source} section="source" onPreview={onPreview} onDownload={onDownload} onReplace={onReplace} onRemove={onRemove} onConversation={onConversation} emptyLabel="No student-visible source files." />}
         {(!activeSection || activeSection === 'exchanges') && exchanges.length > 0 && <FileLedger files={exchanges} section="exchanges" onPreview={onPreview} onDownload={onDownload} onReplace={onReplace} onRemove={onRemove} onConversation={onConversation} emptyLabel="No files shared during collaboration." />}
-        {(!activeSection || activeSection === 'delivery') && <DeliveryPackage dossier={{ ...dossier, deliveryVersions: versions }} version={null} onPreview={onPreview} onDownload={onDownload} onRevision={onRevision} />}
+        {(!activeSection || activeSection === 'delivery') && <DeliveryPackage dossier={{ ...dossier, deliveryVersions: versions }} version={null} onPreview={onPreview} onDownload={onDownload} onRevision={onRevision} onAccept={onAccept} />}
       </div>
     </div>
   )

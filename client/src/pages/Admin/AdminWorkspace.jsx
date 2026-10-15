@@ -263,7 +263,7 @@ export function AdminWorkspace() {
   const loadCase = useCallback(async (id) => {
     if (!id) return
     setCaseState({ loading: true, data: null, error: null })
-    try { const data = await getCase(id); setCaseState({ loading: false, data, error: null }) }
+    try { const data = await getCase(id); const current = routeFromPath(); if (current.section === 'tasks' && current.id === id) setCaseState({ loading: false, data, error: null }) }
     catch (error) { setCaseState({ loading: false, data: null, error }) }
   }, [])
   const loadSupportQueue = useCallback(async () => {
@@ -273,7 +273,7 @@ export function AdminWorkspace() {
   }, [])
   const loadSupportCase = useCallback(async (id) => {
     setSupportCase({ loading: true, data: null, error: null })
-    try { setSupportCase({ loading: false, data: await getSupportCase(id), error: null }) }
+    try { const data = await getSupportCase(id); const current = routeFromPath(); if (current.section === 'support' && current.id === id) setSupportCase({ loading: false, data, error: null }) }
     catch (error) { setSupportCase({ loading: false, data: null, error }) }
   }, [])
   const loadQaQueue = useCallback(async () => {
@@ -283,7 +283,7 @@ export function AdminWorkspace() {
   }, [])
   const loadQaCase = useCallback(async (id) => {
     setQaCase({ loading: true, data: null, error: null })
-    try { setQaCase({ loading: false, data: await getQaCase(id), error: null }) }
+    try { const data = await getQaCase(id); const current = routeFromPath(); if (current.section === 'qa' && current.id === id) setQaCase({ loading: false, data, error: null }) }
     catch (error) { setQaCase({ loading: false, data: null, error }) }
   }, [])
   const loadMessagesQueue = useCallback(async () => {
@@ -293,12 +293,17 @@ export function AdminWorkspace() {
   }, [])
   const loadMessagesCase = useCallback(async (id) => {
     setMessagesCase({ loading: true, data: null, error: null })
-    try { const data = await getConversation(id); setMessagesCase({ loading: false, data, error: null }); await markConversationRead(id); loadMessagesQueue() }
+    try { const data = await getConversation(id); const current = routeFromPath(); if (current.section === 'messages' && current.id === id) setMessagesCase({ loading: false, data, error: null }); await markConversationRead(id); loadMessagesQueue() }
     catch (error) { setMessagesCase({ loading: false, data: null, error }) }
   }, [loadMessagesQueue])
   useEffect(() => { loadStaff() }, [loadStaff])
   useEffect(() => { const update = () => setRoute(routeFromPath()); window.addEventListener('popstate', update); return () => window.removeEventListener('popstate', update) }, [])
   useEffect(() => { if (staffState.staff) { loadOverview(); loadSupportQueue(); loadQaQueue(); loadMessagesQueue() } }, [staffState.staff, loadOverview, loadSupportQueue, loadQaQueue, loadMessagesQueue])
+  useEffect(() => {
+    if (!staffState.staff) return undefined
+    const timer = window.setInterval(() => { loadOverview(); loadSupportQueue(); loadQaQueue(); loadMessagesQueue() }, 30_000)
+    return () => window.clearInterval(timer)
+  }, [staffState.staff, loadOverview, loadSupportQueue, loadQaQueue, loadMessagesQueue])
   useEffect(() => { if (!staffState.staff || !route.id) return; if (route.section === 'tasks') loadCase(route.id); if (route.section === 'support') loadSupportCase(route.id); if (route.section === 'qa') loadQaCase(route.id); if (route.section === 'messages') loadMessagesCase(route.id) }, [staffState.staff, route, loadCase, loadSupportCase, loadQaCase, loadMessagesCase])
 
   if (staffState.loading) return <div className="adm-gate"><div className="adm-loading" role="status">Loading Admin access…</div></div>

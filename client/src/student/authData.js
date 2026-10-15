@@ -1,5 +1,5 @@
 async function request(path, body) {
-  const response = await fetch(path, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(body) })
+  const response = await fetch(path, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(30_000) })
   const payload = await response.json().catch(() => ({}))
   if (!response.ok) {
     const error = new Error(payload.message || 'The request could not be completed.')

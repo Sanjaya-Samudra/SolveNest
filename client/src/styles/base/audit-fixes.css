@@ -1,0 +1,26 @@
+.mobile-command-panel .mobile-sign-in {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 700;
+  color: #fff;
+}
+
+.adm-app {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+.adm-shell,
+.adm-main,
+.adm-content,
+.adm-panel {
+  min-width: 0;
+}
+
+@media (max-width: 760px) {
+  .adm-table-wrap {
+    max-width: calc(100vw - 32px);
+    overscroll-behavior-inline: contain;
+  }
+}

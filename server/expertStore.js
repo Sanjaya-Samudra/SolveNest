@@ -818,6 +818,13 @@ export async function markAssignmentMessagesRead(id) {
   return { ok: true, unread: 0 }
 }
 
+export async function markExpertNotificationsRead() {
+  const store = await readExpertStore()
+  for (const item of store.notifications) item.isRead = true
+  await writeExpertStore(store)
+  return { ok: true, unreadNotifications: 0 }
+}
+
 export async function addAssignmentFile(id, section, meta) {
   const target = String(section || 'working')
   if (!EXPERT_FILE_SECTIONS.has(target)) return { ok: false, error: 'FILE_SECTION_INVALID' }

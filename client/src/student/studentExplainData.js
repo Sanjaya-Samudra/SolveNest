@@ -483,12 +483,13 @@ function mergeStreamingPayload(acc, chunk) {
   return merged
 }
 
-export async function requestExplanation({ taskId, artifactId, mode, selection, question, signal, prompt, answers, scope, round } = {}) {
+export async function requestExplanation({ taskId, artifactId, sessionId, mode, selection, question, signal, prompt, answers, scope, round } = {}) {
   const response = await apiFetch(`/api/student/explain/tasks/${encodeURIComponent(taskId)}/explain`, {
     method: 'POST',
     signal,
     body: {
       artifactId: artifactId || null,
+      sessionId: sessionId || null,
       mode,
       selection: selection || null,
       question: question || null,
@@ -1138,6 +1139,7 @@ export function useExplainSession(taskId) {
       id: `r-${Date.now()}-${askRef.current}`,
       taskId,
       artifactId,
+      sessionId,
       mode: modeOverride || mode,
       selection,
       question,
@@ -1146,7 +1148,7 @@ export function useExplainSession(taskId) {
       scope,
       round,
     })
-  }, [taskId, artifactId, mode])
+  }, [taskId, artifactId, sessionId, mode])
 
   const retry = useCallback(() => {
     if (!request) return

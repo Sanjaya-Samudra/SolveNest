@@ -38,6 +38,9 @@ function ActivitySection({ dashboard }) {
 }
 
 function NotificationsSection({ dashboard }) {
+  useEffect(() => {
+    fetch('/api/expert/notifications/read-all', { method: 'POST', credentials: 'include', headers: { Accept: 'application/json' } }).then(() => dashboard.reload()).catch(() => {})
+  }, [])
   const notifications = dashboard.workspace?.notifications || []
   return (
     <div className="exp-section">
@@ -58,10 +61,10 @@ function NotificationsSection({ dashboard }) {
             {notifications.map((item) => (
               <li key={item.id} className={item.isRead ? '' : 'is-unread'}>
                 <span className="exp-movement-icon" aria-hidden="true" />
-                <div>
+                <button type="button" onClick={() => item.route && goExpert(item.route)} disabled={!item.route}>
                   <strong>{item.title}</strong>
                   {item.body && <small>{item.body}</small>}
-                </div>
+                </button>
                 <time>{item.at ? new Date(item.at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) : ''}</time>
               </li>
             ))}

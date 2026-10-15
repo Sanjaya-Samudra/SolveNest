@@ -222,6 +222,18 @@ export async function fetchDeliveryPackage(taskId, version, { signal } = {}) {
   return mapDeliveryVersion(payload.delivery || payload.data || payload)
 }
 
+export async function markDeliveryRead(taskId) {
+  const response = await fetch(`/api/student/dossiers/${encodeURIComponent(taskId)}/delivery/read`, { method: 'PATCH', credentials: 'include', headers: { Accept: 'application/json' } })
+  if (!response.ok) throw new Error(`STUDENT_DELIVERY_READ_${response.status}`)
+  return true
+}
+
+export async function acceptDelivery(taskId) {
+  const response = await fetch(`/api/student/dossiers/${encodeURIComponent(taskId)}/delivery/accept`, { method: 'POST', credentials: 'include', headers: { Accept: 'application/json' } })
+  if (!response.ok) throw new Error(`STUDENT_DELIVERY_ACCEPT_${response.status}`)
+  return response.json()
+}
+
 export async function requestFileAccess(fileId, { signal } = {}) {
   try {
     const response = await fetch(`/api/student/files/${encodeURIComponent(fileId)}/access`, { credentials: 'include', headers: { Accept: 'application/json' }, signal })
