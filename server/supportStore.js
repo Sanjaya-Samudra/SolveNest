@@ -59,6 +59,23 @@ export async function createSupportTicket({ student, category, issue, taskId, me
   })
 }
 
+export async function replyToSupportTicket(studentId, id, message) {
+  const body = String(message || '').trim().slice(0, 2000)
+  if (body.length < 2) return { error: 'MESSAGE_REQUIRED' }
+  return withTaskStore((store) => {
+    const ticket = (store.supportTickets || []).find((item) => String(item.id) === String(id) && item.context?.studentId === studentId)
+    if (!ticket) return { error: 'TICKET_NOT_FOUND' }
+    if (ticket.status === 'resolved') return { error: 'TICKET_RESOLVED' }
+    const stamp = new Date().toISOString()
+    ticket.studentReplies = Array.isArray(ticket.studentReplies) ? ticket.studentReplies : []
+    const reply = { id: crypto.randomUUID(), message: body, at: stamp }
+    ticket.studentReplies.unshift(reply)
+    ticket.status = 'in_progress'
+    ticket.updatedAt = stamp
+    return { ok: true, ticket: studentView(ticket), reply }
+  })
+}
+
 export async function updateSupportTicket(id, actorId, status, note, studentMessage = '') {
   const allowed = new Set(['received', 'in_progress', 'waiting_on_student', 'resolved'])
   const cleanNote = String(note || '').trim().slice(0, 2000)

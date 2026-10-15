@@ -10,7 +10,7 @@ import { authenticateUser, createSession, createUser, deleteSession, getSession,
 import { getAccountView, updatePreferences, updateProfile } from './accountStore.js'
 import { addNotification, listNotifications, markAllRead, markRead, unreadCount } from './store.js'
 import { getCatalog, resolveGuidance, searchHelp } from './helpStore.js'
-import { createSupportTicket, getStudentSupportTicket, listStudentSupportTickets, listSupportTickets, getSupportTicket, updateSupportTicket } from './supportStore.js'
+import { createSupportTicket, getStudentSupportTicket, listStudentSupportTickets, listSupportTickets, getSupportTicket, replyToSupportTicket, updateSupportTicket } from './supportStore.js'
 import {
   addAssignmentFile,
   applyAssignmentScopeChange,
@@ -158,6 +158,7 @@ async function recordPaymentStatus(providerId, status, requireRecord = false, pr
     }
     payment.status = status
     if (status !== 'succeeded') return null
+    payment.paymentIntentId = typeof provider?.payment_intent === 'string' ? provider.payment_intent : provider?.payment_intent?.id || (String(providerId).startsWith('pi_') ? providerId : payment.paymentIntentId || null)
     const task = store.tasks.find((item) => item.id === payment.taskId && item.studentId === payment.studentId)
     const plan = store.plans.find((item) => item.id === payment.planId && item.status === 'ACCEPTED')
     if (!task || !plan) {
@@ -201,6 +202,34 @@ async function recordPaymentStatus(providerId, status, requireRecord = false, pr
   })
 }
 
+async function recordRefundStatus(paymentIntentId, amountRefundedMinor, refundId = null) {
+  return withTaskStore((store) => {
+    const payment = store.payments.find((item) => item.paymentIntentId === paymentIntentId || item.providerId === paymentIntentId)
+    if (!payment) return null
+    const amountRefunded = Math.min(payment.amount, Math.max(0, Number(amountRefundedMinor || 0) / 100))
+    payment.refundedAmount = amountRefunded
+    payment.refundId = refundId || payment.refundId || null
+    payment.refundedAt = now()
+    payment.status = amountRefunded >= payment.amount ? 'refunded' : 'partially_refunded'
+    const task = store.tasks.find((item) => item.id === payment.taskId && item.studentId === payment.studentId)
+    const plan = store.plans.find((item) => item.id === payment.planId)
+    if (payment.milestoneId && plan) {
+      const milestone = plan.milestones?.find((item) => item.id === payment.milestoneId)
+      if (milestone && payment.status === 'refunded') Object.assign(milestone, { fundingState: 'payment_required', paidAt: null, paymentId: null })
+    }
+    if (task) {
+      const succeeded = store.payments.filter((item) => item.taskId === task.id && item.status === 'succeeded').reduce((sum, item) => sum + Number(item.amount || 0), 0)
+      task.amountDue = Math.max(0, Number(plan?.amount || task.funding?.amountTotal || 0) - succeeded)
+      task.funding = { ...(task.funding || {}), state: task.amountDue ? 'payment_required' : 'funded', amountFunded: succeeded, amountDue: task.amountDue }
+      if (!['DELIVERED', 'COMPLETED', 'DECLINED'].includes(task.status)) task.status = 'PAYMENT_PENDING'
+      task.latestUpdate = { text: `A ${payment.status === 'refunded' ? 'full' : 'partial'} refund was processed for this task.`, createdAt: payment.refundedAt }
+      task.updatedAt = payment.refundedAt
+      addActivity(store, { id: crypto.randomUUID(), studentId: task.studentId, taskId: task.id, type: 'PaymentRefunded', text: task.latestUpdate.text, createdAt: payment.refundedAt })
+    }
+    return { payment, task }
+  })
+}
+
 async function announceFundedTask(task) {
   if (!task) return
   if (task.scopeChangeId) await syncApprovedScopeChange(task.scopeChangeId)
@@ -227,6 +256,17 @@ app.post('/api/payments/stripe/webhook', express.raw({ type: 'application/json' 
   let event
   try { event = stripe.webhooks.constructEvent(req.body, req.headers['stripe-signature'], process.env.STRIPE_WEBHOOK_SECRET) } catch { return res.status(400).json({ error: 'INVALID_WEBHOOK' }) }
   const object = event.data.object
+  if (event.type === 'charge.refunded') {
+    try {
+      const paymentIntentId = typeof object.payment_intent === 'string' ? object.payment_intent : object.payment_intent?.id
+      const refunded = paymentIntentId ? await recordRefundStatus(paymentIntentId, object.amount_refunded, null) : null
+      if (refunded?.task) publish(refunded.task.studentId, { type: 'PaymentRefunded', taskId: refunded.task.id })
+      return res.json({ received: true })
+    } catch (error) {
+      console.error('[stripe-webhook] refund reconciliation failed', error)
+      return res.status(503).json({ error: 'REFUND_RECONCILIATION_PENDING' })
+    }
+  }
   const sessionEvent = event.type.startsWith('checkout.session.')
   const status = event.type === 'checkout.session.completed' ? (object.payment_status === 'paid' ? 'succeeded' : null)
     : event.type === 'checkout.session.async_payment_succeeded' ? 'succeeded'
@@ -631,6 +671,39 @@ app.get('/api/student/dossiers/:taskId/delivery', requireStudent, asyncRoute(asy
   res.json({ delivery })
 }))
 
+app.patch('/api/student/dossiers/:taskId/delivery/read', requireStudent, asyncRoute(async (req, res) => {
+  const changed = await withTaskStore((store) => {
+    const task = store.tasks.find((item) => item.id === req.params.taskId && item.studentId === req.student.studentId)
+    if (!task) return false
+    task.hasNewDelivery = false
+    return true
+  })
+  if (!changed) return safeError(res, 404, 'TASK_NOT_FOUND', 'Task not found.')
+  res.json({ ok: true })
+}))
+
+app.post('/api/student/dossiers/:taskId/delivery/accept', requireStudent, asyncRoute(async (req, res) => {
+  const completed = await withTaskStore((store) => {
+    const task = store.tasks.find((item) => item.id === req.params.taskId && item.studentId === req.student.studentId)
+    if (!task || !task.deliveryVersions?.length) return null
+    if (task.status === 'COMPLETED') return task
+    if (task.status !== 'DELIVERED') return { error: 'DELIVERY_NOT_READY' }
+    const stamp = now()
+    task.status = 'COMPLETED'
+    task.hasNewDelivery = false
+    task.completedAt = stamp
+    task.latestUpdate = { text: 'You accepted the delivery and completed this task.', createdAt: stamp }
+    task.nextAction = null
+    task.updatedAt = stamp
+    addActivity(store, { id: crypto.randomUUID(), studentId: task.studentId, taskId: task.id, type: 'TaskCompleted', text: task.latestUpdate.text, createdAt: stamp })
+    return task
+  })
+  if (!completed) return safeError(res, 404, 'TASK_NOT_FOUND', 'Task not found.')
+  if (completed.error) return safeError(res, 409, completed.error, 'The delivery is not ready to accept.')
+  publish(req.student.studentId, { type: 'TaskCompleted', taskId: completed.id })
+  res.json({ task: await studentTaskPayload(completed, req.student.studentId) })
+}))
+
 app.post('/api/student/dossiers/:taskId/revision', requireStudent, asyncRoute(async (req, res) => {
   const note = String(req.body?.note || '').trim()
   if (note.length < 10 || note.length > 2000) return safeError(res, 400, 'REVISION_NOTE_REQUIRED', 'Describe the requested revision in 10 to 2000 characters.')
@@ -688,11 +761,15 @@ app.get('/api/student/conversations/:conversationId/messages', requireStudent, a
 
 app.post('/api/student/conversations/:conversationId/messages', requireStudent, asyncRoute(async (req, res) => {
   const text = String(req.body?.body || '').trim()
-  if (!text || text.length > 4000) return safeError(res, 400, 'MESSAGE_INVALID', 'Message must be between 1 and 4000 characters.', { body: 'Enter a message.' })
+  const fileId = String(req.body?.fileId || '').trim()
+  if ((!text && !fileId) || text.length > 4000) return safeError(res, 400, 'MESSAGE_INVALID', 'Add a message or attachment.', { body: 'Enter a message or attach a file.' })
   const message = await withTaskStore((store) => {
     const conversation = store.conversations.find((item) => item.id === req.params.conversationId && item.studentId === req.student.studentId)
     if (!conversation) return null
-    const item = { id: crypto.randomUUID(), conversationId: conversation.id, studentId: req.student.studentId, from: 'student', author: req.student.name, role: 'Student', initials: req.student.name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase(), body: text, attachments: [], createdAt: now(), status: 'sent' }
+    const attachment = fileId ? store.files.find((file) => file.id === fileId && file.studentId === req.student.studentId && file.conversationId === conversation.id && file.role === 'MESSAGE_ATTACHMENT') : null
+    if (fileId && !attachment) return { error: 'ATTACHMENT_NOT_FOUND' }
+    const attachments = attachment ? [{ id: attachment.id, name: attachment.originalName, type: attachment.mimeType, size: attachment.size }] : []
+    const item = { id: crypto.randomUUID(), conversationId: conversation.id, studentId: req.student.studentId, from: 'student', author: req.student.name, role: 'Student', initials: req.student.name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase(), body: text, attachments, createdAt: now(), status: 'sent' }
     store.messages.push(item)
     conversation.lastMessage = item
     conversation.updatedAt = item.createdAt
@@ -701,6 +778,7 @@ app.post('/api/student/conversations/:conversationId/messages', requireStudent, 
     return item
   })
   if (!message) return safeError(res, 404, 'CONVERSATION_NOT_FOUND', 'Conversation not found.')
+  if (message.error) return safeError(res, 404, message.error, 'The selected attachment is unavailable.')
   publish(req.student.studentId, { type: 'MessageCreated', message })
   res.status(201).json({ message })
 }))
@@ -956,6 +1034,24 @@ app.post('/api/student/payments/scope-changes/:scopeChangeId/accept', requireStu
   })
   if (stored?.status === 'ACCEPTED') return res.json({ scopeChange: stored })
   res.json({ scopeChange: { ...stored, checkoutUrl: session.url } })
+}))
+
+app.post('/api/student/payments/scope-changes/:scopeChangeId/reject', requireStudent, asyncRoute(async (req, res) => {
+  const change = await withTaskStore((store) => {
+    const current = store.scopeChanges.find((item) => item.id === req.params.scopeChangeId && item.studentId === req.student.studentId)
+    if (!current) return null
+    if (!['REQUESTED', 'AWAITING_PAYMENT'].includes(current.status)) return { error: 'SCOPE_CHANGE_NOT_READY' }
+    const payment = store.payments.find((item) => item.scopeChangeId === current.id && !['failed', 'canceled'].includes(item.status))
+    if (payment?.status === 'succeeded') return { error: 'SCOPE_CHANGE_FUNDED' }
+    if (payment) payment.status = 'canceled'
+    current.status = 'REJECTED'
+    current.canAccept = false
+    current.rejectedAt = now()
+    return current
+  })
+  if (!change) return safeError(res, 404, 'SCOPE_CHANGE_NOT_FOUND', 'Scope change not found.')
+  if (change.error) return safeError(res, 409, change.error, 'This scope change can no longer be rejected.')
+  res.json({ scopeChange: change })
 }))
 
 app.post('/api/student/explain/tasks/:taskId/explain', requireStudent, asyncRoute(async (req, res) => {
@@ -1395,6 +1491,20 @@ app.post('/api/expert/assignments/:assignmentId/work/state', requireExpert, expe
   if (!await limited(`expert-state:${req.expert.expertId}`, 30)) return safeError(res, 429, 'RATE_LIMITED', 'Too many changes. Try again shortly.')
   const result = await updateAssignmentWorkState(req.params.assignmentId, req.body?.state)
   if (!result.ok) return expertMutationError(res, result.error)
+  const studentChange = await withTaskStore((store) => {
+    const task = store.tasks.find((item) => item.assignmentId === req.params.assignmentId && item.assignedExpertId === req.expert.expertId)
+    if (!task || ['DELIVERED', 'COMPLETED', 'DECLINED'].includes(task.status)) return null
+    const statuses = { assigned: 'ASSIGNMENT_PENDING', working: 'IN_PROGRESS', qa_review: 'QUALITY_REVIEW', changes_requested: 'QUALITY_CHANGES', ready_to_deliver: 'READY_TO_DELIVER' }
+    const labels = { assigned: 'Your Expert has received the assignment.', working: 'Expert work is in progress.', qa_review: 'Your work is in quality review.', changes_requested: 'Quality review requested changes from the Expert.', ready_to_deliver: 'Quality review is complete and delivery is being prepared.' }
+    if (!statuses[result.workState]) return null
+    const stamp = now()
+    task.status = statuses[result.workState]
+    task.latestUpdate = { text: labels[result.workState], createdAt: stamp }
+    task.updatedAt = stamp
+    addActivity(store, { id: crypto.randomUUID(), studentId: task.studentId, taskId: task.id, type: 'ExpertWorkStateChanged', text: task.latestUpdate.text, createdAt: stamp })
+    return { studentId: task.studentId, taskId: task.id, status: task.status }
+  })
+  if (studentChange) publish(studentChange.studentId, { type: 'TaskProgressUpdated', taskId: studentChange.taskId, status: studentChange.status })
   expertChanged(req, result)
   res.json(result)
 }))
@@ -1403,6 +1513,23 @@ app.post('/api/expert/assignments/:assignmentId/messages', requireExpert, expert
   if (!await limited(`expert-message:${req.expert.expertId}`, 12)) return safeError(res, 429, 'RATE_LIMITED', 'Too many messages. Try again shortly.')
   const result = await postAssignmentMessage(req.params.assignmentId, req.body?.body)
   if (!result.ok) return expertMutationError(res, result.error)
+  const studentMessage = await withTaskStore((store) => {
+    const task = store.tasks.find((item) => item.assignmentId === req.params.assignmentId && item.assignedExpertId === req.expert.expertId)
+    if (!task) return null
+    let conversation = store.conversations.find((item) => item.studentId === task.studentId && item.taskId === task.id)
+    if (!conversation) {
+      conversation = { id: crypto.randomUUID(), studentId: task.studentId, taskId: task.id, taskTitle: task.title, taskRef: task.id, subject: task.subject, status: task.status, state: 'active', needsStudent: false, unread: 0, staffUnread: false, participant: { name: 'SolveNest', role: 'Support', initials: 'SN' }, lastMessage: null, createdAt: task.createdAt, updatedAt: task.updatedAt }
+      store.conversations.push(conversation)
+    }
+    const item = { ...result.message, conversationId: conversation.id, studentId: task.studentId, from: 'expert', role: 'Expert', attachments: result.message.attachments || [], status: 'sent' }
+    store.messages.push(item)
+    conversation.lastMessage = item
+    conversation.updatedAt = item.createdAt
+    conversation.unread = Number(conversation.unread || 0) + 1
+    conversation.staffUnread = true
+    return { studentId: task.studentId, taskId: task.id, message: item }
+  })
+  if (studentMessage) publish(studentMessage.studentId, { type: 'MessageCreated', taskId: studentMessage.taskId, message: studentMessage.message })
   publishExpert(req.expert.expertId, 'MessageCreated', { assignmentId: req.params.assignmentId, message: result.message })
   expertChanged(req, { updatedAt: result.message.createdAt })
   res.status(201).json(result)
@@ -1871,6 +1998,12 @@ app.post('/api/student/help/tickets', requireStudent, supportRoute(async (req, r
   res.status(201).json(ticket)
 }))
 
+app.post('/api/student/help/tickets/:ticketId/replies', requireStudent, supportRoute(async (req, res) => {
+  const result = await replyToSupportTicket(req.student.studentId, req.params.ticketId, req.body?.message)
+  if (result.error) return safeError(res, result.error === 'TICKET_NOT_FOUND' ? 404 : 409, result.error, result.error === 'TICKET_RESOLVED' ? 'This support request is already resolved.' : 'Enter a reply.')
+  res.status(201).json(result)
+}))
+
 function localStaffPreview(req, role) {
   const enabled = role === 'Superadmin' ? process.env.SUPERADMIN_DEMO_SESSION === '1' : process.env.ADMIN_DEMO_SESSION === '1'
   return process.env.NODE_ENV !== 'production' && enabled && /^(::1|127\.0\.0\.1|::ffff:127\.0\.0\.1)$/.test(req.ip || '')
@@ -2019,9 +2152,42 @@ app.post('/api/admin/tasks/:taskId/plan', requireAdmin, staffRoute(async (req, r
   if (!await limited(`admin-plan:${req.staff.id}`, 20)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before issuing another plan.')
   const result = await issueAdminPlan(req.params.taskId, req.staff.id, req.body)
   if (result.error) return safeError(res, result.error === 'TASK_NOT_FOUND' ? 404 : result.error === 'PLAN_INVALID' ? 400 : 409, result.error, result.error === 'PLAN_INVALID' ? 'Enter a scope of at least 20 characters, a positive whole-number price, a future delivery date, and a valid revision allowance.' : 'This task is not ready for a new plan.')
-  await addNotification({ id: crypto.randomUUID(), studentId: result.studentId, title: 'Official plan ready', body: 'Review the scope, delivery date, and price before accepting.', task: { title: result.title, ref: req.params.taskId }, route: `/student/payments?task=${req.params.taskId}&section=plan`, isRead: false, requiresAction: true, createdAt: result.plan.issuedAt })
+  try { await addNotification({ id: crypto.randomUUID(), studentId: result.studentId, title: 'Official plan ready', body: 'Review the scope, delivery date, and price before accepting.', task: { title: result.title, ref: req.params.taskId }, route: `/student/payments?task=${req.params.taskId}&section=plan`, isRead: false, requiresAction: true, createdAt: result.plan.issuedAt }) }
+  catch (error) { console.error('[plan] notification failed', error) }
   publish(result.studentId, { type: 'PlanIssued', taskId: req.params.taskId })
   res.status(201).json({ plan: result.plan })
+}))
+
+app.post('/api/admin/payments/:paymentId/refund', requireAdmin, staffRoute(async (req, res) => {
+  if (!stripe) return safeError(res, 503, 'PROVIDER_UNAVAILABLE', 'Stripe refunds are not configured.')
+  if (!await limited(`admin-refund:${req.staff.id}`, 10)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before processing another refund.')
+  const note = String(req.body?.note || '').trim().slice(0, 2000)
+  if (note.length < 10) return safeError(res, 400, 'REFUND_NOTE_REQUIRED', 'Record the refund decision in at least 10 characters.')
+  const state = await readTaskStore()
+  const payment = state.payments.find((item) => item.id === req.params.paymentId)
+  if (!payment || !['succeeded', 'partially_refunded'].includes(payment.status)) return safeError(res, 409, 'PAYMENT_NOT_REFUNDABLE', 'This payment is not available for a refund.')
+  const remaining = Math.max(0, Number(payment.amount || 0) - Number(payment.refundedAmount || 0))
+  const amount = req.body?.amount == null ? remaining : Number(req.body.amount)
+  if (!Number.isInteger(amount) || amount <= 0 || amount > remaining) return safeError(res, 400, 'REFUND_AMOUNT_INVALID', 'Enter a valid whole-number refund amount.')
+  const task = state.tasks.find((item) => item.id === payment.taskId)
+  if (['DELIVERED', 'COMPLETED'].includes(task?.status) && req.body?.completedWorkReview !== true) return safeError(res, 409, 'REFUND_REVIEW_REQUIRED', 'Completed work requires an explicit staff review before refunding.')
+  let paymentIntentId = payment.paymentIntentId
+  if (!paymentIntentId && String(payment.providerId || '').startsWith('cs_')) {
+    const session = await stripe.checkout.sessions.retrieve(payment.providerId)
+    paymentIntentId = typeof session.payment_intent === 'string' ? session.payment_intent : session.payment_intent?.id
+  }
+  if (!paymentIntentId) return safeError(res, 409, 'PAYMENT_INTENT_MISSING', 'The Stripe payment cannot be identified.')
+  const refund = await stripe.refunds.create({ payment_intent: paymentIntentId, amount: amount * 100, reason: 'requested_by_customer', metadata: { solveNestPaymentId: payment.id, taskId: payment.taskId, actorId: req.staff.id } }, { idempotencyKey: `refund-${payment.id}-${Number(payment.refundedAmount || 0)}-${amount}` })
+  const reconciled = await recordRefundStatus(paymentIntentId, (Number(payment.refundedAmount || 0) + amount) * 100, refund.id)
+  await withTaskStore((store) => {
+    store.adminAudit = store.adminAudit || []
+    store.adminAudit.unshift({ id: crypto.randomUUID(), taskId: payment.taskId, actorId: req.staff.id, action: 'payment_refund', note, amount, currency: payment.currency, paymentId: payment.id, refundId: refund.id, at: now() })
+  })
+  if (reconciled?.task) {
+    try { await addNotification({ id: crypto.randomUUID(), studentId: reconciled.task.studentId, title: 'Refund processed', body: `A refund of ${payment.currency.toUpperCase()} ${amount} was processed.`, task: { title: reconciled.task.title, ref: reconciled.task.id }, route: `/student/payments?task=${reconciled.task.id}&section=history`, isRead: false, requiresAction: false, createdAt: now() }) } catch (error) { console.error('[refund] notification failed', error) }
+    publish(reconciled.task.studentId, { type: 'PaymentRefunded', taskId: reconciled.task.id })
+  }
+  res.status(201).json({ refund: { id: refund.id, status: refund.status, amount, currency: payment.currency }, payment: reconciled?.payment })
 }))
 
 app.post('/api/admin/tasks/:taskId/scope-change', requireAdmin, staffRoute(async (req, res) => {
