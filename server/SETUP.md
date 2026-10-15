@@ -39,7 +39,7 @@ Required in production:
 4. Put the server-only service role key in `SUPABASE_SERVICE_ROLE_KEY`. Never add this key to `client/.env` or browser code.
 5. Set `SUPABASE_STORAGE_BUCKET=student-files`.
 6. Create a private Storage bucket with that name.
-7. In the Supabase SQL Editor, run every file in `server/migrations` from `001_initial.sql` through `009_admin_audit_records.sql` in numeric order.
+7. In the Supabase SQL Editor, run every file in `server/migrations` from `001_initial.sql` through `013_record_level_domain_concurrency.sql` in numeric order.
 8. In **Authentication > Providers**, enable Email/password. Decide whether email confirmation is required; if enabled, configure SMTP in Supabase Auth and complete confirmation before the first Student session.
 
 The migration creates a `profiles` table linked to `auth.users`, a signup trigger, Row Level Security policies, task/file/analysis/review tables, idempotency records, and guest-transfer records. The service role is used only by the trusted server for Storage and server-side operations.
@@ -73,11 +73,11 @@ npm run db:migrate
 
 `DATABASE_URL` and `npm run db:migrate` are optional if you run the SQL migration manually in Supabase. Do not create a second standalone users table; Supabase Auth is the identity source.
 
-When `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are configured, the active domain store persists each task, payment, plan, message, support request, notification, and related entity as an individual row in `domain_records`. Migration 008 copies the old `app_state` document into these rows and retains the original document only as migration rollback data. Writes send only changed rows through a revision-checked PostgreSQL transaction, so concurrent API requests cannot partially overwrite one another. Without Supabase keys, JSON files are used only as a local development fallback. Do not deploy without the Supabase variables.
+When `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are configured, the active domain store persists each task, payment, plan, message, support request, notification, and related entity as an individual row in `domain_records`. Migration 008 copies the old `app_state` document into these rows and retains the original document only as migration rollback data. Migration 013 applies optimistic checks to each changed record, so unrelated Student operations no longer contend on one global revision and conflicting edits still retry safely. Without Supabase keys, JSON files are used only as a local development fallback. Do not deploy without the Supabase variables.
 
 ## 5. Private object storage
 
-Create a private Supabase Storage bucket named `student-files`. Do not enable public access. The server uses `SUPABASE_SERVICE_ROLE_KEY` to upload objects and generate short-lived signed access URLs. The `S3_*` variables are optional fallback settings for non-Supabase storage and can remain empty.
+Create a private Supabase Storage bucket named `student-files`. Do not enable public access. The server uses `SUPABASE_SERVICE_ROLE_KEY` to upload objects and generate short-lived signed access URLs. The `S3_*` variables are optional fallback settings for non-Supabase storage and can remain empty. A six-hour maintenance job removes expired Guest Quick Scan transfers and unreferenced objects older than 24 hours; retain database and Storage backups independently.
 
 All uploads are checked for supported file signatures. Office files are inspected for the required DOCX/PPTX structure, path traversal, symlinks, encryption, and excessive expansion. In production every upload must also pass a ClamAV `INSTREAM` scan before storage or email delivery; unavailable scanning rejects uploads. Keep the ClamAV TCP port on a private network because its protocol does not authenticate clients. Run signature updates with `freshclam` and monitor their freshness. Local development can omit `CLAMD_HOST` to work without a scanner.
 
@@ -100,14 +100,14 @@ For work that changes after acceptance, an Admin can issue a scope change while 
 
 ## 9. HTTPS and process management
 
-Serve the built `client/dist` site over HTTPS. Route `/api` on that same origin to the Node API, because browser requests use relative `/api` paths and session cookies are scoped to the site. Terminate TLS at a trusted reverse proxy, set `TRUST_PROXY_HOPS` to its exact hop count, and keep the API private behind that proxy. Allow SSE connections through it with buffering disabled. Multiple API instances can share Supabase sessions, rate limits, Expert workspaces, and the revisioned domain record store.
+Serve the built `client/dist` site over HTTPS. Route `/api` on that same origin to the Node API, because browser requests use relative `/api` paths and session cookies are scoped to the site. Terminate TLS at a trusted reverse proxy, set `TRUST_PROXY_HOPS` to its exact hop count, and keep the API private behind that proxy. Allow SSE connections through it with buffering disabled. Multiple API instances share Supabase sessions, rate limits, Expert workspaces, record-level domain writes, and the short-lived `realtime_events` relay used by Student SSE connections. Keep migration 012 applied before running more than one API instance.
 
 Use `/api/health` as the liveness probe and `/api/ready` as the traffic readiness probe. Readiness checks the domain store and malware scanner; it returns 503 if either is unavailable. Alert on repeated 503 responses, API errors, failed Stripe webhook deliveries, stale ClamAV signatures, and backup failures.
 
 ## 10. Release sequence and remaining gates
 
 1. Choose a production host for the static React build and Node API, and connect an HTTPS domain with same-origin `/api` routing.
-2. Create Supabase, run all nine migrations, create the private bucket, enable Email/password Auth, and make the first Superadmin through a trusted administrator.
+2. Create Supabase, run all thirteen migrations, create the private bucket, enable Email/password Auth, and make the first Superadmin through a trusted administrator.
 3. Configure an SMTP provider and the Supabase Auth email templates and redirect allowlist.
 4. Provide a real Solvy endpoint matching the documented analysis and Explain & Defend requests. The API cannot manufacture or configure that service.
 5. Create a Stripe account, configure Checkout credentials and the signed webhook, and verify that the chosen account supports the configured currency.
@@ -121,7 +121,7 @@ The code-level production gates are implemented: transactional domain rows, mand
 
 Run `npm --prefix server run preflight` from the repository root after filling `server/.env.production`. This reports missing configuration names without printing secret values. It validates configuration format only; it does not contact providers.
 
-Migration 009 adds durable Admin audit events and explicit service-role execution permission for domain changes. Apply it before deploying this release.
+Migrations 009 through 013 add durable Admin audit events, staff role invariants, Student account revision protection, a shared realtime relay, record-level domain concurrency, and supporting indexes. Apply every migration in order before deploying this release.
 
 For the included HTTPS proxy, export `APP_DOMAIN` on the host and use `docker compose -f compose.production.yml -f compose.https.yml up -d --build`. Set `PUBLIC_APP_URL=https://YOUR_DOMAIN` and `TRUST_PROXY_HOPS=1` for a single Caddy proxy; adjust the hop count if another trusted proxy is added. Ports 80 and 443 must reach the proxy. The database and ClamAV stay private.
 
