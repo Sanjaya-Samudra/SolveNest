@@ -2,6 +2,9 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { hasSupabase, supabaseReadState, supabaseWriteState } from './supabase.js'
+import { getNotificationPreferences } from './accountStore.js'
+import { supabaseProfile } from './supabase.js'
+import { sendEmail } from './email.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const dataDir = path.join(__dirname, 'data')
@@ -54,11 +57,24 @@ export async function listNotifications(studentId = null) {
 }
 
 export async function addNotification(notification) {
-  if (hasSupabase()) return updateNotifications((notifications) => { if (!notifications.some((item) => item.id === notification.id)) notifications.unshift(notification); return notification })
-  const store = readStore()
-  store.notifications.unshift(notification)
-  writeStore(store)
-  return notification
+  const preferences = await getNotificationPreferences(notification.studentId)
+  const category = notification.category || (String(notification.route || '').includes('/payments') ? 'payments' : String(notification.route || '').includes('/messages') || /message/i.test(notification.title || '') ? 'messages' : 'tasks')
+  const categoryEnabled = preferences[category] !== false
+  if (preferences.inApp && categoryEnabled) {
+    if (hasSupabase()) await updateNotifications((notifications) => { if (!notifications.some((item) => item.id === notification.id)) notifications.unshift(notification); return notification })
+    else {
+      const store = readStore()
+      store.notifications.unshift(notification)
+      writeStore(store)
+    }
+  }
+  if (preferences.email && categoryEnabled && hasSupabase()) {
+    try {
+      const profile = await supabaseProfile(notification.studentId)
+      if (profile?.email) await sendEmail({ to: profile.email, subject: notification.title, text: `${notification.body || notification.title}\n\nOpen SolveNest to view the update.` })
+    } catch (error) { console.error('[notification-email]', error.message) }
+  }
+  return { ...notification, delivery: { inApp: Boolean(preferences.inApp && categoryEnabled), email: Boolean(preferences.email && categoryEnabled) } }
 }
 
 export async function markRead(id, studentId = null) {

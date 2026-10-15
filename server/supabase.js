@@ -189,8 +189,31 @@ export async function supabaseWriteState(state) {
   Object.defineProperty(state, '__baseline', { value: current, configurable: true })
   return state
 }
-export async function supabaseReadStudentAccount(studentId) { if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED'); const { data, error } = await adminClient.from('student_accounts').select('account').eq('student_id', studentId).maybeSingle(); if (error) throw error; return data?.account || null }
-export async function supabaseWriteStudentAccount(studentId, account) { if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED'); const { error } = await adminClient.from('student_accounts').upsert({ student_id: studentId, account, updated_at: new Date().toISOString() }); if (error) throw error; return account }
+export async function supabaseReadStudentAccount(studentId) {
+  if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED')
+  const { data, error } = await adminClient.from('student_accounts').select('account, revision').eq('student_id', studentId).maybeSingle()
+  if (error) throw error
+  if (!data) return null
+  Object.defineProperty(data.account, '__revision', { value: Number(data.revision), configurable: true })
+  return data.account
+}
+export async function supabaseWriteStudentAccount(studentId, account) {
+  if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED')
+  const revision = account.__revision ?? null
+  const updated_at = new Date().toISOString()
+  if (revision === null) {
+    const { error } = await adminClient.from('student_accounts').insert({ student_id: studentId, account, revision: 1, updated_at })
+    if (error) throw error.code === '23505' ? new Error('STUDENT_ACCOUNT_CONFLICT') : error
+    Object.defineProperty(account, '__revision', { value: 1, configurable: true })
+    return account
+  }
+  if (!Number.isSafeInteger(revision)) throw new Error('STUDENT_ACCOUNT_REVISION_REQUIRED')
+  const { data, error } = await adminClient.from('student_accounts').update({ account, revision: revision + 1, updated_at }).eq('student_id', studentId).eq('revision', revision).select('revision').maybeSingle()
+  if (error) throw error
+  if (!data) throw new Error('STUDENT_ACCOUNT_CONFLICT')
+  Object.defineProperty(account, '__revision', { value: Number(data.revision), configurable: true })
+  return account
+}
 export async function supabaseSignUp({ email, password, name }) { if (!authClient) throw new Error('SUPABASE_NOT_CONFIGURED'); return createClient(url, anonKey, { auth: { persistSession: false, autoRefreshToken: false } }).auth.signUp({ email, password, options: { data: { name, role: 'Student' } } }) }
 export async function supabaseSignIn({ email, password }) { if (!authClient) throw new Error('SUPABASE_NOT_CONFIGURED'); return createClient(url, anonKey, { auth: { persistSession: false, autoRefreshToken: false } }).auth.signInWithPassword({ email, password }) }
 export async function supabaseRequestPasswordReset(email) { if (!authClient) throw new Error('SUPABASE_NOT_CONFIGURED'); return authClient.auth.resetPasswordForEmail(email, process.env.PUBLIC_APP_URL ? { redirectTo: `${process.env.PUBLIC_APP_URL.replace(/\/$/, '')}/reset-password` } : undefined) }

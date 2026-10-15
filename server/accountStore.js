@@ -18,6 +18,7 @@ const DEFAULT_PREFERENCES = {
 }
 
 const PREFERENCE_KEYS = Object.keys(DEFAULT_PREFERENCES)
+const accountQueues = new Map()
 
 function emptyAccount(studentId) {
   return {
@@ -77,7 +78,7 @@ async function readAccount(studentId) {
 
 function mergeAccount(studentId, parsed) {
   const base = emptyAccount(studentId)
-  return {
+  const account = {
     ...base,
     ...parsed,
     studentId,
@@ -87,6 +88,8 @@ function mergeAccount(studentId, parsed) {
     privacyControls: { ...base.privacyControls, ...(parsed.privacyControls || {}) },
     policyConsents: Array.isArray(parsed.policyConsents) ? parsed.policyConsents : [],
   }
+  if (Number.isSafeInteger(parsed.__revision)) Object.defineProperty(account, '__revision', { value: parsed.__revision, configurable: true })
+  return account
 }
 
 async function writeAccount(account) {
@@ -96,6 +99,24 @@ async function writeAccount(account) {
   const temporary = `${target}.${crypto.randomUUID()}.tmp`
   fs.writeFileSync(temporary, JSON.stringify(account, null, 2))
   fs.renameSync(temporary, target)
+  return account
+}
+
+async function mutateAccount(studentId, mutator) {
+  const previous = accountQueues.get(studentId) || Promise.resolve()
+  const operation = previous.catch(() => {}).then(async () => {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const account = await readAccount(studentId)
+      mutator(account)
+      try { return await writeAccount(account) }
+      catch (error) {
+        if (error.message !== 'STUDENT_ACCOUNT_CONFLICT' || attempt === 2) throw error
+      }
+    }
+  })
+  accountQueues.set(studentId, operation)
+  try { return await operation }
+  finally { if (accountQueues.get(studentId) === operation) accountQueues.delete(studentId) }
 }
 
 function cleanString(value, max = 160) {
@@ -175,32 +196,30 @@ export async function getAccountView({ student, sessions = [], activeSessionId =
 }
 
 export async function updateProfile(studentId, patch = {}) {
-  const account = await readAccount(studentId)
-  if ('fullName' in patch) account.profile.fullName = cleanString(patch.fullName) ?? account.profile.fullName
-  if ('preferredName' in patch) account.profile.preferredName = cleanString(patch.preferredName) ?? account.profile.preferredName
-  if ('institution' in patch) account.profile.institution = cleanString(patch.institution) ?? account.profile.institution
-  if ('program' in patch) account.profile.program = cleanString(patch.program) ?? account.profile.program
-  await writeAccount(account)
-  return account
+  return mutateAccount(studentId, (account) => {
+    if ('fullName' in patch) account.profile.fullName = cleanString(patch.fullName) ?? account.profile.fullName
+    if ('preferredName' in patch) account.profile.preferredName = cleanString(patch.preferredName) ?? account.profile.preferredName
+    if ('institution' in patch) account.profile.institution = cleanString(patch.institution) ?? account.profile.institution
+    if ('program' in patch) account.profile.program = cleanString(patch.program) ?? account.profile.program
+  })
 }
 
 export async function updatePreferences(studentId, patch = {}) {
-  const account = await readAccount(studentId)
-  for (const key of PREFERENCE_KEYS) {
-    if (key in patch && typeof patch[key] === 'boolean') {
-      account.preferences[key] = patch[key]
-    }
-  }
-  await writeAccount(account)
-  return account
+  return mutateAccount(studentId, (account) => {
+    for (const key of PREFERENCE_KEYS) if (key in patch && typeof patch[key] === 'boolean') account.preferences[key] = patch[key]
+  })
 }
 
 export async function recordAccountRegistration(studentId, { name = '', emailVerified = false, createdAt = null, policyConsents = [] } = {}) {
+  return mutateAccount(studentId, (account) => {
+    if (createdAt) account.createdAt = createdAt
+    if (name && !account.profile.fullName) account.profile.fullName = cleanString(name) || ''
+    account.security.emailVerified = Boolean(emailVerified)
+    account.policyConsents = (Array.isArray(policyConsents) ? policyConsents : []).map((item) => ({ id: String(item.id || ''), title: String(item.title || item.id || ''), version: String(item.version || ''), acceptedAt: item.acceptedAt || new Date().toISOString() })).filter((item) => item.id && item.version)
+  })
+}
+
+export async function getNotificationPreferences(studentId) {
   const account = await readAccount(studentId)
-  if (createdAt) account.createdAt = createdAt
-  if (name && !account.profile.fullName) account.profile.fullName = cleanString(name) || ''
-  account.security.emailVerified = Boolean(emailVerified)
-  account.policyConsents = (Array.isArray(policyConsents) ? policyConsents : []).map((item) => ({ id: String(item.id || ''), title: String(item.title || item.id || ''), version: String(item.version || ''), acceptedAt: item.acceptedAt || new Date().toISOString() })).filter((item) => item.id && item.version)
-  await writeAccount(account)
-  return account
+  return { ...DEFAULT_PREFERENCES, ...account.preferences }
 }
