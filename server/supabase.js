@@ -34,6 +34,17 @@ export async function supabaseDeleteAppSession(token) {
   const { error } = await adminClient.from('app_sessions').delete().eq('id', appSessionId(token))
   if (error) throw error
 }
+export async function supabaseDeleteUserAppSessions(userId) {
+  if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED')
+  const { error } = await adminClient.from('app_sessions').delete().eq('user_id', userId)
+  if (error) throw error
+}
+export async function supabaseRevokeUserSessions(userId) {
+  if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED')
+  await supabaseDeleteUserAppSessions(userId)
+  const { error } = await adminClient.auth.admin.signOut(userId, 'global')
+  if (error) throw error
+}
 export async function supabaseConsumeRateLimit(key, max) {
   if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED')
   const keyHash = crypto.createHash('sha256').update(key).digest('hex')

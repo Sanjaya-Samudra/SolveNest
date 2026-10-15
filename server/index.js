@@ -50,7 +50,7 @@ import { publish, subscribe, closeStreams } from './realtime.js'
 import { hasObjectStorage, persistUpload, removeStoredObject, signedObjectUrl } from './storage.js'
 import { hasEmail, sendEmail } from './email.js'
 import { exportStudentAccount } from './accountExport.js'
-import { hasSupabase, hasSupabaseAuth, supabaseChangeStaffRole, supabaseConsumeRateLimit, supabaseCreateAppSession, supabaseDeleteAppSession, supabaseExpertProfiles, supabaseFindProfileByEmail, supabaseGetAppSession, supabaseProfile, supabaseRefresh, supabaseRequestPasswordReset, supabaseTeam, supabaseUpdatePassword, supabaseSignIn, supabaseSignUp, supabaseUser } from './supabase.js'
+import { hasSupabase, hasSupabaseAuth, supabaseChangeStaffRole, supabaseConsumeRateLimit, supabaseCreateAppSession, supabaseDeleteAppSession, supabaseExpertProfiles, supabaseFindProfileByEmail, supabaseGetAppSession, supabaseProfile, supabaseRefresh, supabaseRequestPasswordReset, supabaseRevokeUserSessions, supabaseTeam, supabaseUpdatePassword, supabaseSignIn, supabaseSignUp, supabaseUser } from './supabase.js'
 import { getAdminCase, getAdminOverview, getAdminQaCase, issueAdminPlan, issueAdminScopeChange, listAdminQaAssignments, recordAdminReview } from './adminStore.js'
 import { getSuperadminActivity, getSuperadminOverview } from './superadminStore.js'
 import { checkMalwareScanner, inspectUpload } from './uploadSafety.js'
@@ -91,7 +91,9 @@ const upload = multer({
 })
 
 const app = express()
-function asyncRoute(handler) { return (req, res, next) => Promise.resolve().then(() => handler(req, res, next)).catch(next) }
+function asyncRoute(...handlers) {
+  return handlers.map((handler) => (req, res, next) => Promise.resolve().then(() => handler(req, res, next)).catch(next))
+}
 app.disable('x-powered-by')
 app.use('/api', (req, res, next) => {
   res.setHeader('Cache-Control', 'private, no-store')
@@ -435,7 +437,7 @@ app.post('/api/student/task-creation/files', requireStudent, (req, res, next) =>
     }
     next()
   })
-}, async (req, res) => {
+}, asyncRoute(async (req, res) => {
   if (!req.file) return safeError(res, 400, 'FILE_REQUIRED', 'Choose a file to upload.')
   if (await rejectInvalidUpload(res, req.file)) return
   const role = String(req.body.kind || '').toLowerCase() === 'brief' ? 'BRIEF' : 'SUPPORTING'
@@ -455,7 +457,7 @@ app.post('/api/student/task-creation/files', requireStudent, (req, res, next) =>
   try { await persistUpload(req.file, file.storageKey) } catch { return safeError(res, 503, 'STORAGE_UNAVAILABLE', 'The file could not be stored securely.') }
   await withTaskStore((store) => store.files.push(file))
   res.status(201).json({ file: { id: file.id, name: file.originalName, kind: file.role === 'BRIEF' ? 'brief' : 'supporting', size: file.size, status: 'ready', createdAt: file.createdAt } })
-})
+}))
 
 app.delete('/api/student/task-creation/files/:fileId', requireStudent, asyncRoute(async (req, res) => {
   const result = await withTaskStore((store) => {
@@ -576,17 +578,25 @@ app.post('/api/student/task-creation/tasks', requireStudent, asyncRoute(async (r
   const analysis = record.result
   const createdAt = now()
   const task = { id: crypto.randomUUID(), studentId: req.student.studentId, title: String(analysis.title || 'New academic task').slice(0, 200), type: analysis.taskType || 'Academic task', subject: analysis.subject || null, deadline: analysis.deadline || null, status: 'FEASIBILITY_REVIEW', createdAt, updatedAt: createdAt, latestUpdate: { text: 'Your task has been submitted for SolveNest review.', createdAt }, analysis: { ...analysis, provisional: true }, review: { status: 'QUEUED', reviewerId: null, reviewedAt: null, decision: null }, nextAction: null }
-  await withTaskStore((store) => {
+  const creation = await withTaskStore((store) => {
+    const replay = store.idempotency[`${req.student.studentId}:${idempotencyKey}`]
+    if (replay) return { task: replay, replayed: true }
+    const ownedFiles = store.files.filter((file) => fileIds.includes(file.id) && file.studentId === req.student.studentId && !file.taskId)
+    if (ownedFiles.length !== fileIds.length || !ownedFiles.some((file) => file.role === 'BRIEF')) return { error: 'FILES_CHANGED' }
+    const currentAnalysis = store.analyses.find((item) => item.id === analysisId && item.studentId === req.student.studentId && item.status === 'COMPLETED')
+    if (!currentAnalysis || currentAnalysis.fileIds.length !== fileIds.length || !currentAnalysis.fileIds.every((id) => fileIds.includes(id))) return { error: 'ANALYSIS_CHANGED' }
     store.tasks.push(task)
     store.reviews.push({ id: crypto.randomUUID(), taskId: task.id, studentId: req.student.studentId, status: 'QUEUED', reviewerId: null, reviewedAt: null, decision: null, createdAt })
     store.files = store.files.map((file) => fileIds.includes(file.id) && file.studentId === req.student.studentId ? { ...file, taskId: task.id } : file)
     store.idempotency[`${req.student.studentId}:${idempotencyKey}`] = task
     addActivity(store, { id: crypto.randomUUID(), studentId: req.student.studentId, taskId: task.id, type: 'TaskSubmittedForReview', text: 'Your task has been submitted for SolveNest review.', createdAt })
+    return { task, replayed: false }
   })
-  await addNotification({ id: crypto.randomUUID(), studentId: req.student.studentId, title: 'Task submitted for review', body: task.latestUpdate.text, task: { title: task.title, ref: task.id }, route: `/student/tasks?task=${task.id}`, isRead: false, requiresAction: false, createdAt })
-  const summary = await studentTaskPayload(task, req.student.studentId)
+  if (creation.error) return safeError(res, 409, creation.error, 'The selected files or analysis changed. Refresh and try again.')
+  if (!creation.replayed) try { await addNotification({ id: crypto.randomUUID(), studentId: req.student.studentId, title: 'Task submitted for review', body: task.latestUpdate.text, task: { title: task.title, ref: task.id }, route: `/student/tasks?task=${task.id}`, isRead: false, requiresAction: false, createdAt }) } catch (error) { console.error('[task] notification failed', error) }
+  const summary = await studentTaskPayload(creation.task, req.student.studentId)
   publish(req.student.studentId, { type: 'TaskSubmittedForReview', task: summary })
-  res.status(201).json({ task: summary, nextAction: null })
+  res.status(creation.replayed ? 200 : 201).json({ task: summary, replayed: creation.replayed, nextAction: null })
 }))
 
 app.get('/api/student/tasks', requireStudent, asyncRoute(async (req, res) => {
@@ -708,15 +718,17 @@ app.patch('/api/student/conversations/:conversationId/read', requireStudent, asy
 
 app.post('/api/student/conversations/:conversationId/files', requireStudent, (req, res, next) => {
   upload.single('file')(req, res, async (error) => {
-    if (error || !req.file) return safeError(res, 400, 'FILE_UPLOAD_REJECTED', 'This file could not be uploaded.')
-    if (await rejectInvalidUpload(res, req.file)) return
-    const state = await readTaskStore()
-    const conversation = state.conversations.find((item) => item.id === req.params.conversationId && item.studentId === req.student.studentId)
-    if (!conversation) return safeError(res, 404, 'CONVERSATION_NOT_FOUND', 'Conversation not found.')
-    const file = { id: crypto.randomUUID(), studentId: req.student.studentId, taskId: conversation.taskId, conversationId: conversation.id, role: 'MESSAGE_ATTACHMENT', originalName: path.basename(req.file.originalname), storageKey: req.file.filename, mimeType: req.file.mimetype, size: req.file.size, state: 'READY', createdAt: now() }
-    try { await persistUpload(req.file, file.storageKey) } catch { return safeError(res, 503, 'STORAGE_UNAVAILABLE', 'The file could not be stored securely.') }
-    await withTaskStore((store) => store.files.push(file))
-    res.status(201).json({ file: { id: file.id, name: file.originalName, type: file.mimeType, size: file.size, uploadedBy: 'student', uploadedAt: file.createdAt } })
+    try {
+      if (error || !req.file) return safeError(res, 400, 'FILE_UPLOAD_REJECTED', 'This file could not be uploaded.')
+      if (await rejectInvalidUpload(res, req.file)) return
+      const state = await readTaskStore()
+      const conversation = state.conversations.find((item) => item.id === req.params.conversationId && item.studentId === req.student.studentId)
+      if (!conversation) return safeError(res, 404, 'CONVERSATION_NOT_FOUND', 'Conversation not found.')
+      const file = { id: crypto.randomUUID(), studentId: req.student.studentId, taskId: conversation.taskId, conversationId: conversation.id, role: 'MESSAGE_ATTACHMENT', originalName: path.basename(req.file.originalname), storageKey: req.file.filename, mimeType: req.file.mimetype, size: req.file.size, state: 'READY', createdAt: now() }
+      try { await persistUpload(req.file, file.storageKey) } catch { return safeError(res, 503, 'STORAGE_UNAVAILABLE', 'The file could not be stored securely.') }
+      await withTaskStore((store) => store.files.push(file))
+      res.status(201).json({ file: { id: file.id, name: file.originalName, type: file.mimeType, size: file.size, uploadedBy: 'student', uploadedAt: file.createdAt } })
+    } catch (cause) { next(cause) }
   })
 })
 
@@ -895,6 +907,7 @@ app.post('/api/student/payments/scope-changes/:scopeChangeId/accept', requireStu
   const task = state.tasks.find((item) => item.id === change.taskId && item.studentId === req.student.studentId)
   const plan = state.plans.find((item) => item.id === change.planId && item.status === 'ACCEPTED')
   if (!task || !plan) return safeError(res, 409, 'SCOPE_CHANGE_NOT_READY', 'The original accepted plan is unavailable.')
+  if (!['PAID', 'ASSIGNMENT_PENDING', 'REVISION_REQUESTED', 'REVISION_IN_PROGRESS'].includes(task.status)) return safeError(res, 409, 'SCOPE_CHANGE_TOO_LATE', 'This task has moved beyond the point where this scope change can be accepted.')
   if (change.requested.priceDelta > 0 && String(plan.currency).toLowerCase() !== (process.env.STRIPE_CURRENCY || 'lkr').toLowerCase()) return safeError(res, 503, 'CURRENCY_UNAVAILABLE', 'Checkout is not configured for this quote currency. Contact support.')
   if (change.requested.priceDelta === 0) {
     const result = await withTaskStore((store) => {
@@ -1203,6 +1216,10 @@ async function requireExpert(req, res, next) {
       req.expert.name = profile.name
       req.expert.email = profile.email
     }
+    if (!req.path.endsWith('/logout') && !req.path.endsWith('/me')) {
+      const accountState = await runForExpert({ id: req.expert.expertId, name: req.expert.name }, async () => (await readExpertStore()).accountState)
+      if (accountState && accountState !== 'active') return safeError(res, 403, 'EXPERT_ACCOUNT_SUSPENDED', 'This Expert account is not active.')
+    }
     next()
   } catch (error) {
     safeError(res, error.status || 503, 'EXPERT_ACCESS_REQUIRED', error.status ? 'Expert sign in is required.' : 'Expert access could not be verified right now.')
@@ -1295,6 +1312,8 @@ const EXPERT_ERROR_MESSAGE = {
   QA_FEEDBACK_OPEN: 'Resolve every QA feedback item before resubmitting.',
   QA_NOT_PENDING: 'No quality review is currently pending for this assignment.',
   QA_APPROVAL_REQUIRED: 'Quality review must approve this work before delivery.',
+  QA_FILES_LOCKED: 'Submission files are locked while quality review is in progress or approved.',
+  QA_FILES_CHANGED: 'The submission changed after quality approval. Submit it for quality review again.',
   QA_FILES_REQUIRED: 'Add at least one submission file before submitting for QA.',
   QA_OUTCOME_INVALID: 'That quality review outcome is not valid.',
   QA_FEEDBACK_REQUIRED: 'QA feedback items are required for this outcome.',
@@ -1653,6 +1672,8 @@ app.post('/api/auth/password-reset/complete', asyncRoute(async (req, res) => {
   try {
     const { error } = await supabaseUpdatePassword(accessToken, refreshToken, password)
     if (error) return safeError(res, 400, 'RESET_INVALID', 'The reset link has expired or is invalid.')
+    const user = await supabaseUser(accessToken)
+    if (user?.id) await supabaseRevokeUserSessions(user.id)
     res.json({ ok: true })
   } catch {
     safeError(res, 503, 'RECOVERY_UNAVAILABLE', 'Your password could not be updated. Please try again later.')
@@ -1676,11 +1697,13 @@ app.post('/api/contact', (req, res, next) => contactUpload.single('attachment')(
   }
 }))
 
-app.post('/api/auth/logout', requireStudent, (req, res) => {
-  deleteSession(req.student.id)
+async function logoutStudent(req, res) {
+  if (hasSupabaseAuth()) await supabaseRevokeUserSessions(req.student.studentId)
+  else deleteSession(req.student.id)
   clearStudentCookies(res)
   res.json({ ok: true })
-})
+}
+app.post('/api/auth/logout', requireStudent, asyncRoute(logoutStudent))
 
 app.get('/api/student/notifications', requireStudent, asyncRoute(async (req, res) => {
   const notifications = await listNotifications(req.student.studentId)
@@ -1761,17 +1784,14 @@ app.patch('/api/student/account', requireStudent, accountRoute(async (req, res) 
   })
 }))
 
-app.post('/api/student/account/logout', requireStudent, (req, res) => {
-  deleteSession(req.student.id)
-  clearStudentCookies(res)
-  res.json({ ok: true })
-})
+app.post('/api/student/account/logout', requireStudent, asyncRoute(logoutStudent))
 
-app.delete('/api/student/account/sessions/current', requireStudent, (req, res) => {
-  deleteSession(req.student.id)
+app.delete('/api/student/account/sessions/current', requireStudent, asyncRoute(async (req, res) => {
+  if (hasSupabaseAuth()) await supabaseRevokeUserSessions(req.student.studentId)
+  else deleteSession(req.student.id)
   clearStudentCookies(res)
   res.json({ ok: true, signedOut: true })
-})
+}))
 
 app.delete('/api/student/account/sessions/:sessionId', requireStudent, (req, res) => {
   if (hasSupabaseAuth()) return safeError(res, 501, 'SESSION_REVOKE_UNAVAILABLE', 'Remote session management is not available for this account.')
@@ -1987,6 +2007,11 @@ app.post('/api/admin/tasks/:taskId/review', requireAdmin, staffRoute(async (req,
   if (!await limited(`admin-review:${req.staff.id}`, 30)) return safeError(res, 429, 'RATE_LIMITED', 'Too many review actions. Please wait a moment.')
   const result = await recordAdminReview(req.params.taskId, req.staff.id, req.body?.action, req.body?.note)
   if (result.error) return safeError(res, result.error === 'TASK_NOT_FOUND' ? 404 : result.error === 'NOTE_REQUIRED' || result.error === 'INVALID_ACTION' ? 400 : 409, result.error, result.error === 'NOTE_REQUIRED' ? 'Add an internal note of at least 10 characters.' : 'This review cannot be changed from its current state.')
+  try {
+    const titles = { start: 'Review started', approve: 'Task approved', request_info: 'Information requested', decline: 'Task declined' }
+    await addNotification({ id: crypto.randomUUID(), studentId: result.studentId, title: titles[result.action], body: result.action === 'request_info' || result.action === 'decline' ? String(req.body?.note || '') : 'Your task review status has been updated.', task: { title: result.title, ref: req.params.taskId }, route: `/student/tasks?task=${req.params.taskId}`, isRead: false, requiresAction: result.action === 'request_info', createdAt: result.updatedAt })
+  } catch (error) { console.error('[review] notification failed', error) }
+  publish(result.studentId, { type: 'TaskReviewUpdated', taskId: req.params.taskId, status: result.status })
   res.json(result)
 }))
 
@@ -2247,7 +2272,10 @@ const scopeSyncTimer = setInterval(async () => {
   scopeSyncRunning = true
   try {
     const pending = (await readTaskStore()).scopeChanges.filter((item) => item.status === 'ACCEPTED' && item.expertSyncPending)
-    for (const change of pending) await syncApprovedScopeChange(change.id)
+    for (const change of pending) {
+      try { await syncApprovedScopeChange(change.id) }
+      catch (error) { console.error('[scope-change] Expert sync retry failed', { scopeChangeId: change.id, error }) }
+    }
   } catch (error) { console.error('[scope-change] Expert sync retry failed', error) }
   finally { scopeSyncRunning = false }
 }, 60_000)

@@ -67,7 +67,13 @@ export async function getStudentAnalysis(studentId, analysisId) {
 
 export function addActivity(store, activity) {
   store.activity.unshift(activity)
-  store.activity = store.activity.slice(0, 100)
+  const perStudent = new Map()
+  store.activity = store.activity.filter((item) => {
+    const key = item.studentId || 'system'
+    const count = perStudent.get(key) || 0
+    perStudent.set(key, count + 1)
+    return count < 100
+  })
 }
 
 export function buildTaskSummary(task, files = []) {

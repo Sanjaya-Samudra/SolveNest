@@ -801,7 +801,6 @@ export async function postAssignmentMessage(id, body) {
     readAt: null,
   }
   assignment.workspace.messages.push(message)
-  assignment.workspace.messages = assignment.workspace.messages.slice(-200)
   touchAssignment(assignment, { latestKind: 'message', latestText: `Message sent: ${text}` })
   await writeExpertStore(store)
   return { ok: true, message, unread: assignment.workspace.messages.filter((item) => item.from !== 'expert' && !item.readAt).length }
@@ -827,6 +826,7 @@ export async function addAssignmentFile(id, section, meta) {
   const assignment = findRawAssignment(store, id)
   if (!assignment) return { ok: false, error: 'ASSIGNMENT_NOT_FOUND' }
   if (assignment.workState === 'delivered' && !assignment.workspace.revision.active) return { ok: false, error: 'ASSIGNMENT_CLOSED' }
+  if (target === 'submission' && ['in_review', 'approved'].includes(assignment.workspace.qa.state)) return { ok: false, error: 'QA_FILES_LOCKED' }
   const file = normalizeFileRecord({
     id: crypto.randomUUID(),
     name: meta.name,
@@ -853,6 +853,7 @@ export async function removeAssignmentFile(id, fileId) {
   for (const section of FILE_SECTION_VALUES) {
     const index = assignment.workspace.files[section].findIndex((file) => file.id === wanted)
     if (index >= 0) {
+      if (section === 'submission' && ['in_review', 'approved'].includes(assignment.workspace.qa.state)) return { ok: false, error: 'QA_FILES_LOCKED' }
       if ((assignment.workspace.deliveryHistory || []).some((delivery) => delivery.fileIds?.includes(wanted)) || assignment.workspace.delivery.fileIds.includes(wanted)) return { ok: false, error: 'FILE_IMMUTABLE' }
       const [file] = assignment.workspace.files[section].splice(index, 1)
       if (file.origin !== 'expert') {
@@ -955,6 +956,7 @@ export async function applyQaOutcome(id, outcome, feedbackItems = [], actorId = 
     workspace.qa.state = 'approved'
     workspace.qa.reviewerId = actorId
     workspace.qa.reviewNote = String(reviewNote || '').trim().slice(0, 2000) || null
+    workspace.qa.approvedFileIds = workspace.files.submission.map((file) => file.id)
     if (actorId) {
       store.staffQaAudit = Array.isArray(store.staffQaAudit) ? store.staffQaAudit : []
       store.staffQaAudit.unshift({ id: crypto.randomUUID(), assignmentId: id, actorId, outcome, note: workspace.qa.reviewNote, feedback: [], at: stampValue })
@@ -970,6 +972,7 @@ export async function applyQaOutcome(id, outcome, feedbackItems = [], actorId = 
   if (!items.length) return { ok: false, error: 'QA_FEEDBACK_REQUIRED' }
   workspace.qa.reviewedAt = stampValue
   workspace.qa.state = 'changes_requested'
+  workspace.qa.approvedFileIds = []
   workspace.qa.reviewerId = actorId
   workspace.qa.reviewNote = String(reviewNote || '').trim().slice(0, 2000) || null
   workspace.qa.feedback = items.slice(0, 20).map((item) => normalizeFeedback({
@@ -1001,6 +1004,8 @@ export async function deliverAssignment(id, { note } = {}) {
   if (workspace.qa.state !== 'approved') return { ok: false, error: 'QA_APPROVAL_REQUIRED' }
   const submission = workspace.files.submission
   if (!submission.length) return { ok: false, error: 'DELIVERY_FILES_REQUIRED' }
+  const approvedFileIds = Array.isArray(workspace.qa.approvedFileIds) ? workspace.qa.approvedFileIds : []
+  if (approvedFileIds.length !== submission.length || !submission.every((file) => approvedFileIds.includes(file.id))) return { ok: false, error: 'QA_FILES_CHANGED' }
   const stampValue = touchAssignment(assignment, { workState: 'delivered', latestKind: 'delivery', latestText: note ? `Delivery submitted: ${clipText(note, 100)}` : 'Delivery submitted.' })
   workspace.delivery = {
     state: 'delivered',
@@ -1023,6 +1028,7 @@ export async function beginAssignmentRevision(id) {
   const assignment = findRawAssignment(store, id)
   if (!assignment) return { ok: false, error: 'ASSIGNMENT_NOT_FOUND' }
   const workspace = assignment.workspace
+  if (assignment.workState === 'working' && workspace.revision.active) return { ok: true, revision: workspace.revision, qa: workspace.qa, workState: assignment.workState, updatedAt: assignment.updatedAt, replayed: true }
   if (assignment.workState !== 'delivered') return { ok: false, error: 'ASSIGNMENT_NOT_DELIVERED' }
   workspace.qaLog.unshift({ ...workspace.qa, loggedAt: nowIso() })
   workspace.qaLog = workspace.qaLog.slice(0, 10)

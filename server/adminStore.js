@@ -137,10 +137,26 @@ export async function recordAdminReview(taskId, actorId, action, note) {
     if (index >= 0) store.reviews[index] = next
     else store.reviews.push({ id: crypto.randomUUID(), createdAt: stamp, ...next })
     task.review = next
+    if (action === 'approve') {
+      task.status = 'REVIEW_APPROVED'
+      task.latestUpdate = { text: 'Your task passed feasibility review. SolveNest is preparing the official plan.', createdAt: stamp }
+      task.nextAction = null
+    } else if (action === 'request_info') {
+      task.status = 'NEEDS_INFORMATION'
+      task.latestUpdate = { text: cleanNote, createdAt: stamp }
+      task.nextAction = { label: 'Add requested information', route: `/student/files?task=${task.id}&section=source` }
+    } else if (action === 'decline') {
+      task.status = 'DECLINED'
+      task.latestUpdate = { text: cleanNote, createdAt: stamp }
+      task.nextAction = null
+    } else {
+      task.latestUpdate = { text: 'SolveNest has started reviewing your task.', createdAt: stamp }
+    }
     task.updatedAt = stamp
     store.adminAudit = store.adminAudit || []
     store.adminAudit.unshift({ id: crypto.randomUUID(), taskId, actorId, action, note: cleanNote || null, at: stamp })
-    return { ok: true, status: next.status }
+    store.activity.unshift({ id: crypto.randomUUID(), studentId: task.studentId, taskId, type: `Review${next.status}`, text: task.latestUpdate.text, createdAt: stamp })
+    return { ok: true, status: next.status, action, studentId: task.studentId, title: task.title, updatedAt: stamp }
   })
 }
 
