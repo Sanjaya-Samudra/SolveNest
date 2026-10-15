@@ -51,6 +51,7 @@ import {
 import { addActivity, buildTaskSummary, getStudentAnalysis, getStudentFiles, getStudentTask, getStudentTasks, readTaskStore, withTaskStore } from './taskStore.js'
 import { publish, subscribe, closeStreams } from './realtime.js'
 import { hasObjectStorage, persistUpload, removeStoredObject, signedObjectUrl } from './storage.js'
+import { cleanupUploads } from './uploadCleanup.js'
 import { hasEmail, sendEmail } from './email.js'
 import { exportStudentAccount } from './accountExport.js'
 import { hasSupabase, hasSupabaseAuth, supabaseChangeStaffRole, supabaseConsumeRateLimit, supabaseCreateAppSession, supabaseDeleteAppSession, supabaseExpertProfiles, supabaseFindProfileByEmail, supabaseGetAppSession, supabaseProfile, supabaseRefresh, supabaseRequestPasswordReset, supabaseRevokeUserSessions, supabaseTeam, supabaseUpdatePassword, supabaseSignIn, supabaseSignUp, supabaseUser } from './supabase.js'
@@ -67,6 +68,7 @@ const ADMIN_COOKIE = 'sn_admin'
 const SUPERADMIN_COOKIE = 'sn_superadmin'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const uploadDir = path.join(__dirname, 'private-uploads')
+const dataDir = path.join(__dirname, 'data')
 const requestWindows = new Map()
 const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null
 fs.mkdirSync(uploadDir, { recursive: true })
@@ -2515,11 +2517,23 @@ const scopeSyncTimer = setInterval(async () => {
   finally { scopeSyncRunning = false }
 }, 60_000)
 scopeSyncTimer.unref()
+let uploadCleanupRunning = false
+const runUploadCleanup = async () => {
+  if (uploadCleanupRunning) return
+  uploadCleanupRunning = true
+  try { await cleanupUploads({ uploadDir, dataDir }) }
+  catch (error) { console.error('[uploads] cleanup failed', error.message) }
+  finally { uploadCleanupRunning = false }
+}
+const uploadCleanupTimer = setInterval(runUploadCleanup, 6 * 60 * 60 * 1000)
+uploadCleanupTimer.unref()
+runUploadCleanup()
 let shuttingDown = false
 function shutdown(signal) {
   if (shuttingDown) return
   shuttingDown = true
   clearInterval(scopeSyncTimer)
+  clearInterval(uploadCleanupTimer)
   closeStreams()
   console.log(JSON.stringify({ level: 'info', type: 'shutdown', signal }))
   server.close((error) => process.exit(error ? 1 : 0))

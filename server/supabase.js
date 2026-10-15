@@ -176,11 +176,11 @@ export async function supabaseWriteState(state) {
   const changes = []
   for (const [identity, record] of current) {
     const previous = baseline.get(identity)
-    if (!previous || previous.position !== record.position || JSON.stringify(previous.payload) !== JSON.stringify(record.payload)) changes.push(record)
+    if (!previous || JSON.stringify(previous.payload) !== JSON.stringify(record.payload)) changes.push({ ...record, position: previous?.position ?? -Date.parse(record.payload?.createdAt || record.payload?.updatedAt || new Date().toISOString()), expectedExists: Boolean(previous), expectedPayload: previous?.payload ?? null })
   }
-  for (const [identity, previous] of baseline) if (!current.has(identity)) changes.push({ collection: previous.collection, key: previous.key, payload: null, position: previous.position })
+  for (const [identity, previous] of baseline) if (!current.has(identity)) changes.push({ collection: previous.collection, key: previous.key, payload: null, position: previous.position, expectedExists: true, expectedPayload: previous.payload })
   if (!changes.length) return state
-  const { data, error } = await adminClient.rpc('apply_domain_changes', { p_expected_revision: revision, p_changes: changes })
+  const { data, error } = await adminClient.rpc('apply_domain_changes_v2', { p_changes: changes })
   if (error) {
     if (String(error.message).includes('APP_STATE_CONFLICT') || error.code === '40001') throw new Error('APP_STATE_CONFLICT')
     throw error
@@ -223,3 +223,31 @@ export async function supabaseRefresh(refreshToken) { if (!authClient || !refres
 export async function supabaseUpload(file, key) { if (!adminClient) return false; const { error } = await adminClient.storage.from(bucket).upload(key, fs.readFileSync(file.path), { contentType: file.mimetype, upsert: false }); if (error) throw error; try { fs.unlinkSync(file.path) } catch {} return true }
 export async function supabaseRemove(key) { if (!adminClient) return false; const { error } = await adminClient.storage.from(bucket).remove([key]); if (error) throw error; return true }
 export async function supabaseSignedUrl(key, expiresIn = 600) { if (!adminClient) return null; const { data, error } = await adminClient.storage.from(bucket).createSignedUrl(key, expiresIn); if (error) throw error; return data.signedUrl }
+export async function supabaseListObjects(prefix = '') {
+  if (!adminClient) return []
+  const objects = []
+  for (let offset = 0; ; offset += 1000) {
+    const { data, error } = await adminClient.storage.from(bucket).list(prefix, { limit: 1000, offset, sortBy: { column: 'name', order: 'asc' } })
+    if (error) throw error
+    for (const item of data || []) if (item.id) objects.push({ key: prefix ? `${prefix}/${item.name}` : item.name, lastModified: item.updated_at || item.created_at || null })
+    if (!data || data.length < 1000) break
+  }
+  return objects
+}
+export async function supabasePublishRealtimeEvent(audience, event, origin) {
+  if (!adminClient) return null
+  const { data, error } = await adminClient.from('realtime_events').insert({ audience, event, origin }).select('id').single()
+  if (error) throw error
+  return Number(data.id)
+}
+export async function supabaseReadRealtimeEvents(afterId, since) {
+  if (!adminClient) return []
+  const { data, error } = await adminClient.from('realtime_events').select('id, audience, event, origin').gt('id', afterId).gte('created_at', since).order('id').limit(250)
+  if (error) throw error
+  return data || []
+}
+export async function supabasePruneRealtimeEvents(before) {
+  if (!adminClient) return
+  const { error } = await adminClient.from('realtime_events').delete().lt('created_at', before)
+  if (error) throw error
+}
