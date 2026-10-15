@@ -464,15 +464,45 @@ app.post('/api/guest/analysis-transfer', asyncRoute(async (req, res) => {
   res.status(201).json({ transferToken: token, expiresAt: transfer.expiresAt })
 }))
 
+app.post('/api/guest/analyze', asyncRoute(async (req, res, next) => {
+  if (!await limited(`guest-analysis:${req.ip}`, 3)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before analyzing another brief.')
+  next()
+}), (req, res, next) => upload.single('file')(req, res, (error) => error ? safeError(res, error.code === 'LIMIT_FILE_SIZE' ? 413 : 400, 'FILE_UPLOAD_REJECTED', 'Choose a supported file up to 25 MB.') : next()), asyncRoute(async (req, res) => {
+  if (!req.file || req.file.size > 25 * 1024 * 1024) {
+    if (req.file?.path) try { fs.unlinkSync(req.file.path) } catch {}
+    return safeError(res, 400, 'FILE_REQUIRED', 'Choose a supported brief up to 25 MB.')
+  }
+  if (await rejectInvalidUpload(res, req.file)) return
+  const file = { id: crypto.randomUUID(), studentId: null, taskId: null, analysisSessionId: null, role: 'BRIEF', originalName: path.basename(req.file.originalname), storageKey: hasObjectStorage() ? `guest/${req.file.filename}` : req.file.filename, mimeType: req.file.mimetype, size: req.file.size, state: 'READY', createdAt: now() }
+  try { await persistUpload(req.file, file.storageKey) } catch { return safeError(res, 503, 'STORAGE_UNAVAILABLE', 'The brief could not be stored securely.') }
+  let analysis
+  try { analysis = await analyzeWithSolvy([file]) }
+  catch (error) { try { await removeStoredObject(file.storageKey) } catch {}; return safeError(res, 502, 'ANALYSIS_FAILED', 'The brief could not be analyzed right now. Please try again.') }
+  const token = crypto.randomBytes(32).toString('base64url')
+  const transfer = { tokenHash: hashTransferToken(token), analysis, files: [file], expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), claimedBy: null, createdAt: now() }
+  await withTaskStore((store) => { store.guestTransfers = store.guestTransfers.filter((item) => new Date(item.expiresAt).getTime() > Date.now()); store.guestTransfers.push(transfer) })
+  res.status(201).json({ transferToken: token, analysis, expiresAt: transfer.expiresAt })
+}))
+
 app.post('/api/student/analysis-transfer/claim', requireStudent, asyncRoute(async (req, res) => {
   const token = String(req.body?.transferToken || '')
   const transfer = await withTaskStore((store) => {
     const item = store.guestTransfers.find((candidate) => candidate.tokenHash === hashTransferToken(token) && !candidate.claimedBy && new Date(candidate.expiresAt).getTime() > Date.now())
-    if (item) Object.assign(item, { claimedBy: req.student.studentId, claimedAt: now() })
+    if (item) {
+      const stamp = now()
+      Object.assign(item, { claimedBy: req.student.studentId, claimedAt: stamp })
+      const draft = { id: crypto.randomUUID(), studentId: req.student.studentId, status: 'ACTIVE', expiresAt: item.expiresAt, createdAt: stamp, updatedAt: stamp }
+      store.drafts.push(draft)
+      const files = (item.files || []).map((file) => ({ ...file, studentId: req.student.studentId, analysisSessionId: draft.id }))
+      for (const file of files) if (!store.files.some((existing) => existing.id === file.id)) store.files.push(file)
+      const analysis = { id: crypto.randomUUID(), studentId: req.student.studentId, sessionId: draft.id, fileIds: files.map((file) => file.id), status: 'COMPLETED', result: item.analysis, createdAt: stamp, updatedAt: stamp }
+      store.analyses.push(analysis)
+      item.claim = { sessionId: draft.id, analysisId: analysis.id, fileIds: analysis.fileIds }
+    }
     return item || null
   })
   if (!transfer) return safeError(res, 404, 'TRANSFER_NOT_FOUND', 'This analysis transfer is expired or invalid.')
-  res.json({ analysis: transfer.analysis, claimed: true })
+  res.json({ analysis: transfer.analysis, claim: transfer.claim, claimed: true })
 }))
 
 app.post('/api/student/task-creation/files', requireStudent, asyncRoute(async (req, res, next) => {
@@ -1143,7 +1173,7 @@ app.get('/api/student/explain/usage', requireStudent, asyncRoute(async (req, res
 app.get('/api/student/explain/artifacts/:artifactId/content', requireStudent, asyncRoute(async (req, res) => {
   const file = await ownedFile(req.student.studentId, req.params.artifactId)
   if (!file) return safeError(res, 404, 'ARTIFACT_NOT_FOUND', 'Artifact not found.')
-  const url = await signedObjectUrl(file.storageKey, file.originalName)
+  const url = await signedObjectUrl(file.storageKey, file.originalName, 'inline')
   res.json({ kind: 'document', title: file.originalName, sourceUrl: url, text: null })
 }))
 

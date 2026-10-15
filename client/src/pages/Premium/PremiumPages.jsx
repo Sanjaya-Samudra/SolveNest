@@ -29,4 +29,25 @@ export function PlansPage() { return <><PageIntro eyebrow="Plans & estimates" ti
 export function WhyPage() { return <><PageIntro eyebrow="Why SolveNest" title={<>A new category of<br /><em>academic support.</em></>} text="Premium Academic Intelligence + Human Expertise, built around clarity, capability, and responsible delivery." /><section className="why-grid">{[['Clarity before commitment', 'Understand the path before you pay for it.'], ['AI with accountability', 'Solvy can recommend. Authorized humans decide.'], ['Controlled expert network', 'Internal experts work inside a managed operation.'], ['Quality before delivery', 'A deliverable passes review before it reaches you.'], ['Student understanding', 'Support should strengthen capability, not replace ownership.'], ['Transparent progress', 'Task states show what happened and what comes next.']].map(([title, text], i) => <article key={title}><span>0{i + 1}</span><h3>{title}</h3><p>{text}</p><div className="why-line" /></article>)}</section><section className="ai-human"><div><Sparkles /><span>Solvy</span><b>Accelerates understanding</b></div><strong>+</strong><div><Users /><span>Human expertise</span><b>Owns important decisions</b></div></section></> }
 export function HelpPage() { const [active, setActive] = useState(0); return <><PageIntro eyebrow="Help centre" title={<>Find a clearer<br /><em>answer.</em></>} text="Search the basics about analysis, quotes, payments, files, progress, revisions, and academic integrity." /><section className="help-search"><Search size={20} /><input placeholder="What would you like to know?" /></section><section className="help-grid"><div className="help-topics">{['Getting Started', 'Guest Analysis', 'Quotes', 'Payments', 'Task Progress', 'Files', 'Revisions', 'Privacy', 'Academic Integrity'].map((item) => <button key={item}>{item}<ArrowRight size={15} /></button>)}</div><div className="faq-list">{faqs.map(([q, a], i) => <div className={active === i ? 'faq-item active' : 'faq-item'} key={q}><button onClick={() => setActive(active === i ? -1 : i)}><span>{q}</span><ChevronDown size={17} /></button>{active === i && <motion.p initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }}>{a}</motion.p>}</div>)}</div></section></> }
 export function ConnectPage() { return <><PageIntro eyebrow="Connect" title={<>Let’s make the<br /><em>next step clearer.</em></>} text="Choose the kind of conversation you need. For a task question, the fastest route is the Analyze My Task flow." /><section className="connect-layout"><div className="connect-options">{['General support', 'Task question', 'Payment support', 'Technical issue', 'Business enquiry'].map((item, i) => <button key={item} className={i === 0 ? 'selected' : ''}>{item}<ArrowRight size={16} /></button>)}</div><form className="connect-form"><label>Your name<input placeholder="How should we address you?" /></label><label>Email address<input type="email" placeholder="you@example.com" /></label><label>Message<textarea placeholder="Tell us what you need help understanding..." /></label><button className="p-cta p-cta-dark" type="button">Send message <ArrowRight size={17} /></button></form><div className="connect-orb"><IntelligenceCore /></div></section></> }
-export function AnalyzePage() { return <section className="analyze-page"><IntakeCanvas onAnalyze={({ brief }) => routeTo('/register')} /></section> }
+export function AnalyzePage() {
+  const [transfer, setTransfer] = useState(null)
+  const upload = (file, onProgress) => new Promise((resolve, reject) => {
+    const body = new FormData()
+    body.append('file', file)
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', '/api/guest/analyze')
+    xhr.withCredentials = true
+    xhr.upload.onprogress = (event) => event.lengthComputable && onProgress?.((event.loaded / event.total) * 100)
+    xhr.onerror = () => reject(new Error('The analysis service could not be reached.'))
+    xhr.onload = () => {
+      let payload = {}
+      try { payload = JSON.parse(xhr.responseText) } catch {}
+      if (xhr.status < 200 || xhr.status >= 300) return reject(new Error(payload.message || 'The brief could not be analyzed.'))
+      setTransfer(payload)
+      window.localStorage.setItem('solvenest-analysis-transfer', payload.transferToken)
+      resolve(payload)
+    }
+    xhr.send(body)
+  })
+  return <section className="analyze-page"><IntakeCanvas onUpload={upload} onAnalyze={() => transfer?.transferToken && routeTo('/register')} /></section>
+}

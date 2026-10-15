@@ -405,6 +405,8 @@ function DocumentView({ content, viewer, zoom, activeAnchor, searchQuery }) {
   const matchIds = useMemo(() => new Set(viewer.matches.filter((m) => m.type === 'block').map((m) => m.id)), [viewer.matches])
   const query = searchQuery.trim().toLowerCase()
 
+  if (content.sourceUrl && !content.pages?.length) return <iframe className="sn-ex-document-frame" src={content.sourceUrl} title={content.title || 'Delivery document'} />
+
   return (
     <div className="sn-ex-doc" style={{ '--sn-ex-zoom': zoom }}>
       {content.pages.map((page, pageIndex) => (

@@ -652,8 +652,9 @@ export function normalizeArtifactContent(payload) {
   const title = payload.title || payload.name || null
   if (kind === 'document') {
     const pages = normalizePages(payload)
-    if (!pages.length) return null
-    return { kind, title, pages }
+    const sourceUrl = payload.sourceUrl || payload.url || null
+    if (!pages.length && !sourceUrl) return null
+    return { kind, title, pages, sourceUrl }
   }
   if (kind === 'code') {
     const files = normalizeCodeFiles(payload)

@@ -19,8 +19,8 @@ export async function removeStoredObject(key) {
   if (hasObjectStorage()) return client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }))
   return undefined
 }
-export async function signedObjectUrl(key, filename) {
+export async function signedObjectUrl(key, filename, disposition = 'attachment') {
   if (hasSupabaseStorage()) return supabaseSignedUrl(key)
   if (!hasObjectStorage()) return null
-  return getSignedUrl(client, new GetObjectCommand({ Bucket: bucket, Key: key, ResponseContentDisposition: `attachment; filename="${path.basename(filename)}"` }), { expiresIn: 600 })
+  return getSignedUrl(client, new GetObjectCommand({ Bucket: bucket, Key: key, ResponseContentDisposition: `${disposition}; filename="${path.basename(filename)}"` }), { expiresIn: 600 })
 }
