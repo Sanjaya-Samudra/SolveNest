@@ -115,14 +115,14 @@ function formatWhen(iso) {
 export async function getAccountView({ student, sessions = [], activeSessionId = null, activeTasks = 0, sessionRevoke = true }) {
   const account = await readAccount(student?.studentId || 'demo-student')
   const name = account.profile.fullName || student?.name || ''
-  const memberSince = formatWhen(account.createdAt)
+  const memberSince = formatWhen(student?.createdAt || account.createdAt)
 
   return {
     identity: {
       studentId: student?.studentId || account.studentId || null,
       name,
       email: student?.email || null,
-      emailVerified: Boolean(account.security.emailVerified),
+      emailVerified: Boolean(student?.emailVerified ?? account.security.emailVerified),
       memberSince,
       avatarUrl: student?.avatarUrl || null,
     },
@@ -135,7 +135,7 @@ export async function getAccountView({ student, sessions = [], activeSessionId =
     security: {
       passwordChangedAt: formatWhen(account.security.passwordChangedAt),
       twoStepEnabled: Boolean(account.security.twoStepEnabled),
-      emailVerified: Boolean(account.security.emailVerified),
+      emailVerified: Boolean(student?.emailVerified ?? account.security.emailVerified),
       passwordChangeSupported: Boolean(account.security.passwordChangeSupported),
       twoStepSupported: false,
     },
@@ -191,6 +191,16 @@ export async function updatePreferences(studentId, patch = {}) {
       account.preferences[key] = patch[key]
     }
   }
+  await writeAccount(account)
+  return account
+}
+
+export async function recordAccountRegistration(studentId, { name = '', emailVerified = false, createdAt = null, policyConsents = [] } = {}) {
+  const account = await readAccount(studentId)
+  if (createdAt) account.createdAt = createdAt
+  if (name && !account.profile.fullName) account.profile.fullName = cleanString(name) || ''
+  account.security.emailVerified = Boolean(emailVerified)
+  account.policyConsents = (Array.isArray(policyConsents) ? policyConsents : []).map((item) => ({ id: String(item.id || ''), title: String(item.title || item.id || ''), version: String(item.version || ''), acceptedAt: item.acceptedAt || new Date().toISOString() })).filter((item) => item.id && item.version)
   await writeAccount(account)
   return account
 }

@@ -7,7 +7,7 @@ import express from 'express'
 import multer from 'multer'
 import Stripe from 'stripe'
 import { authenticateUser, createSession, createUser, deleteSession, getSession, listSessions } from './authStore.js'
-import { getAccountView, updatePreferences, updateProfile } from './accountStore.js'
+import { getAccountView, recordAccountRegistration, updatePreferences, updateProfile } from './accountStore.js'
 import { addNotification, listNotifications, markAllRead, markRead, unreadCount } from './store.js'
 import { getCatalog, resolveGuidance, searchHelp } from './helpStore.js'
 import { createSupportTicket, getStudentSupportTicket, listStudentSupportTickets, listSupportTickets, getSupportTicket, replyToSupportTicket, updateSupportTicket } from './supportStore.js'
@@ -27,7 +27,9 @@ import {
   getAssignmentQa,
   getAssignmentRequirements,
   getAssignmentWork,
+  getAvailableTask,
   listAvailableTasks,
+  listExpertInterests,
   listMovement,
   markAssignmentMessagesRead,
   markExpertNotificationsRead,
@@ -473,7 +475,10 @@ app.post('/api/student/analysis-transfer/claim', requireStudent, asyncRoute(asyn
   res.json({ analysis: transfer.analysis, claimed: true })
 }))
 
-app.post('/api/student/task-creation/files', requireStudent, (req, res, next) => {
+app.post('/api/student/task-creation/files', requireStudent, asyncRoute(async (req, res, next) => {
+  if (!await limited(`student-upload:${req.student.studentId}`, 20)) return safeError(res, 429, 'UPLOAD_RATE_LIMITED', 'Please wait before uploading more files.')
+  next()
+}), (req, res, next) => {
   upload.single('file')(req, res, (error) => {
     if (error) {
       const code = error.code === 'LIMIT_FILE_SIZE' ? 'FILE_TOO_LARGE' : 'FILE_UPLOAD_REJECTED'
@@ -553,6 +558,7 @@ app.delete('/api/student/files/:fileId', requireStudent, asyncRoute(async (req, 
 }))
 
 app.post('/api/student/dossiers/:taskId/files', requireStudent, asyncRoute(async (req, res, next) => {
+  if (!await limited(`student-upload:${req.student.studentId}`, 20)) return safeError(res, 429, 'UPLOAD_RATE_LIMITED', 'Please wait before uploading more files.')
   const task = await getStudentTask(req.student.studentId, req.params.taskId)
   if (!task) return safeError(res, 404, 'TASK_NOT_FOUND', 'Task not found.')
   if (task.assignedExpertId) return safeError(res, 409, 'TASK_FILES_LOCKED', 'Contact support to add materials after Expert assignment.')
@@ -799,7 +805,10 @@ app.patch('/api/student/conversations/:conversationId/read', requireStudent, asy
   res.json({ ok: true })
 }))
 
-app.post('/api/student/conversations/:conversationId/files', requireStudent, (req, res, next) => {
+app.post('/api/student/conversations/:conversationId/files', requireStudent, asyncRoute(async (req, res, next) => {
+  if (!await limited(`student-upload:${req.student.studentId}`, 20)) return safeError(res, 429, 'UPLOAD_RATE_LIMITED', 'Please wait before uploading more files.')
+  next()
+}), (req, res, next) => {
   upload.single('file')(req, res, async (error) => {
     try {
       if (error || !req.file) return safeError(res, 400, 'FILE_UPLOAD_REJECTED', 'This file could not be uploaded.')
@@ -1180,7 +1189,7 @@ async function ensureStudentSession(req, res) {
     }
     if (user) {
       const profile = await supabaseProfile(user.id)
-      if (profile?.role === 'Student') return { id: user.id, role: 'Student', studentId: user.id, name: profile.name || user.user_metadata?.name || 'Student', email: user.email || null, device: userAgentLabel(req.headers['user-agent']) }
+      if (profile?.role === 'Student') return { id: user.id, role: 'Student', studentId: user.id, name: profile.name || user.user_metadata?.name || 'Student', email: user.email || null, emailVerified: Boolean(user.email_confirmed_at), createdAt: user.created_at || null, device: userAgentLabel(req.headers['user-agent']) }
     }
     const err = new Error('STUDENT_ACCESS_REQUIRED')
     err.status = 401
@@ -1692,8 +1701,15 @@ app.post('/api/expert/assignments/:assignmentId/qa/outcome', requireExpert, expe
 }))
 
 app.get('/api/expert/available-tasks', requireExpert, expertRoute(async (req, res) => {
-  const limit = Number(req.query.limit) || 3
-  res.json({ tasks: await listAvailableTasks(limit) })
+  const limit = Number(req.query.limit) || 20
+  const offset = Math.max(0, Number(req.query.offset) || 0)
+  const all = await listAvailableTasks(100, 0)
+  res.json({ tasks: all.slice(offset, offset + Math.min(limit, 100)), meta: { total: all.length, limit: Math.min(limit, 100), offset } })
+}))
+app.get('/api/expert/available-tasks/:taskId', requireExpert, expertRoute(async (req, res) => {
+  const task = await getAvailableTask(req.params.taskId)
+  if (!task) return safeError(res, 404, 'TASK_NOT_FOUND', 'Task not found.')
+  res.json({ task })
 }))
 
 app.post('/api/expert/available-tasks/__provision', requireExpert, expertRoute(async (req, res) => {
@@ -1755,12 +1771,14 @@ app.post('/api/auth/register', asyncRoute(async (req, res) => {
   if (hasSupabaseAuth()) {
     const { data, error } = await supabaseSignUp({ name: String(name).trim(), email: String(email).trim(), password })
     if (error) return safeError(res, 400, 'AUTH_SIGNUP_FAILED', error.message)
+    if (data.user) await recordAccountRegistration(data.user.id, { name: String(name).trim(), emailVerified: Boolean(data.user.email_confirmed_at), createdAt: data.user.created_at, policyConsents: req.body?.policyConsents })
     if (data.session) setSupabaseCookies(res, data.session)
     return res.status(data.session ? 201 : 202).json({ user: data.user ? { id: data.user.id, role: 'Student', name: data.user.user_metadata?.name || name, email: data.user.email } : null, emailConfirmationRequired: !data.session })
   }
   const user = createUser({ name, email, password })
   if (!user) return safeError(res, 409, 'EMAIL_IN_USE', 'An account already exists for that email.', { email: 'This email is already registered.' })
   const session = createSession(user, userAgentLabel(req.headers['user-agent']))
+  await recordAccountRegistration(user.id, { name: user.name, emailVerified: true, policyConsents: req.body?.policyConsents })
   setSessionCookie(res, session.id)
   sendEmail({ to: user.email, subject: 'Welcome to SolveNest', text: `Your SolveNest Student account is ready, ${user.name}.` }).catch((error) => console.error('[email]', error.message))
   res.status(201).json({ user })
@@ -1814,11 +1832,13 @@ app.post('/api/auth/password-reset/complete', asyncRoute(async (req, res) => {
 }))
 
 const contactUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 1 }, fileFilter: (_req, file, callback) => callback(null, /\.(pdf|png|jpe?g|docx)$/i.test(file.originalname)) })
-app.post('/api/contact', (req, res, next) => contactUpload.single('attachment')(req, res, (error) => error ? safeError(res, 400, 'ATTACHMENT_INVALID', 'Choose a PDF, PNG, JPG or DOCX file smaller than 5 MB.') : next()), asyncRoute(async (req, res) => {
+app.post('/api/contact', asyncRoute(async (req, res, next) => {
+  if (!await limited(`contact:${req.ip}`, 5)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before sending another message.')
+  next()
+}), (req, res, next) => contactUpload.single('attachment')(req, res, (error) => error ? safeError(res, 400, 'ATTACHMENT_INVALID', 'Choose a PDF, PNG, JPG or DOCX file smaller than 5 MB.') : next()), asyncRoute(async (req, res) => {
   if (req.file && await rejectInvalidUpload(res, req.file)) return
   const { intent, name, email, message, ...details } = req.body || {}
   if (!['general', 'task', 'payment', 'technical', 'business'].includes(intent) || !String(name || '').trim() || !/^\S+@\S+\.\S+$/.test(String(email || '')) || !String(message || '').trim()) return safeError(res, 400, 'CONTACT_INVALID', 'Complete the required contact fields.')
-  if (!await limited(`contact:${req.ip}`, 5)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before sending another message.')
   if (!hasEmail() || !process.env.CONTACT_EMAIL) return safeError(res, 503, 'CONTACT_UNAVAILABLE', 'Contact messages are not configured yet.')
   const lines = [`Type: ${intent}`, `Name: ${String(name).trim()}`, `Email: ${String(email).trim()}`, ...Object.entries(details).filter(([, value]) => typeof value === 'string').map(([key, value]) => `${key}: ${value}`), '', String(message)]
   try {
@@ -2081,6 +2101,19 @@ app.post('/api/admin/login', staffRoute((req, res) => staffLogin(req, res, 'Admi
 app.get('/api/admin/me', requireAdmin, (req, res) => res.json({ staff: req.staff }))
 app.post('/api/admin/logout', requireAdmin, staffRoute((req, res) => staffLogout(req, res, 'Admin')))
 app.get('/api/admin/overview', requireAdmin, staffRoute(async (_req, res) => res.json(await getAdminOverview())))
+app.get('/api/admin/opportunities/interests', requireAdmin, staffRoute(async (_req, res) => res.json({ interests: await listExpertInterests() })))
+app.post('/api/admin/opportunities', requireAdmin, staffRoute(async (req, res) => {
+  const seed = req.body || {}
+  if (String(seed.title || '').trim().length < 5) return safeError(res, 400, 'TITLE_REQUIRED', 'Add an opportunity title.')
+  const experts = await supabaseExpertProfiles()
+  const targets = experts.length ? experts : [{ id: 'demo-expert', name: 'Demo Expert' }]
+  const results = []
+  for (const expert of targets) {
+    const result = await runForExpert({ id: expert.id, name: expert.name }, () => provisionAvailableTasks([seed]))
+    if (result.ok) results.push(...result.tasks.map((task) => ({ expertId: expert.id, task })))
+  }
+  res.status(201).json({ published: results.length, results })
+}))
 app.get('/api/admin/conversations', requireAdmin, staffRoute(async (_req, res) => {
   const state = await readTaskStore()
   const conversations = state.conversations.map((conversation) => ({ ...conversation, lastMessage: state.messages.filter((message) => message.conversationId === conversation.id).at(-1) || conversation.lastMessage })).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))

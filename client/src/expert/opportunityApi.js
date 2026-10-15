@@ -1,15 +1,15 @@
 import { apiFetch } from './expertApi.js'
 import { toExpertOpportunity } from './opportunityState.js'
 
-export async function fetchAvailableOpportunities({ limit = 12, signal } = {}) {
-  const query = new URLSearchParams({ limit: String(limit) })
+export async function fetchAvailableOpportunities({ limit = 100, offset = 0, signal } = {}) {
+  const query = new URLSearchParams({ limit: String(limit), offset: String(offset) })
   const payload = await apiFetch(`/api/expert/available-tasks?${query}`, { signal })
   return (payload.tasks || []).map(toExpertOpportunity).filter(Boolean)
 }
 
 export async function fetchOpportunityBriefing(opportunityId, { signal } = {}) {
-  const opportunities = await fetchAvailableOpportunities({ limit: 12, signal })
-  const found = opportunities.find((item) => item.id === String(opportunityId)) || null
+  const payload = await apiFetch(`/api/expert/available-tasks/${encodeURIComponent(opportunityId)}`, { signal })
+  const found = payload.task ? toExpertOpportunity(payload.task) : null
   if (!found) {
     const error = new Error('OPPORTUNITY_NOT_FOUND')
     error.code = 'OPPORTUNITY_NOT_FOUND'

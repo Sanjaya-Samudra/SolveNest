@@ -195,7 +195,8 @@ export function SignUpPage() {
     if (Object.keys(errs).length) return
     setStatus('sending')
     try {
-      const result = await registerStudent({ name: name.trim(), email: email.trim(), password })
+      const acceptedAt = new Date().toISOString()
+      const result = await registerStudent({ name: name.trim(), email: email.trim(), password, policyConsents: [{ id: 'terms', title: 'Terms of Use', version: '2026-10-15', acceptedAt }, { id: 'privacy', title: 'Privacy Notice', version: '2026-10-15', acceptedAt }, { id: 'integrity', title: 'Academic Integrity', version: '2026-10-15', acceptedAt }] })
       setStatus('idle')
       if (result.emailConfirmationRequired) setStep(1)
       else { setVerified(true); setStep(2) }

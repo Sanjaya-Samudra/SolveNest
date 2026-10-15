@@ -291,14 +291,28 @@ export async function getAssignment(id) {
   return (await listAssignments()).find((item) => item.id === wanted || item.taskId === wanted) || null
 }
 
-export async function listAvailableTasks(limit = 3) {
+export async function listAvailableTasks(limit = 20, offset = 0) {
   const store = await readExpertStore()
-  const capped = Math.max(1, Math.min(Number(limit) || 3, 12))
+  const capped = Math.max(1, Math.min(Number(limit) || 20, 100))
   return store.availableTasks
     .map(safeAvailable)
     .filter(Boolean)
-    .slice(0, capped)
+    .slice(Math.max(0, Number(offset) || 0), Math.max(0, Number(offset) || 0) + capped)
     .map((task) => ({ ...task, interestState: store.interests[task.id] || task.interestState }))
+}
+
+export async function getAvailableTask(id) {
+  const store = await readExpertStore()
+  const task = store.availableTasks.map(safeAvailable).find((item) => item?.id === String(id))
+  return task ? { ...task, interestState: store.interests[task.id] || task.interestState } : null
+}
+
+export async function listExpertInterests() {
+  const workspaces = await listExpertStores()
+  return workspaces.flatMap(({ id: expertId, store }) => Object.entries(store.interests || {}).filter(([, state]) => state === 'sent').map(([taskId]) => {
+    const task = store.availableTasks.map(safeAvailable).find((item) => item?.id === taskId)
+    return task ? { taskId, title: task.title, expertId, expertName: store.expert?.name || 'Expert', sentAt: store.movement.find((item) => item.kind === 'interest' && item.title === task.title)?.at || null } : null
+  }).filter(Boolean))
 }
 
 export async function listMovement() {

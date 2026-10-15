@@ -15,7 +15,7 @@ export function useOpportunities() {
     const controller = options.signal ? null : new AbortController()
     const signal = options.signal || controller?.signal
     setState((prev) => ({ ...prev, loading: true, error: null }))
-    return fetchAvailableOpportunities({ limit: 12, signal })
+    return fetchAvailableOpportunities({ limit: 100, signal })
       .then((list) => {
         setState({ loading: false, error: null, loaded: true, opportunities: list })
         return list
