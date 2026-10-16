@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { hasSupabase, supabaseReadState, supabaseWriteState } from './supabase.js'
+import { hasSupabase, supabaseReadDomainCollection, supabaseReadState, supabaseWriteState } from './supabase.js'
 import { getNotificationPreferences } from './accountStore.js'
 import { supabaseProfile } from './supabase.js'
 import { sendEmail } from './email.js'
@@ -51,7 +51,7 @@ async function updateNotifications(mutator) {
 }
 
 export async function listNotifications(studentId = null) {
-  if (hasSupabase()) { const state = await supabaseReadState(); return (state.notifications || []).filter((notification) => !studentId || notification.studentId === studentId) }
+  if (hasSupabase()) return supabaseReadDomainCollection('notifications', studentId ? { studentId } : {})
   const store = readStore()
   return store.notifications.filter((notification) => !studentId || notification.studentId === studentId)
 }

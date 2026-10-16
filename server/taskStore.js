@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { hasSupabase, supabaseReadState, supabaseWriteState } from './supabase.js'
+import { hasSupabase, supabaseReadDomainCollection, supabaseReadState, supabaseWriteState } from './supabase.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const dataDir = path.join(__dirname, 'data')
@@ -50,19 +50,33 @@ async function mutateTaskStore(mutator) {
 }
 
 export async function getStudentTasks(studentId) {
+  if (hasSupabase()) return (await supabaseReadDomainCollection('tasks', { studentId })).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
   return (await readTaskStore()).tasks.filter((task) => task.studentId === studentId).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
 }
 
 export async function getStudentTask(studentId, taskId) {
+  if (hasSupabase()) return (await supabaseReadDomainCollection('tasks', { studentId, recordKey: taskId }))[0] || null
   return (await readTaskStore()).tasks.find((task) => task.studentId === studentId && task.id === taskId) || null
 }
 
 export async function getStudentFiles(studentId, taskId = null) {
+  if (hasSupabase()) return supabaseReadDomainCollection('files', { studentId, ...(taskId ? { taskId } : {}) })
   return (await readTaskStore()).files.filter((file) => file.studentId === studentId && (!taskId || file.taskId === taskId))
 }
 
 export async function getStudentAnalysis(studentId, analysisId) {
+  if (hasSupabase()) return (await supabaseReadDomainCollection('analyses', { studentId, recordKey: analysisId }))[0] || null
   return (await readTaskStore()).analyses.find((analysis) => analysis.studentId === studentId && analysis.id === analysisId) || null
+}
+
+export async function readStudentSnapshot(studentId) {
+  if (!hasSupabase()) {
+    const state = await readTaskStore()
+    return Object.fromEntries(['tasks', 'files', 'activity', 'conversations', 'messages'].map((collection) => [collection, state[collection].filter((item) => item.studentId === studentId)]))
+  }
+  const collections = ['tasks', 'files', 'activity', 'conversations', 'messages']
+  const values = await Promise.all(collections.map((collection) => supabaseReadDomainCollection(collection, { studentId })))
+  return Object.fromEntries(collections.map((collection, index) => [collection, values[index]]))
 }
 
 export function addActivity(store, activity) {

@@ -166,6 +166,26 @@ export async function supabaseReadState() {
   }
   throw new Error('APP_STATE_CONFLICT')
 }
+
+export async function supabaseReadDomainCollection(collection, filters = {}) {
+  if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED')
+  if (!domainCollections.includes(collection)) throw new Error('DOMAIN_COLLECTION_INVALID')
+  let query = adminClient.from('domain_records').select('payload, position').eq('collection', collection)
+  if (filters.recordKey) query = query.eq('record_key', String(filters.recordKey))
+  for (const [key, value] of Object.entries(filters)) {
+    if (key === 'recordKey' || value === undefined || value === null || value === '') continue
+    if (!['studentId', 'taskId', 'conversationId', 'status', 'planId', 'paymentIntentId'].includes(key)) throw new Error('DOMAIN_FILTER_INVALID')
+    query = query.eq(`payload->>${key}`, String(value))
+  }
+  const rows = []
+  for (let offset = 0; ; offset += 500) {
+    const { data, error } = await query.order('position').order('record_key').range(offset, offset + 499)
+    if (error) throw error
+    rows.push(...(data || []).map((row) => row.payload))
+    if (!data || data.length < 500) break
+  }
+  return rows
+}
 export async function supabaseWriteState(state) {
   if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED')
   const revision = state.__revision

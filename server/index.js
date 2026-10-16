@@ -48,7 +48,7 @@ import {
   toExpertWorkspace,
   updateAssignmentWorkState,
 } from './expertStore.js'
-import { addActivity, buildTaskSummary, claimProviderEvent, completeProviderEvent, getStudentAnalysis, getStudentFiles, getStudentTask, getStudentTasks, readTaskStore, releaseProviderEvent, withTaskStore } from './taskStore.js'
+import { addActivity, buildTaskSummary, claimProviderEvent, completeProviderEvent, getStudentAnalysis, getStudentFiles, getStudentTask, getStudentTasks, readStudentSnapshot, readTaskStore, releaseProviderEvent, withTaskStore } from './taskStore.js'
 import { publish, subscribe, closeStreams } from './realtime.js'
 import { hasObjectStorage, persistUpload, removeStoredObject, signedObjectUrl } from './storage.js'
 import { cleanupUploads } from './uploadCleanup.js'
@@ -324,6 +324,12 @@ function safeError(res, status, code, message, fieldErrors = {}) {
   res.status(status).json({ error: code, code, message, fieldErrors, retryable: status >= 500 })
 }
 
+function pageRequest(query, defaultSize = 20, maxSize = 100) {
+  const page = Math.max(1, Math.trunc(Number(query.page || 1)) || 1)
+  const perPage = Math.min(maxSize, Math.max(1, Math.trunc(Number(query.per_page || defaultSize)) || defaultSize))
+  return { page, perPage, offset: (page - 1) * perPage }
+}
+
 const studentRoute = (handler) => (req, res, next) => Promise.resolve(handler(req, res)).catch(next)
 
 async function limited(key, max = 10) {
@@ -390,8 +396,8 @@ async function solvyOperation(operation, payload) {
   } finally { clearTimeout(timeout) }
 }
 
-async function studentTaskPayload(task, studentId) {
-  return buildTaskSummary(task, await getStudentFiles(studentId, task.id))
+async function studentTaskPayload(task, studentId, knownFiles = null) {
+  return buildTaskSummary(task, knownFiles || await getStudentFiles(studentId, task.id))
 }
 
 function hashTransferToken(token) { return crypto.createHash('sha256').update(token).digest('hex') }
@@ -696,8 +702,12 @@ app.post('/api/student/task-creation/tasks', requireStudent, asyncRoute(async (r
 }))
 
 app.get('/api/student/tasks', requireStudent, asyncRoute(async (req, res) => {
-  const tasks = await Promise.all((await getStudentTasks(req.student.studentId)).map((task) => studentTaskPayload(task, req.student.studentId)))
-  res.json({ tasks, meta: { page: Number(req.query.page || 1), perPage: Number(req.query.per_page || 20), total: tasks.length } })
+  const { page, perPage, offset } = pageRequest(req.query)
+  const state = await readStudentSnapshot(req.student.studentId)
+  const all = state.tasks.filter((task) => task.studentId === req.student.studentId).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
+  const selected = all.slice(offset, offset + perPage)
+  const tasks = selected.map((task) => studentTaskPayload(task, req.student.studentId, state.files.filter((file) => file.studentId === req.student.studentId && file.taskId === task.id)))
+  res.json({ tasks: await Promise.all(tasks), meta: { page, perPage, total: all.length, pages: Math.max(1, Math.ceil(all.length / perPage)), hasMore: offset + selected.length < all.length } })
 }))
 
 app.get('/api/student/tasks/:taskId/preview', requireStudent, asyncRoute(async (req, res) => {
@@ -707,8 +717,12 @@ app.get('/api/student/tasks/:taskId/preview', requireStudent, asyncRoute(async (
 }))
 
 app.get('/api/student/dossiers', requireStudent, asyncRoute(async (req, res) => {
-  const dossiers = await Promise.all((await getStudentTasks(req.student.studentId)).map(async (task) => dossierPayload(task, await getStudentFiles(req.student.studentId, task.id))))
-  res.json({ dossiers, meta: { total: dossiers.length } })
+  const { page, perPage, offset } = pageRequest(req.query)
+  const state = await readStudentSnapshot(req.student.studentId)
+  const all = state.tasks.filter((task) => task.studentId === req.student.studentId).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
+  const selected = all.slice(offset, offset + perPage)
+  const dossiers = selected.map((task) => dossierPayload(task, state.files.filter((file) => file.studentId === req.student.studentId && file.taskId === task.id)))
+  res.json({ dossiers, meta: { page, perPage, total: all.length, pages: Math.max(1, Math.ceil(all.length / perPage)), hasMore: offset + selected.length < all.length } })
 }))
 
 app.get('/api/student/dossiers/:taskId', requireStudent, asyncRoute(async (req, res) => {
@@ -789,10 +803,12 @@ app.post('/api/student/dossiers/:taskId/revision', requireStudent, asyncRoute(as
 }))
 
 app.get('/api/student/dashboard', requireStudent, asyncRoute(async (req, res) => {
-  const tasks = await Promise.all((await getStudentTasks(req.student.studentId)).map((task) => studentTaskPayload(task, req.student.studentId)))
+  const state = await readStudentSnapshot(req.student.studentId)
+  const ownedTasks = state.tasks.filter((task) => task.studentId === req.student.studentId).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
+  const tasks = ownedTasks.map((task) => buildTaskSummary(task, state.files.filter((file) => file.studentId === req.student.studentId && file.taskId === task.id)))
   const notifications = await listNotifications(req.student.studentId)
-  const activity = (await readTaskStore()).activity.filter((item) => item.studentId === req.student.studentId).slice(0, 10)
-  const unreadMessages = (await readTaskStore()).conversations.filter((item) => item.studentId === req.student.studentId).reduce((total, item) => total + Number(item.unread || 0), 0)
+  const activity = state.activity.filter((item) => item.studentId === req.student.studentId).slice(0, 10)
+  const unreadMessages = state.conversations.filter((item) => item.studentId === req.student.studentId).reduce((total, item) => total + Number(item.unread || 0), 0)
   res.json({ student: { id: req.student.studentId, name: req.student.name, role: req.student.role, email: req.student.email || null }, tasks, notifications, recentActivity: activity, upcomingActions: [], unreadMessages })
 }))
 
@@ -808,11 +824,15 @@ app.get('/api/student/conversations', requireStudent, asyncRoute(async (req, res
 }))
 
 app.get('/api/student/conversations/:conversationId/messages', requireStudent, asyncRoute(async (req, res) => {
-  const state = await readTaskStore()
+  const state = await readStudentSnapshot(req.student.studentId)
   const conversation = state.conversations.find((item) => item.id === req.params.conversationId && item.studentId === req.student.studentId)
   if (!conversation) return safeError(res, 404, 'CONVERSATION_NOT_FOUND', 'Conversation not found.')
-  const messages = state.messages.filter((message) => message.conversationId === conversation.id)
-  res.json({ messages, meta: { total: messages.length, page: Number(req.query.page || 1), perPage: Number(req.query.per_page || 50) } })
+  const { page, perPage } = pageRequest(req.query, 50, 100)
+  const all = state.messages.filter((message) => message.conversationId === conversation.id)
+  const end = Math.max(0, all.length - (page - 1) * perPage)
+  const start = Math.max(0, end - perPage)
+  const messages = all.slice(start, end)
+  res.json({ messages, meta: { total: all.length, page, perPage, pages: Math.max(1, Math.ceil(all.length / perPage)), hasMore: start > 0 } })
 }))
 
 app.post('/api/student/conversations/:conversationId/messages', requireStudent, asyncRoute(async (req, res) => {
