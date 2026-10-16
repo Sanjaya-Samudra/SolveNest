@@ -32,6 +32,10 @@ jobs:
       - run: npm run build
       - run: npm audit --prefix server --omit=dev --audit-level=high
       - run: npm audit --prefix client --omit=dev --audit-level=high
+      - name: Generate dependency SBOMs
+        run: |
+          npm sbom --prefix server --sbom-format spdx > server-sbom.spdx.json
+          npm sbom --prefix client --sbom-format spdx > client-sbom.spdx.json
       - name: Build release image
         run: docker build --tag solvenest:${{ github.sha }} .
       - uses: actions/upload-artifact@v4
@@ -39,3 +43,8 @@ jobs:
           name: frontend-${{ github.sha }}
           path: client/dist
           retention-days: 14
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ github.sha }}
+          path: '*-sbom.spdx.json'
+          retention-days: 30

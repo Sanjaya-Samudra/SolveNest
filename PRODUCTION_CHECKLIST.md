@@ -42,15 +42,16 @@ Perform these checks in Stripe test mode and with non-sensitive sample files bef
 
 ## Latest implementation and verification status
 
-- Apply migrations 001 through 013 in order. The latest migrations protect concurrent Student account edits, relay live updates across API instances, and prevent unrelated domain writes from conflicting.
+- Apply migrations 001 through 016 in order. The latest migrations add scoped domain indexes, cross-instance scheduled-job leases, and a durable retrying notification-email outbox.
 - After building the client and configuring server/.env.production, run `npm run preflight --prefix server`. It reports configuration names only and does not validate provider connectivity.
 - For the supplied HTTPS proxy, set APP_DOMAIN and run `docker compose -f compose.production.yml -f compose.https.yml up -d --build`. Point DNS to the host first and configure the exact proxy hop count. See server/SETUP.md.
 - Student Account provides a JSON data export and a staff-reviewed closure request. Account deletion remains staff-reviewed because financial, dispute, and legal retention periods must be chosen for the launch jurisdiction before destructive deletion can be enabled.
 - Refund handling supports staff review, provider-backed execution, and payment/task reconciliation. Unfinished agreed work is eligible after verification; disputed completed work is reviewed against the accepted scope and delivery. Define the published partial-milestone calculation and jurisdiction-specific wording before launch.
-- Student notification preferences now govern future in-app and email delivery by task, message, and payment category. SMTP delivery is attempted only when email notifications are enabled.
+- Student notification preferences now govern future in-app and email delivery by task, message, and payment category. Enabled email notifications enter a durable outbox and are retried with backoff.
+- Signed Stripe events are claimed by provider event ID before processing. Subscribe to refund and dispute events as well as Checkout and PaymentIntent events.
 - The frontend production build and server syntax checks passed locally. No automated tests were written or run, as requested.
 - The browser automation surface was unavailable during the final pass. Complete the live-provider launch verification above at mobile, tablet, and desktop widths before accepting customers.
-- Database migrations, Docker runtime, SMTP, Stripe, Supabase, and Solvy still require verification with configured services. The preflight command cannot certify these integrations.
+- Database migrations, Docker runtime, SMTP, Stripe, Supabase, and Solvy still require verification with configured services. Set `ACTIVE_POLICY_VERSION` after legal review; the preflight command cannot certify these integrations.
 - The Why SolveNest route now uses its responsive document visual and builds to about 28 kB of route JavaScript instead of the previous approximately 885 kB WebGL chunk.
 
 ## Role navigation

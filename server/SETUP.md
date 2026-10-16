@@ -92,7 +92,7 @@ Expose a server-to-server Solvy endpoint that accepts authorized file metadata a
 
 ## 8. Payments
 
-Set the Stripe server variables, configure a Stripe webhook for `/api/payments/stripe/webhook`, and subscribe it to `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, and `checkout.session.expired`. Existing PaymentIntent events remain accepted for older payment records. The browser receives a short-lived hosted Checkout URL; Stripe secrets remain server-side. The return URL only brings the Student back to the app. Funding is recorded after a signed webhook or a provider status lookup confirms payment.
+Set the Stripe server variables, configure a Stripe webhook for `/api/payments/stripe/webhook`, and subscribe it to `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `checkout.session.expired`, `payment_intent.succeeded`, `payment_intent.payment_failed`, `charge.refunded`, `charge.dispute.created`, `charge.dispute.updated`, and `charge.dispute.closed`. Events are claimed by Stripe event ID before processing. The browser receives a short-lived hosted Checkout URL; Stripe secrets remain server-side. Funding is recorded only after provider confirmation.
 
 An Admin can issue either a full-payment plan or a two-milestone plan. The first milestone unlocks Expert assignment; the second must be paid before an approved delivery is released. The Admin chooses the first milestone percentage when issuing the quote. The plan shown to the Student lists both amounts before acceptance. Each milestone uses a separate Checkout Session and payment record.
 
@@ -107,7 +107,7 @@ Use `/api/health` as the liveness probe and `/api/ready` as the traffic readines
 ## 10. Release sequence and remaining gates
 
 1. Choose a production host for the static React build and Node API, and connect an HTTPS domain with same-origin `/api` routing.
-2. Create Supabase, run all thirteen migrations, create the private bucket, enable Email/password Auth, and make the first Superadmin through a trusted administrator.
+2. Create Supabase, run all sixteen migrations, create the private bucket, enable Email/password Auth, and make the first Superadmin through a trusted administrator.
 3. Configure an SMTP provider and the Supabase Auth email templates and redirect allowlist.
 4. Provide a real Solvy endpoint matching the documented analysis and Explain & Defend requests. The API cannot manufacture or configure that service.
 5. Create a Stripe account, configure Checkout credentials and the signed webhook, and verify that the chosen account supports the configured currency.
@@ -121,7 +121,7 @@ The code-level production gates are implemented: transactional domain rows, mand
 
 Run `npm --prefix server run preflight` from the repository root after filling `server/.env.production`. This reports missing configuration names without printing secret values. It validates configuration format only; it does not contact providers.
 
-Migrations 009 through 013 add durable Admin audit events, staff role invariants, Student account revision protection, a shared realtime relay, record-level domain concurrency, and supporting indexes. Apply every migration in order before deploying this release.
+Migrations 009 through 016 add durable Admin audit events, staff role invariants, Student account revision protection, a shared realtime relay, record-level domain concurrency, scoped read indexes, scheduled-job leases, and the notification outbox. Apply every migration in order before deploying this release.
 
 For the included HTTPS proxy, export `APP_DOMAIN` on the host and use `docker compose -f compose.production.yml -f compose.https.yml up -d --build`. Set `PUBLIC_APP_URL=https://YOUR_DOMAIN` and `TRUST_PROXY_HOPS=1` for a single Caddy proxy; adjust the hop count if another trusted proxy is added. Ports 80 and 443 must reach the proxy. The database and ClamAV stay private.
 
