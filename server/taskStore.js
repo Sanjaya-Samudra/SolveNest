@@ -76,6 +76,39 @@ export function addActivity(store, activity) {
   })
 }
 
+export async function claimProviderEvent(provider, eventId, type, leaseMs = 5 * 60_000) {
+  const key = `provider:${provider}:${eventId}`
+  return withTaskStore((store) => {
+    store.idempotency ||= {}
+    const current = store.idempotency[key]
+    const leaseExpired = current?.status === 'processing' && Date.parse(current.leaseExpiresAt || 0) <= Date.now()
+    if (current?.status === 'completed' || (current?.status === 'processing' && !leaseExpired)) return false
+    const stamp = new Date().toISOString()
+    store.idempotency[key] = { provider, eventId, type, status: 'processing', claimedAt: stamp, leaseExpiresAt: new Date(Date.now() + leaseMs).toISOString(), attempts: Number(current?.attempts || 0) + 1 }
+    return true
+  })
+}
+
+export async function completeProviderEvent(provider, eventId) {
+  const key = `provider:${provider}:${eventId}`
+  return withTaskStore((store) => {
+    const current = store.idempotency?.[key]
+    if (!current) return false
+    store.idempotency[key] = { ...current, status: 'completed', completedAt: new Date().toISOString(), leaseExpiresAt: null }
+    return true
+  })
+}
+
+export async function releaseProviderEvent(provider, eventId, errorCode = 'PROCESSING_FAILED') {
+  const key = `provider:${provider}:${eventId}`
+  return withTaskStore((store) => {
+    const current = store.idempotency?.[key]
+    if (!current || current.status === 'completed') return false
+    store.idempotency[key] = { ...current, status: 'failed', failedAt: new Date().toISOString(), errorCode, leaseExpiresAt: null }
+    return true
+  })
+}
+
 export function buildTaskSummary(task, files = []) {
   return {
     id: task.id,

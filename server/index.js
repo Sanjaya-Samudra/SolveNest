@@ -48,7 +48,7 @@ import {
   toExpertWorkspace,
   updateAssignmentWorkState,
 } from './expertStore.js'
-import { addActivity, buildTaskSummary, getStudentAnalysis, getStudentFiles, getStudentTask, getStudentTasks, readTaskStore, withTaskStore } from './taskStore.js'
+import { addActivity, buildTaskSummary, claimProviderEvent, completeProviderEvent, getStudentAnalysis, getStudentFiles, getStudentTask, getStudentTasks, readTaskStore, releaseProviderEvent, withTaskStore } from './taskStore.js'
 import { publish, subscribe, closeStreams } from './realtime.js'
 import { hasObjectStorage, persistUpload, removeStoredObject, signedObjectUrl } from './storage.js'
 import { cleanupUploads } from './uploadCleanup.js'
@@ -58,6 +58,7 @@ import { hasSupabase, hasSupabaseAuth, supabaseChangeStaffRole, supabaseConsumeR
 import { getAdminCase, getAdminOverview, getAdminQaCase, issueAdminPlan, issueAdminScopeChange, listAdminQaAssignments, recordAdminReview } from './adminStore.js'
 import { getSuperadminActivity, getSuperadminOverview } from './superadminStore.js'
 import { checkMalwareScanner, inspectUpload } from './uploadSafety.js'
+import { moderateTaskMessage } from './messagePolicy.js'
 
 const PORT = Number(process.env.PORT || 4174)
 const COOKIE = 'sn_sid'
@@ -216,6 +217,7 @@ async function recordRefundStatus(paymentIntentId, amountRefundedMinor, refundId
     const payment = store.payments.find((item) => item.paymentIntentId === paymentIntentId || item.providerId === paymentIntentId)
     if (!payment) return null
     const amountRefunded = Math.min(payment.amount, Math.max(0, Number(amountRefundedMinor || 0) / 100))
+    if (Number(payment.refundedAmount || 0) === amountRefunded && ['refunded', 'partially_refunded'].includes(payment.status)) return { payment, task: store.tasks.find((item) => item.id === payment.taskId && item.studentId === payment.studentId) || null, unchanged: true }
     payment.refundedAmount = amountRefunded
     payment.refundId = refundId || payment.refundId || null
     payment.refundedAt = now()
@@ -227,9 +229,9 @@ async function recordRefundStatus(paymentIntentId, amountRefundedMinor, refundId
       if (milestone && payment.status === 'refunded') Object.assign(milestone, { fundingState: 'payment_required', paidAt: null, paymentId: null })
     }
     if (task) {
-      const succeeded = store.payments.filter((item) => item.taskId === task.id && item.status === 'succeeded').reduce((sum, item) => sum + Number(item.amount || 0), 0)
-      task.amountDue = Math.max(0, Number(plan?.amount || task.funding?.amountTotal || 0) - succeeded)
-      task.funding = { ...(task.funding || {}), state: task.amountDue ? 'payment_required' : 'funded', amountFunded: succeeded, amountDue: task.amountDue }
+      const netFunded = store.payments.filter((item) => item.taskId === task.id && ['succeeded', 'partially_refunded'].includes(item.status)).reduce((sum, item) => sum + Math.max(0, Number(item.amount || 0) - Number(item.refundedAmount || 0)), 0)
+      task.amountDue = Math.max(0, Number(plan?.amount || task.funding?.amountTotal || 0) - netFunded)
+      task.funding = { ...(task.funding || {}), state: task.amountDue ? 'payment_required' : 'funded', amountFunded: netFunded, amountDue: task.amountDue }
       if (!['DELIVERED', 'COMPLETED', 'DECLINED'].includes(task.status)) task.status = 'PAYMENT_PENDING'
       task.latestUpdate = { text: `A ${payment.status === 'refunded' ? 'full' : 'partial'} refund was processed for this task.`, createdAt: payment.refundedAt }
       task.updatedAt = payment.refundedAt
@@ -264,30 +266,52 @@ app.post('/api/payments/stripe/webhook', express.raw({ type: 'application/json' 
   if (!stripe || !process.env.STRIPE_WEBHOOK_SECRET) return res.status(503).json({ error: 'PAYMENTS_NOT_CONFIGURED' })
   let event
   try { event = stripe.webhooks.constructEvent(req.body, req.headers['stripe-signature'], process.env.STRIPE_WEBHOOK_SECRET) } catch { return res.status(400).json({ error: 'INVALID_WEBHOOK' }) }
+  if (!await claimProviderEvent('stripe', event.id, event.type)) return res.json({ received: true, duplicate: true })
   const object = event.data.object
-  if (event.type === 'charge.refunded') {
-    try {
+  try {
+    if (event.type === 'charge.refunded') {
       const paymentIntentId = typeof object.payment_intent === 'string' ? object.payment_intent : object.payment_intent?.id
       const refunded = paymentIntentId ? await recordRefundStatus(paymentIntentId, object.amount_refunded, null) : null
       if (refunded?.task) publish(refunded.task.studentId, { type: 'PaymentRefunded', taskId: refunded.task.id })
+      await completeProviderEvent('stripe', event.id)
       return res.json({ received: true })
-    } catch (error) {
-      console.error('[stripe-webhook] refund reconciliation failed', error)
-      return res.status(503).json({ error: 'REFUND_RECONCILIATION_PENDING' })
     }
-  }
-  const sessionEvent = event.type.startsWith('checkout.session.')
-  const status = event.type === 'checkout.session.completed' ? (object.payment_status === 'paid' ? 'succeeded' : null)
-    : event.type === 'checkout.session.async_payment_succeeded' ? 'succeeded'
-      : event.type === 'checkout.session.async_payment_failed' ? 'failed'
-        : event.type === 'checkout.session.expired' ? 'canceled'
-          : event.type === 'payment_intent.succeeded' ? 'succeeded'
-            : event.type === 'payment_intent.payment_failed' ? 'failed' : null
-  try {
+
+    if (event.type.startsWith('charge.dispute.')) {
+      const paymentIntentId = typeof object.payment_intent === 'string' ? object.payment_intent : object.payment_intent?.id
+      const change = await withTaskStore((store) => {
+        const payment = store.payments.find((item) => item.paymentIntentId === paymentIntentId || item.providerId === paymentIntentId)
+        if (!payment) return null
+        const status = event.type === 'charge.dispute.closed' ? (object.status === 'won' ? 'won' : 'lost') : object.status || 'needs_response'
+        payment.dispute = { id: object.id, status, reason: object.reason || null, amount: Number(object.amount || 0) / 100, currency: object.currency || payment.currency, evidenceDueAt: object.evidence_details?.due_by ? new Date(object.evidence_details.due_by * 1000).toISOString() : null, updatedAt: now() }
+        payment.status = status === 'lost' ? 'disputed_lost' : status === 'won' ? 'succeeded' : 'disputed'
+        const task = store.tasks.find((item) => item.id === payment.taskId)
+        if (task && !['COMPLETED', 'DECLINED'].includes(task.status)) { task.paymentHold = status !== 'won'; task.updatedAt = now() }
+        store.adminAudit ||= []
+        store.adminAudit.unshift({ id: crypto.randomUUID(), taskId: payment.taskId, action: 'payment_dispute', actorId: 'stripe', note: `${event.type}: ${status}`, paymentId: payment.id, disputeId: object.id, at: now() })
+        return task ? { studentId: task.studentId, taskId: task.id, status } : null
+      })
+      if (change) {
+        await addNotification({ id: crypto.randomUUID(), studentId: change.studentId, title: 'Payment dispute update', body: 'A payment dispute is being reviewed. Some task actions may be temporarily paused.', task: { ref: change.taskId }, route: `/student/payments?task=${change.taskId}&section=history`, isRead: false, requiresAction: true, createdAt: now() })
+        publish(change.studentId, { type: 'PaymentDisputeUpdated', taskId: change.taskId, status: change.status })
+      }
+      await completeProviderEvent('stripe', event.id)
+      return res.json({ received: true })
+    }
+
+    const sessionEvent = event.type.startsWith('checkout.session.')
+    const status = event.type === 'checkout.session.completed' ? (object.payment_status === 'paid' ? 'succeeded' : null)
+      : event.type === 'checkout.session.async_payment_succeeded' ? 'succeeded'
+        : event.type === 'checkout.session.async_payment_failed' ? 'failed'
+          : event.type === 'checkout.session.expired' ? 'canceled'
+            : event.type === 'payment_intent.succeeded' ? 'succeeded'
+              : event.type === 'payment_intent.payment_failed' ? 'failed' : null
     const fundedTask = status && (sessionEvent || object.id.startsWith('pi_')) ? await recordPaymentStatus(object.id, status, sessionEvent && Boolean(object.metadata?.taskId), object) : null
     await announceFundedTask(fundedTask)
+    await completeProviderEvent('stripe', event.id)
     res.json({ received: true })
   } catch (error) {
+    await releaseProviderEvent('stripe', event.id, String(error?.message || 'PROCESSING_FAILED').slice(0, 120)).catch(() => {})
     console.error('[stripe-webhook] reconciliation failed', error)
     res.status(503).json({ error: 'PAYMENT_RECONCILIATION_PENDING' })
   }
@@ -455,17 +479,6 @@ app.get('/api/student/task-creation/session/:sessionId', requireStudent, asyncRo
   res.json({ session, files, analysis: analysis?.result || null })
 }))
 
-app.post('/api/guest/analysis-transfer', asyncRoute(async (req, res) => {
-  if (!await limited(`guest-transfer:${req.ip}`, 10)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before creating another transfer.')
-  const analysis = req.body?.analysis
-  if (!analysis || typeof analysis !== 'object' || Array.isArray(analysis)) return safeError(res, 400, 'ANALYSIS_REQUIRED', 'A structured analysis is required.')
-  const token = crypto.randomBytes(32).toString('base64url')
-  const preview = { title: String(analysis.title || '').slice(0, 200), subject: String(analysis.subject || '').slice(0, 160), taskType: String(analysis.taskType || '').slice(0, 160), provider: 'guest-preview', provisional: true, verified: false }
-  const transfer = { tokenHash: hashTransferToken(token), analysis: preview, expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), claimedBy: null, createdAt: now() }
-  await withTaskStore((store) => { store.guestTransfers = store.guestTransfers.filter((item) => new Date(item.expiresAt).getTime() > Date.now()); store.guestTransfers.push(transfer) })
-  res.status(201).json({ transferToken: token, expiresAt: transfer.expiresAt })
-}))
-
 app.post('/api/guest/analyze', asyncRoute(async (req, res, next) => {
   if (!await limited(`guest-analysis:${req.ip}`, 3)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before analyzing another brief.')
   next()
@@ -489,7 +502,7 @@ app.post('/api/guest/analyze', asyncRoute(async (req, res, next) => {
 app.post('/api/student/analysis-transfer/claim', requireStudent, asyncRoute(async (req, res) => {
   const token = String(req.body?.transferToken || '')
   const transfer = await withTaskStore((store) => {
-    const item = store.guestTransfers.find((candidate) => candidate.tokenHash === hashTransferToken(token) && !candidate.claimedBy && new Date(candidate.expiresAt).getTime() > Date.now())
+    const item = store.guestTransfers.find((candidate) => candidate.tokenHash === hashTransferToken(token) && Array.isArray(candidate.files) && candidate.files.length > 0 && candidate.analysis?.provider !== 'guest-preview' && !candidate.claimedBy && new Date(candidate.expiresAt).getTime() > Date.now())
     if (item) {
       const stamp = now()
       Object.assign(item, { claimedBy: req.student.studentId, claimedAt: stamp })
@@ -806,6 +819,8 @@ app.post('/api/student/conversations/:conversationId/messages', requireStudent, 
   const text = String(req.body?.body || '').trim()
   const fileId = String(req.body?.fileId || '').trim()
   if ((!text && !fileId) || text.length > 4000) return safeError(res, 400, 'MESSAGE_INVALID', 'Add a message or attachment.', { body: 'Enter a message or attach a file.' })
+  const moderation = moderateTaskMessage(text)
+  if (!moderation.allowed) return safeError(res, 422, 'MESSAGE_POLICY_BLOCKED', 'Keep contact details and payments inside SolveNest.', { body: `Message blocked by ${moderation.code.toLowerCase().replaceAll('_', ' ')} policy.` })
   const message = await withTaskStore((store) => {
     const conversation = store.conversations.find((item) => item.id === req.params.conversationId && item.studentId === req.student.studentId)
     if (!conversation) return null
@@ -1557,7 +1572,9 @@ app.post('/api/expert/assignments/:assignmentId/work/state', requireExpert, expe
 
 app.post('/api/expert/assignments/:assignmentId/messages', requireExpert, expertRoute(async (req, res) => {
   if (!await limited(`expert-message:${req.expert.expertId}`, 12)) return safeError(res, 429, 'RATE_LIMITED', 'Too many messages. Try again shortly.')
-  const result = await postAssignmentMessage(req.params.assignmentId, req.body?.body)
+  const moderation = moderateTaskMessage(req.body?.body)
+  if (!moderation.allowed) return safeError(res, 422, 'MESSAGE_POLICY_BLOCKED', 'Keep contact details and payments inside SolveNest.')
+  const result = await postAssignmentMessage(req.params.assignmentId, moderation.body)
   if (!result.ok) return expertMutationError(res, result.error)
   const studentMessage = await withTaskStore((store) => {
     const task = store.tasks.find((item) => item.assignmentId === req.params.assignmentId && item.assignedExpertId === req.expert.expertId)
