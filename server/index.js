@@ -62,6 +62,7 @@ import { checkMalwareScanner, inspectUpload } from './uploadSafety.js'
 import { moderateTaskMessage } from './messagePolicy.js'
 import { activePolicies, validatePolicyConsents } from './policyRegistry.js'
 import { drainEmailOutbox } from './emailOutbox.js'
+import { observeRequest, observabilitySnapshot } from './observability.js'
 
 const PORT = Number(process.env.PORT || 4174)
 const COOKIE = 'sn_sid'
@@ -104,6 +105,7 @@ function asyncRoute(...handlers) {
   return handlers.map((handler) => (req, res, next) => Promise.resolve().then(() => handler(req, res, next)).catch(next))
 }
 app.disable('x-powered-by')
+app.use(observeRequest)
 function configuredOrigin(value) {
   try { return value ? new URL(value).origin : null } catch { return null }
 }
@@ -2500,6 +2502,7 @@ app.get('/api/superadmin/team/lookup', requireSuperadmin, staffRoute(async (req,
 app.get('/api/superadmin/activity', requireSuperadmin, staffRoute(async (req, res) => {
   res.json({ activity: await getSuperadminActivity(!req.staff.demo && hasSupabase()) })
 }))
+app.get('/api/superadmin/metrics', requireSuperadmin, (_req, res) => res.json(observabilitySnapshot()))
 app.post('/api/superadmin/team/:profileId/role', requireSuperadmin, staffRoute(async (req, res) => {
   if (req.staff.demo || !hasSupabase()) return safeError(res, 503, 'ROLE_MANAGEMENT_UNAVAILABLE', 'Role management requires a real Super Admin account and Supabase.')
   if (!await limited(`staff-role:${req.staff.id}`, 20)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before changing another role.')

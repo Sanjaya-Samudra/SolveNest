@@ -42,7 +42,7 @@ Perform these checks in Stripe test mode and with non-sensitive sample files bef
 
 ## Latest implementation and verification status
 
-- Apply migrations 001 through 016 in order. The latest migrations add scoped domain indexes, cross-instance scheduled-job leases, and a durable retrying notification-email outbox.
+- Apply migrations 001 through 017 in order. The latest migrations add scoped domain indexes, cross-instance scheduled-job leases, a durable retrying notification-email outbox, and dual approval for Super Admin grants.
 - After building the client and configuring server/.env.production, run `npm run preflight --prefix server`. It reports configuration names only and does not validate provider connectivity.
 - For the supplied HTTPS proxy, set APP_DOMAIN and run `docker compose -f compose.production.yml -f compose.https.yml up -d --build`. Point DNS to the host first and configure the exact proxy hop count. See server/SETUP.md.
 - Student Account provides a JSON data export and a staff-reviewed closure request. Account deletion remains staff-reviewed because financial, dispute, and legal retention periods must be chosen for the launch jurisdiction before destructive deletion can be enabled.
@@ -61,3 +61,9 @@ Perform these checks in Stripe test mode and with non-sensitive sample files bef
 - Admin: use `/admin` for operational task review, assignment, quality review, and support.
 - Superadmin: use `/superadmin` for governance and role management.
 - Admin and Superadmin are separate roles and sessions. Provision the appropriate role through the controlled governance process; neither workspace should offer a shortcut that grants access to the other role.
+
+## Observability
+
+- Forward structured container logs to the hosting provider or an error monitoring service.
+- Alert on readiness failures, HTTP 5xx responses, payment webhook failures, email outbox failures, and Solvy provider failures.
+- Review the protected `/api/superadmin/metrics` endpoint for route volume, error counts, latency, process uptime, and memory usage.
