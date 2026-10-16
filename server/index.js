@@ -63,6 +63,7 @@ import { moderateTaskMessage } from './messagePolicy.js'
 import { activePolicies, validatePolicyConsents } from './policyRegistry.js'
 import { drainEmailOutbox } from './emailOutbox.js'
 import { observeRequest, observabilitySnapshot } from './observability.js'
+import { callSolvy, normalizeSolvyAnalysis } from './solvyClient.js'
 
 const PORT = Number(process.env.PORT || 4174)
 const COOKIE = 'sn_sid'
@@ -378,27 +379,11 @@ async function analyzeWithSolvy(files) {
   }
   const inputs = await Promise.all(files.map(async (file) => ({ id: file.id, role: file.role, name: file.originalName, mimeType: file.mimeType, size: file.size, url: await signedObjectUrl(file.storageKey, file.originalName) })))
   if (process.env.NODE_ENV === 'production' && inputs.some((file) => !file.url)) throw new Error('ANALYSIS_FILE_ACCESS_UNAVAILABLE')
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 30_000)
-  try {
-    const response = await fetch(process.env.SOLVY_API_URL, { method: 'POST', signal: controller.signal, headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...(process.env.SOLVY_API_KEY ? { Authorization: `Bearer ${process.env.SOLVY_API_KEY}` } : {}) }, body: JSON.stringify({ fileIds: files.map((file) => file.id), files: inputs }) })
-    if (!response.ok) throw new Error(`SOLVY_${response.status}`)
-    const payload = await response.json()
-    const result = payload.analysis || payload.result || payload
-    if (!result || typeof result !== 'object' || Array.isArray(result)) throw new Error('SOLVY_INVALID_RESPONSE')
-    return { ...result, provider: 'solvy', provisional: true }
-  } finally { clearTimeout(timeout) }
+  return normalizeSolvyAnalysis(await callSolvy('analyze', { fileIds: files.map((file) => file.id), files: inputs }))
 }
 
 async function solvyOperation(operation, payload) {
-  if (!process.env.SOLVY_API_URL) throw Object.assign(new Error('SOLVY_NOT_CONFIGURED'), { code: 'SOLVY_NOT_CONFIGURED' })
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 30_000)
-  try {
-    const response = await fetch(process.env.SOLVY_API_URL, { method: 'POST', signal: controller.signal, headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-Solvy-Operation': operation, ...(process.env.SOLVY_API_KEY ? { Authorization: `Bearer ${process.env.SOLVY_API_KEY}` } : {}) }, body: JSON.stringify({ operation, ...payload }) })
-    if (!response.ok) throw Object.assign(new Error(`SOLVY_${response.status}`), { code: 'SOLVY_PROVIDER_ERROR' })
-    return response.json()
-  } finally { clearTimeout(timeout) }
+  return callSolvy(operation, payload)
 }
 
 async function studentTaskPayload(task, studentId, knownFiles = null) {
