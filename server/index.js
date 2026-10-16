@@ -59,6 +59,7 @@ import { getAdminCase, getAdminOverview, getAdminQaCase, issueAdminPlan, issueAd
 import { getSuperadminActivity, getSuperadminOverview } from './superadminStore.js'
 import { checkMalwareScanner, inspectUpload } from './uploadSafety.js'
 import { moderateTaskMessage } from './messagePolicy.js'
+import { activePolicies, validatePolicyConsents } from './policyRegistry.js'
 
 const PORT = Number(process.env.PORT || 4174)
 const COOKIE = 'sn_sid'
@@ -1831,23 +1832,27 @@ app.get('/api/ready', asyncRoute(async (_req, res) => {
   res.status(ready ? 200 : 503).json({ ok: ready, service: 'solvenest-server' })
 }))
 
+app.get('/api/policies/current', (_req, res) => res.json({ policies: activePolicies() }))
+
 app.post('/api/auth/register', asyncRoute(async (req, res) => {
   if (!await limited(`student-register:${req.ip}`, 5)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before creating another account.')
   const { name, email, password } = req.body || {}
   if (String(name || '').trim().length < 2) return safeError(res, 400, 'NAME_REQUIRED', 'Enter your full name.', { name: 'Enter your full name.' })
   if (!/^\S+@\S+\.\S+$/.test(String(email || ''))) return safeError(res, 400, 'EMAIL_INVALID', 'Enter a valid email address.', { email: 'Enter a valid email address.' })
   if (String(password || '').length < 12) return safeError(res, 400, 'PASSWORD_TOO_SHORT', 'Password must be at least 12 characters.', { password: 'Use at least 12 characters.' })
+  if (!validatePolicyConsents(req.body?.policyConsents)) return safeError(res, 409, 'POLICY_CONSENT_REQUIRED', 'Review and accept the current platform policies.', { agree: 'The policy version changed. Review it and try again.' })
+  const policyConsents = req.body.policyConsents.map((item) => ({ ...item, locale: String(req.headers['accept-language'] || '').split(',')[0] || null, ip: req.ip, userAgent: req.headers['user-agent'] || null }))
   if (hasSupabaseAuth()) {
     const { data, error } = await supabaseSignUp({ name: String(name).trim(), email: String(email).trim(), password })
     if (error) return safeError(res, 400, 'AUTH_SIGNUP_FAILED', error.message)
-    if (data.user) await recordAccountRegistration(data.user.id, { name: String(name).trim(), emailVerified: Boolean(data.user.email_confirmed_at), createdAt: data.user.created_at, policyConsents: req.body?.policyConsents })
+    if (data.user) await recordAccountRegistration(data.user.id, { name: String(name).trim(), emailVerified: Boolean(data.user.email_confirmed_at), createdAt: data.user.created_at, policyConsents })
     if (data.session) setSupabaseCookies(res, data.session)
     return res.status(data.session ? 201 : 202).json({ user: data.user ? { id: data.user.id, role: 'Student', name: data.user.user_metadata?.name || name, email: data.user.email } : null, emailConfirmationRequired: !data.session })
   }
   const user = createUser({ name, email, password })
   if (!user) return safeError(res, 409, 'EMAIL_IN_USE', 'An account already exists for that email.', { email: 'This email is already registered.' })
   const session = createSession(user, userAgentLabel(req.headers['user-agent']))
-  await recordAccountRegistration(user.id, { name: user.name, emailVerified: true, policyConsents: req.body?.policyConsents })
+  await recordAccountRegistration(user.id, { name: user.name, emailVerified: true, policyConsents })
   setSessionCookie(res, session.id)
   sendEmail({ to: user.email, subject: 'Welcome to SolveNest', text: `Your SolveNest Student account is ready, ${user.name}.` }).catch((error) => console.error('[email]', error.message))
   res.status(201).json({ user })

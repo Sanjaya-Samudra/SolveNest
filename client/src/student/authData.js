@@ -10,6 +10,13 @@ async function request(path, body) {
 }
 
 export async function registerStudent(payload) { const result = await request('/api/auth/register', payload); if (!result.emailConfirmationRequired) await claimPendingAnalysis(); return result }
+export async function fetchCurrentPolicies() {
+  const response = await fetch('/api/policies/current', { credentials: 'include', headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(15_000) })
+  if (!response.ok) throw new Error('Current policies could not be loaded.')
+  const payload = await response.json()
+  if (!Array.isArray(payload.policies) || payload.policies.length < 3) throw new Error('Current policies could not be loaded.')
+  return payload.policies
+}
 async function claimPendingAnalysis() {
   const transferToken = window.localStorage.getItem('solvenest-analysis-transfer')
   if (!transferToken) return null

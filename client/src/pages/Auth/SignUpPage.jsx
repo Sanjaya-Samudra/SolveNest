@@ -5,7 +5,7 @@ import {
 } from 'framer-motion'
 import { ArrowRight, Check, Mail, ClipboardList, Sparkles, FolderOpen, TrendingUp } from 'lucide-react'
 import { PolicyReader } from './PolicyReader.jsx'
-import { registerStudent } from '../../student/authData.js'
+import { fetchCurrentPolicies, registerStudent } from '../../student/authData.js'
 
 const nav = (p) => { window.history.pushState({}, '', p); window.dispatchEvent(new PopStateEvent('popstate')) }
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -173,8 +173,10 @@ export function SignUpPage() {
   const [status, setStatus] = useState('idle')
   const [verified, setVerified] = useState(false)
   const [policy, setPolicy] = useState(null)
+  const [currentPolicies, setCurrentPolicies] = useState([])
   const timers = useRef([])
   useEffect(() => () => timers.current.forEach(clearTimeout), [])
+  useEffect(() => { fetchCurrentPolicies().then(setCurrentPolicies).catch((error) => setErrors((value) => ({ ...value, form: error.message }))) }, [])
 
   const valid = { name: name.trim().length >= 2, email: EMAIL_RE.test(email.trim()), password: password.length >= 12 }
 
@@ -191,12 +193,13 @@ export function SignUpPage() {
     if (!confirmPw) errs.confirmPw = 'Confirm your password.'
     else if (confirmPw !== password) errs.confirmPw = 'Passwords do not match.'
     if (!agree) errs.agree = 'Please read and accept the policies to continue.'
+    if (currentPolicies.length < 3) errs.agree = 'The current policies are still loading. Please try again.'
     setErrors(errs)
     if (Object.keys(errs).length) return
     setStatus('sending')
     try {
       const acceptedAt = new Date().toISOString()
-      const result = await registerStudent({ name: name.trim(), email: email.trim(), password, policyConsents: [{ id: 'terms', title: 'Terms of Use', version: '2026-10-15', acceptedAt }, { id: 'privacy', title: 'Privacy Notice', version: '2026-10-15', acceptedAt }, { id: 'integrity', title: 'Academic Integrity', version: '2026-10-15', acceptedAt }] })
+      const result = await registerStudent({ name: name.trim(), email: email.trim(), password, policyConsents: currentPolicies.map((item) => ({ ...item, acceptedAt })) })
       setStatus('idle')
       if (result.emailConfirmationRequired) setStep(1)
       else { setVerified(true); setStep(2) }

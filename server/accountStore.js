@@ -215,7 +215,7 @@ export async function recordAccountRegistration(studentId, { name = '', emailVer
     if (createdAt) account.createdAt = createdAt
     if (name && !account.profile.fullName) account.profile.fullName = cleanString(name) || ''
     account.security.emailVerified = Boolean(emailVerified)
-    account.policyConsents = (Array.isArray(policyConsents) ? policyConsents : []).map((item) => ({ id: String(item.id || ''), title: String(item.title || item.id || ''), version: String(item.version || ''), acceptedAt: item.acceptedAt || new Date().toISOString() })).filter((item) => item.id && item.version)
+    account.policyConsents = (Array.isArray(policyConsents) ? policyConsents : []).map((item) => ({ id: String(item.id || ''), title: String(item.title || item.id || ''), version: String(item.version || ''), contentHash: String(item.contentHash || ''), acceptedAt: item.acceptedAt || new Date().toISOString(), locale: String(item.locale || '').slice(0, 35) || null, ip: String(item.ip || '').slice(0, 64) || null, userAgent: String(item.userAgent || '').slice(0, 500) || null })).filter((item) => item.id && item.version && item.contentHash)
   })
 }
 
