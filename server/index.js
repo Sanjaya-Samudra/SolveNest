@@ -47,6 +47,7 @@ import {
   submitAssignmentForQa,
   toExpertWorkspace,
   updateAssignmentWorkState,
+  updateExpertProfile,
 } from './expertStore.js'
 import { addActivity, buildTaskSummary, claimProviderEvent, completeProviderEvent, getStudentAnalysis, getStudentFiles, getStudentTask, getStudentTasks, readStudentSnapshot, readTaskStore, releaseProviderEvent, withTaskStore } from './taskStore.js'
 import { publish, subscribe, closeStreams } from './realtime.js'
@@ -1398,8 +1399,8 @@ async function requireExpert(req, res, next) {
       req.expert.email = profile.email
     }
     if (!req.path.endsWith('/logout') && !req.path.endsWith('/me')) {
-      const accountState = await runForExpert({ id: req.expert.expertId, name: req.expert.name }, async () => (await readExpertStore()).accountState)
-      if (accountState && accountState !== 'active') return safeError(res, 403, 'EXPERT_ACCOUNT_SUSPENDED', 'This Expert account is not active.')
+      const accountState = await runForExpert({ id: req.expert.expertId, name: req.expert.name }, async () => (await readExpertStore()).expert?.accountState)
+      if (accountState && accountState !== 'approved') return safeError(res, 403, 'EXPERT_ACCOUNT_SUSPENDED', accountState === 'pending' ? 'This Expert profile is still awaiting approval.' : 'This Expert account is suspended.')
     }
     next()
   } catch (error) {
@@ -1446,6 +1447,12 @@ app.patch('/api/expert/availability', requireExpert, expertRoute(async (req, res
   }
   const availability = await setAvailability(status)
   res.json({ ok: true, availability })
+}))
+
+app.patch('/api/expert/profile', requireExpert, expertRoute(async (req, res) => {
+  const result = await updateExpertProfile(req.body)
+  if (result.error) return safeError(res, 400, result.error, result.error === 'CAPACITY_INVALID' ? 'Capacity must be between 1 and 20 active assignments.' : result.error === 'TIMEZONE_INVALID' ? 'Choose a valid IANA timezone.' : 'Add at least one competency and keep profile entries under 80 characters.')
+  res.json(result)
 }))
 
 function publishExpert(expertId, type, payload) { publish('expert:' + expertId, { type, ...payload }) }
@@ -2334,7 +2341,10 @@ app.get('/api/admin/experts', requireAdmin, staffRoute(async (req, res) => {
   const profiles = req.staff.demo ? [{ id: 'demo-expert', name: 'Alex Morgan', email: null, role: 'Expert' }] : await supabaseExpertProfiles()
   const experts = await Promise.all(profiles.map(async (profile) => {
     const store = await runForExpert(profile, readExpertStore)
-    return { id: profile.id, name: profile.name, email: profile.email, availability: store.expert.availability, activeAssignments: store.assignments.filter((item) => item.workState !== 'delivered').length }
+    const activeAssignments = store.assignments.filter((item) => item.workState !== 'delivered').length
+    const capacity = Math.max(1, Math.min(20, Number(store.expert.capacity) || 4))
+    const competencies = Array.isArray(store.expert.competencies) ? store.expert.competencies : []
+    return { id: profile.id, name: profile.name, email: profile.email, availability: store.expert.availability, verified: Boolean(store.expert.verified), accountState: store.expert.accountState || 'approved', activeAssignments, capacity, competencies, conflictDomains: Array.isArray(store.expert.conflictDomains) ? store.expert.conflictDomains : [], eligible: Boolean(store.expert.verified) && (store.expert.accountState || 'approved') === 'approved' && store.expert.availability !== 'unavailable' && activeAssignments < capacity && competencies.length > 0 }
   }))
   res.json({ experts })
 }))
@@ -2352,7 +2362,16 @@ app.post('/api/admin/tasks/:taskId/assign', requireAdmin, staffRoute(async (req,
   if (task.assignedExpertId) return safeError(res, 409, 'TASK_ALREADY_ASSIGNED', 'This task is already assigned.')
   if (task.status !== 'PAID' || !plan || !funded) return safeError(res, 409, 'TASK_NOT_FUNDED', 'The Student must accept and fund the official plan before assignment.')
   const workspace = await runForExpert(profile, readExpertStore)
+  if (!workspace.expert.verified || (workspace.expert.accountState || 'approved') !== 'approved') return safeError(res, 409, 'EXPERT_NOT_VERIFIED', 'Choose an approved, verified Expert.')
   if (workspace.expert.availability === 'unavailable') return safeError(res, 409, 'EXPERT_UNAVAILABLE', 'Choose an Expert who is available for work.')
+  const activeAssignments = workspace.assignments.filter((item) => item.workState !== 'delivered').length
+  const capacity = Math.max(1, Math.min(20, Number(workspace.expert.capacity) || 4))
+  if (activeAssignments >= capacity) return safeError(res, 409, 'EXPERT_AT_CAPACITY', 'Choose an Expert with remaining assignment capacity.')
+  const domain = String(task.subject || task.type || '').toLowerCase()
+  const conflicts = Array.isArray(workspace.expert.conflictDomains) ? workspace.expert.conflictDomains : []
+  if (conflicts.some((item) => domain.includes(String(item).toLowerCase()))) return safeError(res, 409, 'EXPERT_CONFLICT', 'This Expert has declared a conflict for the task domain.')
+  const competencies = Array.isArray(workspace.expert.competencies) ? workspace.expert.competencies : []
+  if (!competencies.length) return safeError(res, 409, 'EXPERT_PROFILE_INCOMPLETE', 'This Expert must add competencies before receiving assignments.')
   const sourceFiles = state.files.filter((file) => file.taskId === task.id && file.studentId === task.studentId && file.state === 'READY').map((file) => ({ id: file.id, name: file.originalName, type: file.mimeType, size: file.size, storageKey: file.storageKey, origin: 'solvenest', uploadedBy: 'student', uploadedAt: file.createdAt }))
   const requirements = [plan.scope, ...(Array.isArray(task.analysis?.deliverables) ? task.analysis.deliverables.map((item) => typeof item === 'string' ? item : item.title || item.name).filter(Boolean) : [])].slice(0, 12)
   const created = await runForExpert(profile, () => provisionAssignment({ taskId: task.id, title: task.title, reference: plan.reference, domain: task.subject, type: task.type, deliverable: plan.scope, requirements, deadline: plan.delivery, workspace: { files: { source: sourceFiles } } }))

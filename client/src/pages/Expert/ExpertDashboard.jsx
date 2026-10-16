@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { LogOut, ShieldCheck, Radio } from 'lucide-react'
 import { useExpertAccountGate, useExpertDashboard } from '../../expert/expertDashboardData.js'
 import { parseAssignmentRoute } from '../../expert/assignmentState.js'
-import { signOutExpert } from '../../expert/expertApi.js'
+import { signOutExpert, updateExpertProfile } from '../../expert/expertApi.js'
 import './expert-dashboard.css'
 import { ExpertAppShell, ExpertGate, goExpert } from './ExpertAppShell.jsx'
 import {
@@ -79,6 +79,17 @@ function AccountSection({ dashboard, gate }) {
   const expert = dashboard.expert || gate.expert
   const availability = dashboard.availability || gate.availability
   const accountState = dashboard.accountState || gate.accountState
+  const [profile, setProfile] = useState(() => ({ capacity: expert?.capacity || 4, competencies: (expert?.competencies || []).join(', '), conflictDomains: (expert?.conflictDomains || []).join(', '), timezone: expert?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' }))
+  const [profileBusy, setProfileBusy] = useState(false)
+  const [profileMessage, setProfileMessage] = useState('')
+  const saveProfile = async (event) => {
+    event.preventDefault(); setProfileBusy(true); setProfileMessage('')
+    try {
+      await updateExpertProfile({ capacity: Number(profile.capacity), competencies: profile.competencies.split(',').map((item) => item.trim()).filter(Boolean), conflictDomains: profile.conflictDomains.split(',').map((item) => item.trim()).filter(Boolean), timezone: profile.timezone.trim() })
+      setProfileMessage('Assignment profile saved.'); dashboard.reload?.()
+    } catch (error) { setProfileMessage(error.serverMessage || 'The assignment profile could not be saved.') }
+    finally { setProfileBusy(false) }
+  }
 
   return (
     <div className="exp-section">
@@ -127,7 +138,7 @@ function AccountSection({ dashboard, gate }) {
             Sign out of expert workspace
           </button>
         </section>
-        <ExpertAvailabilityControl availability={availability} />
+        <div><ExpertAvailabilityControl availability={availability} /><form className="exp-panel" onSubmit={saveProfile}><div className="exp-panel-head"><div><p className="exp-overline">ASSIGNMENT FIT</p><h3>Capacity and expertise</h3></div></div><label>Maximum active assignments<input type="number" min="1" max="20" value={profile.capacity} onChange={(event) => setProfile({ ...profile, capacity: event.target.value })} /></label><label>Competencies<textarea required rows="3" value={profile.competencies} onChange={(event) => setProfile({ ...profile, competencies: event.target.value })} placeholder="Data analysis, Economics, Research methods" /><small>Separate specialties with commas.</small></label><label>Conflict domains<textarea rows="2" value={profile.conflictDomains} onChange={(event) => setProfile({ ...profile, conflictDomains: event.target.value })} placeholder="Organizations or subjects you cannot accept" /></label><label>Timezone<input required value={profile.timezone} onChange={(event) => setProfile({ ...profile, timezone: event.target.value })} placeholder="Asia/Colombo" /></label>{profileMessage && <p role="status">{profileMessage}</p>}<button className="exp-button exp-button--primary" disabled={profileBusy}>{profileBusy ? 'Saving…' : 'Save assignment profile'}</button></form></div>
       </div>
     </div>
   )

@@ -76,6 +76,10 @@ export function updateExpertAvailability(status) {
   return apiFetch('/api/expert/availability', { method: 'PATCH', body: { status } })
 }
 
+export function updateExpertProfile(profile) {
+  return apiFetch('/api/expert/profile', { method: 'PATCH', body: profile })
+}
+
 export function fetchExpertDashboard({ signal } = {}) {
   return apiFetch('/api/expert/dashboard', { signal })
 }

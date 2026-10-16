@@ -32,6 +32,10 @@ const emptyStore = () => ({
     verified: true,
     accountState: 'approved',
     availability: 'available',
+    capacity: 4,
+    competencies: ['Data & Analytics'],
+    conflictDomains: [],
+    timezone: 'Asia/Colombo',
     avatarUrl: null,
   },
   assignments: [],
@@ -69,6 +73,7 @@ export async function readExpertStore() {
     if (identity.id !== 'demo-expert') {
       const saved = await supabaseReadExpertWorkspace(identity.id)
       const store = normalizeStore(saved)
+      if (!saved) store.expert.competencies = []
       if (saved) Object.defineProperty(store, '__revision', { value: saved.__revision, configurable: true })
       store.expert = { ...store.expert, id: identity.id, name: identity.name || store.expert.name, title: saved?.expert?.title || 'Expert' }
       return store
@@ -92,6 +97,7 @@ export async function readExpertStore() {
   } catch {
     const fresh = emptyStore()
     fresh.expert = { ...fresh.expert, id: identity.id, name: identity.name || (identity.id === 'demo-expert' ? fresh.expert.name : 'Expert'), title: identity.id === 'demo-expert' ? fresh.expert.title : 'Expert' }
+    if (identity.id !== 'demo-expert') fresh.expert.competencies = []
     return fresh
   }
 }
@@ -246,6 +252,10 @@ export function toExpertWorkspace(store) {
       title: expert.title || null,
       verified: Boolean(expert.verified),
       avatarUrl: expert.avatarUrl || null,
+      capacity: Math.max(1, Math.min(20, Number(expert.capacity) || 4)),
+      competencies: Array.isArray(expert.competencies) ? expert.competencies.map(String).slice(0, 12) : [],
+      conflictDomains: Array.isArray(expert.conflictDomains) ? expert.conflictDomains.map(String).slice(0, 12) : [],
+      timezone: String(expert.timezone || 'UTC'),
     },
     accountState: ['approved', 'pending', 'suspended'].includes(expert.accountState) ? expert.accountState : 'approved',
     availability: ['available', 'limited', 'unavailable'].includes(expert.availability) ? expert.availability : 'available',
@@ -279,6 +289,21 @@ export async function setAvailability(status) {
       store.expert.availability = status
     }
     return store.expert.availability
+  })
+}
+
+export async function updateExpertProfile(input = {}) {
+  const competencies = Array.from(new Set((Array.isArray(input.competencies) ? input.competencies : []).map((item) => String(item).trim()).filter(Boolean))).slice(0, 12)
+  const conflictDomains = Array.from(new Set((Array.isArray(input.conflictDomains) ? input.conflictDomains : []).map((item) => String(item).trim()).filter(Boolean))).slice(0, 12)
+  const capacity = Number(input.capacity)
+  const timezone = String(input.timezone || '').trim()
+  if (!Number.isInteger(capacity) || capacity < 1 || capacity > 20) return { error: 'CAPACITY_INVALID' }
+  if (!competencies.length || competencies.some((item) => item.length > 80)) return { error: 'COMPETENCIES_REQUIRED' }
+  if (conflictDomains.some((item) => item.length > 80)) return { error: 'CONFLICTS_INVALID' }
+  try { Intl.DateTimeFormat(undefined, { timeZone: timezone }).format() } catch { return { error: 'TIMEZONE_INVALID' } }
+  return withExpertStore((store) => {
+    Object.assign(store.expert, { capacity, competencies, conflictDomains, timezone })
+    return { expert: toExpertWorkspace(store).expert }
   })
 }
 
