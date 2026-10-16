@@ -179,6 +179,24 @@ export async function supabaseChangeStaffRole(actorId, targetId, expectedRole, n
   if (error) throw error
   return data
 }
+export async function supabaseRequestSuperadminRole(actorId, targetId, expectedRole, note) {
+  if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED')
+  const { data, error } = await adminClient.rpc('request_superadmin_role', { p_actor: actorId, p_target: targetId, p_expected_role: expectedRole, p_note: note })
+  if (error) throw error
+  return data
+}
+export async function supabasePrivilegedRoleRequests() {
+  if (!adminClient) return []
+  const { data, error } = await adminClient.from('privileged_role_requests').select('id, target_id, requested_by, expected_role, requested_role, note, status, created_at, expires_at, target:profiles!privileged_role_requests_target_id_fkey(name,email), requester:profiles!privileged_role_requests_requested_by_fkey(name,email)').eq('status', 'pending').gt('expires_at', new Date().toISOString()).order('created_at', { ascending: false }).limit(50)
+  if (error) throw error
+  return data || []
+}
+export async function supabaseDecideSuperadminRole(actorId, requestId, decision) {
+  if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED')
+  const { data, error } = await adminClient.rpc('decide_superadmin_role_request', { p_actor: actorId, p_request: requestId, p_decision: decision })
+  if (error) throw error
+  return data
+}
 const domainCollections = ['tasks', 'files', 'deliveryFiles', 'analyses', 'reviews', 'drafts', 'guestTransfers', 'conversations', 'messages', 'payments', 'plans', 'scopeChanges', 'explainSessions', 'explainArtifacts', 'explainRequests', 'supportTickets', 'activity', 'notifications', 'adminAudit']
 function emptyDomainState() { return Object.fromEntries([...domainCollections.map((name) => [name, []]), ['idempotency', {}]]) }
 function recordKey(item, index) { return String(item?.id || item?.token || `${index}`) }

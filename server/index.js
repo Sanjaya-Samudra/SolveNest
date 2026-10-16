@@ -54,7 +54,7 @@ import { hasObjectStorage, persistUpload, removeStoredObject, signedObjectUrl } 
 import { cleanupUploads } from './uploadCleanup.js'
 import { hasEmail, sendEmail } from './email.js'
 import { exportStudentAccount } from './accountExport.js'
-import { hasSupabase, hasSupabaseAuth, supabaseChangeStaffRole, supabaseClaimScheduledJob, supabaseConsumeRateLimit, supabaseCreateAppSession, supabaseDeleteAppSession, supabaseExpertProfiles, supabaseFindProfileByEmail, supabaseGetAppSession, supabaseProfile, supabaseRefresh, supabaseRequestPasswordReset, supabaseRevokeUserSessions, supabaseSignOutCurrent, supabaseTeam, supabaseUpdatePassword, supabaseSignIn, supabaseSignUp, supabaseUser, supabaseVerifyStaffMfa } from './supabase.js'
+import { hasSupabase, hasSupabaseAuth, supabaseChangeStaffRole, supabaseClaimScheduledJob, supabaseConsumeRateLimit, supabaseCreateAppSession, supabaseDecideSuperadminRole, supabaseDeleteAppSession, supabaseExpertProfiles, supabaseFindProfileByEmail, supabaseGetAppSession, supabasePrivilegedRoleRequests, supabaseProfile, supabaseRefresh, supabaseRequestPasswordReset, supabaseRequestSuperadminRole, supabaseRevokeUserSessions, supabaseSignOutCurrent, supabaseTeam, supabaseUpdatePassword, supabaseSignIn, supabaseSignUp, supabaseUser, supabaseVerifyStaffMfa } from './supabase.js'
 import { getAdminCase, getAdminOverview, getAdminQaCase, issueAdminPlan, issueAdminScopeChange, listAdminQaAssignments, recordAdminReview } from './adminStore.js'
 import { getSuperadminActivity, getSuperadminOverview } from './superadminStore.js'
 import { checkMalwareScanner, inspectUpload } from './uploadSafety.js'
@@ -2468,7 +2468,8 @@ app.get('/api/superadmin/overview', requireSuperadmin, staffRoute(async (_req, r
 app.get('/api/superadmin/team', requireSuperadmin, staffRoute(async (req, res) => {
   const page = Number(req.query.page || 1)
   if (!Number.isSafeInteger(page) || page < 1 || page > 10000) return safeError(res, 400, 'INVALID_PAGE', 'Choose a valid page.')
-  res.json({ directory: req.staff.demo ? null : await supabaseTeam({ page, search: req.query.search }) })
+  const [directory, approvals] = req.staff.demo ? [null, []] : await Promise.all([supabaseTeam({ page, search: req.query.search }), supabasePrivilegedRoleRequests()])
+  res.json({ directory, approvals })
 }))
 app.get('/api/superadmin/team/lookup', requireSuperadmin, staffRoute(async (req, res) => {
   if (req.staff.demo || !hasSupabase()) return safeError(res, 503, 'TEAM_LOOKUP_UNAVAILABLE', 'Team lookup requires a real Super Admin account and Supabase.')
@@ -2489,11 +2490,30 @@ app.post('/api/superadmin/team/:profileId/role', requireSuperadmin, staffRoute(a
   if (String(note || '').trim().length < 10) return safeError(res, 400, 'NOTE_REQUIRED', 'Add a reason of at least 10 characters.')
   if (req.params.profileId === req.staff.id) return safeError(res, 400, 'SELF_ROLE_CHANGE_BLOCKED', 'You cannot change your own role.')
   try {
-    const result = await supabaseChangeStaffRole(req.staff.id, req.params.profileId, expectedRole, role, String(note).trim().slice(0, 2000))
+    const cleanNote = String(note).trim().slice(0, 2000)
+    if (role === 'Superadmin') {
+      const approval = await supabaseRequestSuperadminRole(req.staff.id, req.params.profileId, expectedRole, cleanNote)
+      return res.status(202).json({ approval, message: 'A second Super Admin must approve this access grant within 24 hours.' })
+    }
+    const result = await supabaseChangeStaffRole(req.staff.id, req.params.profileId, expectedRole, role, cleanNote)
     res.json({ result })
   } catch (error) {
-    const code = ['ROLE_CHANGED', 'ROLE_UNCHANGED', 'PROFILE_NOT_FOUND', 'SUPERADMIN_REQUIRED', 'SELF_ROLE_CHANGE_BLOCKED'].find((item) => String(error.message).includes(item))
+    const code = ['APPROVAL_ALREADY_PENDING', 'ROLE_CHANGED', 'ROLE_UNCHANGED', 'PROFILE_NOT_FOUND', 'SUPERADMIN_REQUIRED', 'SELF_ROLE_CHANGE_BLOCKED'].find((item) => String(error.message).includes(item))
     if (code) return safeError(res, code === 'PROFILE_NOT_FOUND' ? 404 : 409, code, 'The role could not be changed. Refresh the team directory and try again.')
+    throw error
+  }
+}))
+
+app.post('/api/superadmin/approvals/:requestId/decision', requireSuperadmin, staffRoute(async (req, res) => {
+  if (req.staff.demo || !hasSupabase()) return safeError(res, 503, 'APPROVALS_UNAVAILABLE', 'Approval decisions require a real Super Admin account and Supabase.')
+  if (!await limited(`privileged-approval:${req.staff.id}`, 20)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before making another decision.')
+  const decision = String(req.body?.decision || '')
+  if (!['approved', 'rejected'].includes(decision)) return safeError(res, 400, 'INVALID_DECISION', 'Choose approve or reject.')
+  try {
+    res.json({ result: await supabaseDecideSuperadminRole(req.staff.id, req.params.requestId, decision) })
+  } catch (error) {
+    const code = ['SECOND_APPROVER_REQUIRED', 'APPROVAL_NOT_FOUND', 'APPROVAL_DECIDED', 'APPROVAL_EXPIRED', 'ROLE_CHANGED', 'PROFILE_NOT_FOUND'].find((item) => String(error.message).includes(item))
+    if (code) return safeError(res, code === 'APPROVAL_NOT_FOUND' ? 404 : 409, code, code === 'SECOND_APPROVER_REQUIRED' ? 'A different Super Admin must decide this request.' : 'This request can no longer be decided. Refresh the team view.')
     throw error
   }
 }))

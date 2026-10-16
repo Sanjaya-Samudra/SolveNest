@@ -9,3 +9,4 @@ export const getTeam = ({ page = 1, search = '' } = {}) => request(`/team?page=$
 export const lookupTeamEmail = (email) => request(`/team/lookup?email=${encodeURIComponent(email)}`)
 export const getActivity = () => request('/activity')
 export const changeRole = (id, expectedRole, role, note) => request(`/team/${encodeURIComponent(id)}/role`, { method: 'POST', body: { expectedRole, role, note } })
+export const decideRoleApproval = (id, decision) => request(`/approvals/${encodeURIComponent(id)}/decision`, { method: 'POST', body: { decision } })
