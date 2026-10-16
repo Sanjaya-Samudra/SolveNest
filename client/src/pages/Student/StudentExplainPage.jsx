@@ -405,7 +405,7 @@ function DocumentView({ content, viewer, zoom, activeAnchor, searchQuery }) {
   const matchIds = useMemo(() => new Set(viewer.matches.filter((m) => m.type === 'block').map((m) => m.id)), [viewer.matches])
   const query = searchQuery.trim().toLowerCase()
 
-  if (content.sourceUrl && !content.pages?.length) return <iframe className="sn-ex-document-frame" src={content.sourceUrl} title={content.title || 'Delivery document'} />
+  if (content.sourceUrl && !content.pages?.length) return <iframe className="sn-ex-document-frame" src={content.sourceUrl} title={content.title || 'Delivery document'} sandbox="allow-same-origin" referrerPolicy="no-referrer" />
 
   return (
     <div className="sn-ex-doc" style={{ '--sn-ex-zoom': zoom }}>
@@ -538,7 +538,7 @@ function DatasetView({ content, viewer, zoom }) {
 function EmbeddedView({ viewer, artifact }) {
   if (!viewer.signedUrl) return null
   if (viewer.previewType === 'image') return <img className="sn-ex-embed sn-ex-embed-img" src={viewer.signedUrl} alt={artifact?.name || 'Delivery file'} />
-  return <iframe className="sn-ex-embed" src={viewer.signedUrl} title={artifact?.name || 'Delivery file'} />
+  return <iframe className="sn-ex-embed" src={viewer.signedUrl} title={artifact?.name || 'Delivery file'} sandbox="allow-same-origin" referrerPolicy="no-referrer" />
 }
 
 function SourceViewerBody({ viewer, artifact, searchQuery }) {

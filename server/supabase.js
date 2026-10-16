@@ -45,10 +45,24 @@ export async function supabaseRevokeUserSessions(userId) {
   const { error } = await adminClient.auth.admin.signOut(userId, 'global')
   if (error) throw error
 }
+export async function supabaseSignOutCurrent(accessToken, refreshToken) {
+  if (!url || !anonKey || !accessToken || !refreshToken) throw new Error('SUPABASE_SESSION_REQUIRED')
+  const client = createClient(url, anonKey, { auth: { persistSession: false, autoRefreshToken: false } })
+  const { error: sessionError } = await client.auth.setSession({ access_token: accessToken, refresh_token: refreshToken })
+  if (sessionError) throw sessionError
+  const { error } = await client.auth.signOut({ scope: 'local' })
+  if (error) throw error
+}
 export async function supabaseConsumeRateLimit(key, max) {
   if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED')
   const keyHash = crypto.createHash('sha256').update(key).digest('hex')
   const { data, error } = await adminClient.rpc('consume_rate_limit', { p_key_hash: keyHash, p_max: max })
+  if (error) throw error
+  return data === true
+}
+export async function supabaseClaimScheduledJob(jobKey, leaseSeconds) {
+  if (!adminClient) return true
+  const { data, error } = await adminClient.rpc('claim_scheduled_job', { p_job_key: String(jobKey), p_lease_seconds: Math.max(10, Math.trunc(leaseSeconds)) })
   if (error) throw error
   return data === true
 }

@@ -7,6 +7,7 @@ const startedAt = new Date().toISOString()
 let lastEventId = 0
 let polling = false
 let pollTimer = null
+let pruneTimer = null
 
 function deliver(studentId, event) {
   const eventName = /^[A-Za-z][\w-]{0,63}$/.test(String(event?.type || '')) ? event.type : 'Update'
@@ -61,8 +62,18 @@ export function publish(studentId, event) {
 
 export function closeStreams() {
   if (pollTimer) clearInterval(pollTimer)
+  if (pruneTimer) clearInterval(pruneTimer)
   pollTimer = null
+  pruneTimer = null
   for (const connections of subscribers.values()) for (const response of connections) response.end()
 }
 
-if (hasSupabase()) supabasePruneRealtimeEvents(new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()).catch((error) => console.error('[realtime] event cleanup failed', error.message))
+async function pruneSharedEvents() {
+  try { await supabasePruneRealtimeEvents(new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()) }
+  catch (error) { console.error('[realtime] event cleanup failed', error.message) }
+}
+if (hasSupabase()) {
+  pruneSharedEvents()
+  pruneTimer = setInterval(pruneSharedEvents, 60 * 60_000)
+  pruneTimer.unref()
+}

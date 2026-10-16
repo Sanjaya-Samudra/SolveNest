@@ -54,7 +54,7 @@ import { hasObjectStorage, persistUpload, removeStoredObject, signedObjectUrl } 
 import { cleanupUploads } from './uploadCleanup.js'
 import { hasEmail, sendEmail } from './email.js'
 import { exportStudentAccount } from './accountExport.js'
-import { hasSupabase, hasSupabaseAuth, supabaseChangeStaffRole, supabaseConsumeRateLimit, supabaseCreateAppSession, supabaseDeleteAppSession, supabaseExpertProfiles, supabaseFindProfileByEmail, supabaseGetAppSession, supabaseProfile, supabaseRefresh, supabaseRequestPasswordReset, supabaseRevokeUserSessions, supabaseTeam, supabaseUpdatePassword, supabaseSignIn, supabaseSignUp, supabaseUser } from './supabase.js'
+import { hasSupabase, hasSupabaseAuth, supabaseChangeStaffRole, supabaseClaimScheduledJob, supabaseConsumeRateLimit, supabaseCreateAppSession, supabaseDeleteAppSession, supabaseExpertProfiles, supabaseFindProfileByEmail, supabaseGetAppSession, supabaseProfile, supabaseRefresh, supabaseRequestPasswordReset, supabaseRevokeUserSessions, supabaseSignOutCurrent, supabaseTeam, supabaseUpdatePassword, supabaseSignIn, supabaseSignUp, supabaseUser } from './supabase.js'
 import { getAdminCase, getAdminOverview, getAdminQaCase, issueAdminPlan, issueAdminScopeChange, listAdminQaAssignments, recordAdminReview } from './adminStore.js'
 import { getSuperadminActivity, getSuperadminOverview } from './superadminStore.js'
 import { checkMalwareScanner, inspectUpload } from './uploadSafety.js'
@@ -1237,7 +1237,7 @@ function setSupabaseCookies(res, session) {
 }
 
 function clearStudentCookies(res) {
-  const expired = 'Path=/; HttpOnly; SameSite=Lax; Max-Age=0'
+  const expired = `Path=/; HttpOnly; SameSite=Lax; Max-Age=0${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`
   res.setHeader('Set-Cookie', [`sn_access=; ${expired}`, `sn_refresh=; ${expired}`, `${COOKIE}=; ${expired}`])
 }
 
@@ -1920,7 +1920,10 @@ app.post('/api/contact', asyncRoute(async (req, res, next) => {
 }))
 
 async function logoutStudent(req, res) {
-  if (hasSupabaseAuth()) await supabaseRevokeUserSessions(req.student.studentId)
+  if (hasSupabaseAuth()) {
+    const cookies = parseCookies(req.headers.cookie)
+    await supabaseSignOutCurrent(cookies.sn_access, cookies.sn_refresh)
+  }
   else deleteSession(req.student.id)
   clearStudentCookies(res)
   res.json({ ok: true })
@@ -2009,7 +2012,10 @@ app.patch('/api/student/account', requireStudent, accountRoute(async (req, res) 
 app.post('/api/student/account/logout', requireStudent, asyncRoute(logoutStudent))
 
 app.delete('/api/student/account/sessions/current', requireStudent, asyncRoute(async (req, res) => {
-  if (hasSupabaseAuth()) await supabaseRevokeUserSessions(req.student.studentId)
+  if (hasSupabaseAuth()) {
+    const cookies = parseCookies(req.headers.cookie)
+    await supabaseSignOutCurrent(cookies.sn_access, cookies.sn_refresh)
+  }
   else deleteSession(req.student.id)
   clearStudentCookies(res)
   res.json({ ok: true, signedOut: true })
@@ -2574,6 +2580,7 @@ const scopeSyncTimer = setInterval(async () => {
   if (scopeSyncRunning) return
   scopeSyncRunning = true
   try {
+    if (!await supabaseClaimScheduledJob('scope-change-sync', 55)) return
     const pending = (await readTaskStore()).scopeChanges.filter((item) => item.status === 'ACCEPTED' && item.expertSyncPending)
     for (const change of pending) {
       try { await syncApprovedScopeChange(change.id) }
@@ -2587,7 +2594,10 @@ let uploadCleanupRunning = false
 const runUploadCleanup = async () => {
   if (uploadCleanupRunning) return
   uploadCleanupRunning = true
-  try { await cleanupUploads({ uploadDir, dataDir }) }
+  try {
+    if (!await supabaseClaimScheduledJob('upload-cleanup', 5 * 60 * 60)) return
+    await cleanupUploads({ uploadDir, dataDir })
+  }
   catch (error) { console.error('[uploads] cleanup failed', error.message) }
   finally { uploadCleanupRunning = false }
 }
