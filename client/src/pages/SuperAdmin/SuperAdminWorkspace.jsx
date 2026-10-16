@@ -24,20 +24,23 @@ function Metric({ label, value, icon: Icon, tone }) { return <div className="adm
 function Login({ onDone }) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [otp, setOtp] = useState('')
+  const [mfa, setMfa] = useState(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const submit = async (event) => {
     event.preventDefault()
     setBusy(true)
     setError('')
-    try { await loginSuperadmin(email.trim(), password); onDone() }
-    catch (issue) { setError(issue.message); setBusy(false) }
+    try { await loginSuperadmin(email.trim(), password, otp, mfa?.factorId); onDone() }
+    catch (issue) { if (issue.mfa) setMfa(issue.mfa); setError(issue.message); setBusy(false) }
   }
   return <div className="adm-gate"><form className="adm-login" onSubmit={submit}>
     <div className="adm-login-mark"><Crown size={24} /></div>
     <p className="adm-kicker">SOLVENEST GOVERNANCE</p><h1>Super Admin sign in</h1><p>Use an approved Superadmin account to oversee the platform.</p>
     <label>Email<input type="email" required autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} /></label>
     <label>Password<input type="password" required autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} /></label>
+    {mfa && <><div className="adm-callout"><strong>{mfa.enrolled ? 'Two-step verification' : 'Set up two-step verification'}</strong>{!mfa.enrolled && <><p>Add this account to your authenticator app, then enter its six-digit code.</p>{mfa.qrCode && <img src={mfa.qrCode} alt="Authenticator setup QR code" width="180" height="180" />}{mfa.secret && <code>{mfa.secret}</code>}</>}</div><label>Verification code<input type="text" required inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength="6" value={otp} onChange={(event) => setOtp(event.target.value.replace(/\D/g, '').slice(0, 6))} /></label></>}
     {error && <div className="adm-alert" role="alert">{error}</div>}
     <button className="adm-primary" disabled={busy}>{busy ? 'Signing in…' : 'Open Super Admin workspace'} <ArrowRight size={16} /></button>
     <a href="/">Return to SolveNest</a>
