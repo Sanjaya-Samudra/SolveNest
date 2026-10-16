@@ -66,6 +66,23 @@ export async function supabaseClaimScheduledJob(jobKey, leaseSeconds) {
   if (error) throw error
   return data === true
 }
+export async function supabaseQueueEmail(message) {
+  if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED')
+  const { data, error } = await adminClient.from('notification_outbox').insert({ to_email: message.to, subject: message.subject, body_text: message.text, reply_to: message.replyTo || null }).select('id').single()
+  if (error) throw error
+  return data.id
+}
+export async function supabaseClaimEmailOutbox(limit = 10) {
+  if (!adminClient) return []
+  const { data, error } = await adminClient.rpc('claim_notification_outbox', { p_limit: Math.min(50, Math.max(1, Math.trunc(limit))) })
+  if (error) throw error
+  return data || []
+}
+export async function supabaseCompleteEmailOutbox(id, delivered, errorMessage = null) {
+  if (!adminClient) return
+  const { error } = await adminClient.rpc('complete_notification_outbox', { p_id: id, p_delivered: Boolean(delivered), p_error: errorMessage ? String(errorMessage).slice(0, 1000) : null })
+  if (error) throw error
+}
 export async function supabaseReadExpertWorkspace(expertId) {
   if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED')
   const { data, error } = await adminClient.from('expert_workspaces').select('workspace, revision').eq('expert_id', expertId).maybeSingle()

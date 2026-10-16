@@ -1,10 +1,9 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { hasSupabase, supabaseReadDomainCollection, supabaseReadState, supabaseWriteState } from './supabase.js'
+import { hasSupabase, supabaseQueueEmail, supabaseReadDomainCollection, supabaseReadState, supabaseWriteState } from './supabase.js'
 import { getNotificationPreferences } from './accountStore.js'
 import { supabaseProfile } from './supabase.js'
-import { sendEmail } from './email.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const dataDir = path.join(__dirname, 'data')
@@ -71,7 +70,7 @@ export async function addNotification(notification) {
   if (preferences.email && categoryEnabled && hasSupabase()) {
     try {
       const profile = await supabaseProfile(notification.studentId)
-      if (profile?.email) await sendEmail({ to: profile.email, subject: notification.title, text: `${notification.body || notification.title}\n\nOpen SolveNest to view the update.` })
+      if (profile?.email) await supabaseQueueEmail({ to: profile.email, subject: notification.title, text: `${notification.body || notification.title}\n\nOpen SolveNest to view the update.` })
     } catch (error) { console.error('[notification-email]', error.message) }
   }
   return { ...notification, delivery: { inApp: Boolean(preferences.inApp && categoryEnabled), email: Boolean(preferences.email && categoryEnabled) } }

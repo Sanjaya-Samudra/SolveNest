@@ -60,6 +60,7 @@ import { getSuperadminActivity, getSuperadminOverview } from './superadminStore.
 import { checkMalwareScanner, inspectUpload } from './uploadSafety.js'
 import { moderateTaskMessage } from './messagePolicy.js'
 import { activePolicies, validatePolicyConsents } from './policyRegistry.js'
+import { drainEmailOutbox } from './emailOutbox.js'
 
 const PORT = Number(process.env.PORT || 4174)
 const COOKIE = 'sn_sid'
@@ -2609,12 +2610,16 @@ const runUploadCleanup = async () => {
 const uploadCleanupTimer = setInterval(runUploadCleanup, 6 * 60 * 60 * 1000)
 uploadCleanupTimer.unref()
 runUploadCleanup()
+const emailOutboxTimer = setInterval(() => drainEmailOutbox().catch((error) => console.error('[email-outbox] drain failed', error.message)), 15_000)
+emailOutboxTimer.unref()
+drainEmailOutbox().catch((error) => console.error('[email-outbox] drain failed', error.message))
 let shuttingDown = false
 function shutdown(signal) {
   if (shuttingDown) return
   shuttingDown = true
   clearInterval(scopeSyncTimer)
   clearInterval(uploadCleanupTimer)
+  clearInterval(emailOutboxTimer)
   closeStreams()
   console.log(JSON.stringify({ level: 'info', type: 'shutdown', signal }))
   server.close((error) => process.exit(error ? 1 : 0))
