@@ -54,7 +54,7 @@ import { hasObjectStorage, persistUpload, removeStoredObject, signedObjectUrl } 
 import { cleanupUploads } from './uploadCleanup.js'
 import { hasEmail, sendEmail } from './email.js'
 import { exportStudentAccount } from './accountExport.js'
-import { hasSupabase, hasSupabaseAuth, supabaseChangeStaffRole, supabaseClaimScheduledJob, supabaseConsumeRateLimit, supabaseCreateAppSession, supabaseDeleteAppSession, supabaseExpertProfiles, supabaseFindProfileByEmail, supabaseGetAppSession, supabaseProfile, supabaseRefresh, supabaseRequestPasswordReset, supabaseRevokeUserSessions, supabaseSignOutCurrent, supabaseTeam, supabaseUpdatePassword, supabaseSignIn, supabaseSignUp, supabaseUser } from './supabase.js'
+import { hasSupabase, hasSupabaseAuth, supabaseChangeStaffRole, supabaseClaimScheduledJob, supabaseConsumeRateLimit, supabaseCreateAppSession, supabaseDeleteAppSession, supabaseExpertProfiles, supabaseFindProfileByEmail, supabaseGetAppSession, supabaseProfile, supabaseRefresh, supabaseRequestPasswordReset, supabaseRevokeUserSessions, supabaseSignOutCurrent, supabaseTeam, supabaseUpdatePassword, supabaseSignIn, supabaseSignUp, supabaseUser, supabaseVerifyStaffMfa } from './supabase.js'
 import { getAdminCase, getAdminOverview, getAdminQaCase, issueAdminPlan, issueAdminScopeChange, listAdminQaAssignments, recordAdminReview } from './adminStore.js'
 import { getSuperadminActivity, getSuperadminOverview } from './superadminStore.js'
 import { checkMalwareScanner, inspectUpload } from './uploadSafety.js'
@@ -1372,6 +1372,8 @@ app.post('/api/expert/auth/login', asyncRoute(async (req, res) => {
     if (error || !data?.user) return safeError(res, 401, 'INVALID_CREDENTIALS', 'Those details did not match an account.')
     const profile = await supabaseProfile(data.user.id)
     if (profile?.role !== 'Expert') return safeError(res, 403, 'EXPERT_ACCESS_REQUIRED', 'This account does not have Expert access.')
+    const mfa = await supabaseVerifyStaffMfa(data.session, { code: req.body?.otp, factorId: req.body?.factorId })
+    if (!mfa.verified) return res.status(mfa.invalid ? 401 : 428).json({ error: mfa.invalid ? 'MFA_CODE_INVALID' : 'MFA_REQUIRED', code: mfa.invalid ? 'MFA_CODE_INVALID' : 'MFA_REQUIRED', message: mfa.invalid ? 'The verification code is invalid or expired.' : mfa.enrolled ? 'Enter the code from your authenticator app.' : 'Set up an authenticator app before continuing.', mfa: { enrolled: mfa.enrolled, factorId: mfa.factorId || req.body?.factorId || null, qrCode: mfa.qrCode || null, secret: mfa.secret || null } })
     const sid = crypto.randomUUID()
     await supabaseCreateAppSession(sid, profile.id, 'Expert', userAgentLabel(req.headers['user-agent']))
     res.setHeader('Set-Cookie', `${EXPERT_COOKIE}=${sid}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`)
@@ -1817,7 +1819,7 @@ app.post('/api/expert/notifications/read-all', requireExpert, expertRoute(async 
 app.post('/api/expert/logout', requireExpert, expertRoute(async (req, res) => {
   if (hasSupabase() && req.expert.expertId !== 'demo-expert') await supabaseDeleteAppSession(req.expert.id)
   else expertSessions.delete(req.expert.id)
-  res.setHeader('Set-Cookie', `${EXPERT_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`)
+    res.setHeader('Set-Cookie', `${EXPERT_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`)
   res.json({ ok: true })
 }))
 
@@ -2161,6 +2163,8 @@ async function staffLogin(req, res, role) {
   if (error || !data?.user) return safeError(res, 401, 'INVALID_CREDENTIALS', 'Those details did not match an account.')
   const profile = await supabaseProfile(data.user.id)
   if (profile?.role !== role) return safeError(res, 403, `${role.toUpperCase()}_ACCESS_REQUIRED`, `This account does not have ${staffLabel(role)} access.`)
+  const mfa = await supabaseVerifyStaffMfa(data.session, { code: req.body?.otp, factorId: req.body?.factorId })
+  if (!mfa.verified) return res.status(mfa.invalid ? 401 : 428).json({ error: mfa.invalid ? 'MFA_CODE_INVALID' : 'MFA_REQUIRED', code: mfa.invalid ? 'MFA_CODE_INVALID' : 'MFA_REQUIRED', message: mfa.invalid ? 'The verification code is invalid or expired.' : mfa.enrolled ? 'Enter the code from your authenticator app.' : 'Set up an authenticator app before continuing.', mfa: { enrolled: mfa.enrolled, factorId: mfa.factorId || req.body?.factorId || null, qrCode: mfa.qrCode || null, secret: mfa.secret || null } })
   const sid = crypto.randomUUID()
   const staff = { id: profile.id, name: profile.name, email: profile.email, role: profile.role }
   await supabaseCreateAppSession(sid, profile.id, profile.role, userAgentLabel(req.headers['user-agent']))

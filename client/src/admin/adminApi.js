@@ -2,7 +2,7 @@ import { staffRequest } from '../shared/staffRequest.js'
 const request = (path, options) => staffRequest('/api/admin', path, options)
 
 export const getStaff = () => request('/me')
-export const loginStaff = (email, password) => request('/login', { method: 'POST', body: { email, password } })
+export const loginStaff = (email, password, otp, factorId) => request('/login', { method: 'POST', body: { email, password, otp, factorId } })
 export const logoutStaff = () => request('/logout', { method: 'POST' })
 export const getOverview = () => request('/overview')
 export const getConversations = () => request('/conversations')

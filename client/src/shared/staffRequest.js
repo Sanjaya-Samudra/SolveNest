@@ -14,6 +14,7 @@ export async function staffRequest(base, path, options = {}) {
       const error = new Error(response.status === 401 ? 'Your session has expired. Sign in again.' : response.status === 403 ? 'Your account does not have access to this workspace.' : payload?.message || 'This service is temporarily unavailable. Please try again.')
       error.status = response.status
       error.code = payload?.code || payload?.error || 'INVALID_RESPONSE'
+      error.mfa = payload?.mfa || null
       error.requestId = response.headers.get('X-Request-Id')
       throw error
     }

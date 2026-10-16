@@ -32,6 +32,7 @@ export async function apiFetch(url, { signal, method = 'GET', body } = {}) {
     const error = new Error('EXPERT_ACCESS_REQUIRED')
     error.code = response.status
     error.serverMessage = payload?.message || null
+    error.mfa = payload?.mfa || null
     throw error
   }
   if (!response.ok) {
@@ -39,6 +40,7 @@ export async function apiFetch(url, { signal, method = 'GET', body } = {}) {
     error.code = payload?.code || response.status
     error.status = response.status
     error.serverMessage = payload?.message || null
+    error.mfa = payload?.mfa || null
     throw error
   }
   return payload
@@ -62,8 +64,8 @@ export function fetchExpertAccountState({ signal } = {}) {
   }))
 }
 
-export function loginExpert({ email, password }) {
-  return apiFetch('/api/expert/auth/login', { method: 'POST', body: { email, password } })
+export function loginExpert({ email, password, otp, factorId }) {
+  return apiFetch('/api/expert/auth/login', { method: 'POST', body: { email, password, otp, factorId } })
 }
 
 export function fetchExpertAvailability({ signal } = {}) {

@@ -53,6 +53,27 @@ export async function supabaseSignOutCurrent(accessToken, refreshToken) {
   const { error } = await client.auth.signOut({ scope: 'local' })
   if (error) throw error
 }
+export async function supabaseVerifyStaffMfa(session, { code = '', factorId = '' } = {}) {
+  if (!url || !anonKey || !session?.access_token || !session?.refresh_token) throw new Error('SUPABASE_SESSION_REQUIRED')
+  const client = createClient(url, anonKey, { auth: { persistSession: false, autoRefreshToken: false } })
+  const { error: sessionError } = await client.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token })
+  if (sessionError) throw sessionError
+  const { data: factors, error: factorError } = await client.auth.mfa.listFactors()
+  if (factorError) throw factorError
+  const verified = factors?.totp?.filter((factor) => factor.status === 'verified') || []
+  if (!code) {
+    if (verified.length) return { required: true, enrolled: true }
+    const { data, error } = await client.auth.mfa.enroll({ factorType: 'totp', friendlyName: 'SolveNest staff access' })
+    if (error) throw error
+    return { required: true, enrolled: false, factorId: data.id, qrCode: data.totp.qr_code, secret: data.totp.secret }
+  }
+  const factor = verified.find((item) => item.id === factorId) || verified[0] || factors?.totp?.find((item) => item.id === factorId)
+  if (!factor) return { required: true, enrolled: false }
+  const { data, error } = await client.auth.mfa.challengeAndVerify({ factorId: factor.id, code: String(code).replace(/\s/g, '') })
+  if (error) return { required: true, enrolled: factor.status === 'verified', invalid: true }
+  const level = await client.auth.mfa.getAuthenticatorAssuranceLevel()
+  return { required: level.data?.currentLevel !== 'aal2', verified: level.data?.currentLevel === 'aal2', session: data }
+}
 export async function supabaseConsumeRateLimit(key, max) {
   if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED')
   const keyHash = crypto.createHash('sha256').update(key).digest('hex')
