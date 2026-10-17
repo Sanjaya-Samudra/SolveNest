@@ -37,6 +37,14 @@ const emptyStore = () => ({
     conflictDomains: [],
     timezone: 'Asia/Colombo',
     avatarUrl: null,
+    qualificationSummary: '',
+    portfolioUrl: '',
+    experienceYears: 0,
+    payoutMethod: '',
+    payoutAccountName: '',
+    payoutAccountLast4: '',
+    taxCountry: 'LK',
+    taxIdentifierLast4: '',
   },
   assignments: [],
   availableTasks: [],
@@ -73,7 +81,7 @@ export async function readExpertStore() {
     if (identity.id !== 'demo-expert') {
       const saved = await supabaseReadExpertWorkspace(identity.id)
       const store = normalizeStore(saved)
-      if (!saved) store.expert.competencies = []
+      if (!saved) Object.assign(store.expert, { competencies: [], verified: false, accountState: 'pending', verificationHistory: [] })
       if (saved) Object.defineProperty(store, '__revision', { value: saved.__revision, configurable: true })
       store.expert = { ...store.expert, id: identity.id, name: identity.name || store.expert.name, title: saved?.expert?.title || 'Expert' }
       return store
@@ -97,7 +105,7 @@ export async function readExpertStore() {
   } catch {
     const fresh = emptyStore()
     fresh.expert = { ...fresh.expert, id: identity.id, name: identity.name || (identity.id === 'demo-expert' ? fresh.expert.name : 'Expert'), title: identity.id === 'demo-expert' ? fresh.expert.title : 'Expert' }
-    if (identity.id !== 'demo-expert') fresh.expert.competencies = []
+    if (identity.id !== 'demo-expert') Object.assign(fresh.expert, { competencies: [], verified: false, accountState: 'pending', verificationHistory: [] })
     return fresh
   }
 }
@@ -256,6 +264,14 @@ export function toExpertWorkspace(store) {
       competencies: Array.isArray(expert.competencies) ? expert.competencies.map(String).slice(0, 12) : [],
       conflictDomains: Array.isArray(expert.conflictDomains) ? expert.conflictDomains.map(String).slice(0, 12) : [],
       timezone: String(expert.timezone || 'UTC'),
+      qualificationSummary: String(expert.qualificationSummary || ''),
+      portfolioUrl: String(expert.portfolioUrl || ''),
+      experienceYears: Math.max(0, Math.min(60, Number(expert.experienceYears) || 0)),
+      payoutMethod: String(expert.payoutMethod || ''),
+      payoutAccountName: String(expert.payoutAccountName || ''),
+      payoutAccountLast4: String(expert.payoutAccountLast4 || ''),
+      taxCountry: String(expert.taxCountry || 'LK'),
+      taxIdentifierLast4: String(expert.taxIdentifierLast4 || ''),
     },
     accountState: ['approved', 'pending', 'suspended'].includes(expert.accountState) ? expert.accountState : 'approved',
     availability: ['available', 'limited', 'unavailable'].includes(expert.availability) ? expert.availability : 'available',
@@ -297,13 +313,39 @@ export async function updateExpertProfile(input = {}) {
   const conflictDomains = Array.from(new Set((Array.isArray(input.conflictDomains) ? input.conflictDomains : []).map((item) => String(item).trim()).filter(Boolean))).slice(0, 12)
   const capacity = Number(input.capacity)
   const timezone = String(input.timezone || '').trim()
+  const qualificationSummary = String(input.qualificationSummary || '').trim().slice(0, 2000)
+  const portfolioUrl = String(input.portfolioUrl || '').trim().slice(0, 500)
+  const experienceYears = Number(input.experienceYears || 0)
+  const payoutMethod = String(input.payoutMethod || '').trim().slice(0, 80)
+  const payoutAccountName = String(input.payoutAccountName || '').trim().slice(0, 120)
+  const payoutAccountLast4 = String(input.payoutAccountLast4 || '').replace(/\D/g, '').slice(-4)
+  const taxCountry = String(input.taxCountry || 'LK').trim().toUpperCase().slice(0, 2)
+  const taxIdentifierLast4 = String(input.taxIdentifierLast4 || '').replace(/[^A-Za-z0-9]/g, '').slice(-4)
   if (!Number.isInteger(capacity) || capacity < 1 || capacity > 20) return { error: 'CAPACITY_INVALID' }
   if (!competencies.length || competencies.some((item) => item.length > 80)) return { error: 'COMPETENCIES_REQUIRED' }
   if (conflictDomains.some((item) => item.length > 80)) return { error: 'CONFLICTS_INVALID' }
+  if (!Number.isInteger(experienceYears) || experienceYears < 0 || experienceYears > 60) return { error: 'EXPERIENCE_INVALID' }
+  if (portfolioUrl && !/^https:\/\//i.test(portfolioUrl)) return { error: 'PORTFOLIO_URL_INVALID' }
   try { Intl.DateTimeFormat(undefined, { timeZone: timezone }).format() } catch { return { error: 'TIMEZONE_INVALID' } }
   return withExpertStore((store) => {
-    Object.assign(store.expert, { capacity, competencies, conflictDomains, timezone })
+    Object.assign(store.expert, { capacity, competencies, conflictDomains, timezone, qualificationSummary, portfolioUrl, experienceYears, payoutMethod, payoutAccountName, payoutAccountLast4, taxCountry, taxIdentifierLast4 })
     return { expert: toExpertWorkspace(store).expert }
+  })
+}
+
+export async function reviewExpertAccount(actor, decision, note) {
+  const cleanNote = String(note || '').trim().slice(0, 2000)
+  if (!['approve', 'suspend', 'reactivate'].includes(decision)) return { error: 'EXPERT_DECISION_INVALID' }
+  if (cleanNote.length < 10) return { error: 'NOTE_REQUIRED' }
+  return withExpertStore((store) => {
+    if (decision !== 'suspend' && !(store.expert.competencies || []).length) return { error: 'EXPERT_PROFILE_INCOMPLETE' }
+    const before = store.expert.accountState || 'pending'
+    store.expert.verified = decision !== 'suspend'
+    store.expert.accountState = decision === 'suspend' ? 'suspended' : 'approved'
+    store.expert.verificationHistory ||= []
+    store.expert.verificationHistory.unshift({ id: crypto.randomUUID(), actorId: actor.id, actorName: actor.name, decision, note: cleanNote, before, after: store.expert.accountState, at: new Date().toISOString() })
+    store.expert.verificationHistory = store.expert.verificationHistory.slice(0, 50)
+    return { expert: { id: store.expert.id, verified: store.expert.verified, accountState: store.expert.accountState }, history: store.expert.verificationHistory }
   })
 }
 

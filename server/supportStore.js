@@ -40,6 +40,9 @@ export async function createSupportTicket({ student, category, issue, taskId, me
     const ticket = {
       id: `SN-SUP-${crypto.randomUUID().slice(0, 8).toUpperCase()}`,
       status: 'received',
+      priority: category === 'payment' || category === 'technical' ? 'high' : 'normal',
+      ownerId: null,
+      firstResponseDueAt: new Date(Date.now() + (category === 'payment' || category === 'technical' ? 4 : 12) * 60 * 60 * 1000).toISOString(),
       category: category || 'general',
       categoryLabel: categoryDef?.label || 'General',
       issue: issue || null,
@@ -76,7 +79,7 @@ export async function replyToSupportTicket(studentId, id, message) {
   })
 }
 
-export async function updateSupportTicket(id, actorId, status, note, studentMessage = '') {
+export async function updateSupportTicket(id, actorId, status, note, studentMessage = '', operations = {}) {
   const allowed = new Set(['received', 'in_progress', 'waiting_on_student', 'resolved'])
   const cleanNote = String(note || '').trim().slice(0, 2000)
   const cleanStudentMessage = String(studentMessage || '').trim().slice(0, 2000)
@@ -97,6 +100,9 @@ export async function updateSupportTicket(id, actorId, status, note, studentMess
     if (ticket.status === status) return { error: 'STATUS_UNCHANGED' }
     const stamp = new Date().toISOString()
     ticket.status = status
+    if (['low', 'normal', 'high', 'urgent'].includes(operations.priority)) ticket.priority = operations.priority
+    if (operations.assignToMe === true) ticket.ownerId = actorId
+    if (!ticket.firstRespondedAt) ticket.firstRespondedAt = stamp
     ticket.updatedAt = stamp
     ticket.history = Array.isArray(ticket.history) ? ticket.history : []
     ticket.history.unshift({ id: crypto.randomUUID(), actorId, status, note: cleanNote, at: stamp })

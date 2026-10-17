@@ -6,7 +6,7 @@ import { hasSupabase, supabaseReadDomainCollection, supabaseReadState, supabaseW
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const dataDir = path.join(__dirname, 'data')
 const storePath = path.join(dataDir, 'tasks.json')
-const emptyStore = () => ({ tasks: [], files: [], deliveryFiles: [], analyses: [], reviews: [], drafts: [], guestTransfers: [], conversations: [], messages: [], payments: [], plans: [], scopeChanges: [], explainSessions: [], explainArtifacts: [], explainRequests: [], supportTickets: [], idempotency: {}, activity: [], adminAudit: [] })
+const emptyStore = () => ({ tasks: [], files: [], deliveryFiles: [], analyses: [], reviews: [], drafts: [], guestTransfers: [], conversations: [], messages: [], payments: [], plans: [], scopeChanges: [], explainSessions: [], explainArtifacts: [], explainRequests: [], supportTickets: [], refundRequests: [], payoutRequests: [], solvyJobs: [], expertRequests: [], legalHolds: [], securityEvents: [], retentionRuns: [], policies: [], emailSuppressions: [], idempotency: {}, activity: [], adminAudit: [] })
 
 function ensureStore() {
   if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true })

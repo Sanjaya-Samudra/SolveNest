@@ -48,6 +48,7 @@ import {
   toExpertWorkspace,
   updateAssignmentWorkState,
   updateExpertProfile,
+  reviewExpertAccount,
 } from './expertStore.js'
 import { addActivity, buildTaskSummary, claimProviderEvent, completeProviderEvent, getStudentAnalysis, getStudentFiles, getStudentTask, getStudentTasks, readStudentSnapshot, readTaskStore, releaseProviderEvent, withTaskStore } from './taskStore.js'
 import { publish, subscribe, closeStreams } from './realtime.js'
@@ -55,7 +56,7 @@ import { hasObjectStorage, persistUpload, removeStoredObject, signedObjectUrl } 
 import { cleanupUploads } from './uploadCleanup.js'
 import { hasEmail, sendEmail } from './email.js'
 import { exportStudentAccount } from './accountExport.js'
-import { hasSupabase, hasSupabaseAuth, supabaseChangeStaffRole, supabaseClaimScheduledJob, supabaseConsumeRateLimit, supabaseCreateAppSession, supabaseDecideSuperadminRole, supabaseDeleteAppSession, supabaseExpertProfiles, supabaseFindProfileByEmail, supabaseGetAppSession, supabasePrivilegedRoleRequests, supabaseProfile, supabaseRefresh, supabaseRequestPasswordReset, supabaseRequestSuperadminRole, supabaseRevokeUserSessions, supabaseSignOutCurrent, supabaseTeam, supabaseUpdatePassword, supabaseSignIn, supabaseSignUp, supabaseUser, supabaseVerifyStaffMfa } from './supabase.js'
+import { hasSupabase, hasSupabaseAuth, supabaseAnonymizeUser, supabaseAppSessionId, supabaseChangeStaffRole, supabaseClaimScheduledJob, supabaseConsumeRateLimit, supabaseCreateAppSession, supabaseDecideSuperadminRole, supabaseDeleteAppSession, supabaseDeleteAppSessionById, supabaseDeleteOwnedAppSession, supabaseEmailOutbox, supabaseExpertProfiles, supabaseFindProfileByEmail, supabaseGetAppSession, supabaseListStaffSessions, supabaseListUserAppSessions, supabasePrivilegedRoleRequests, supabaseProfile, supabaseRefresh, supabaseRequestPasswordReset, supabaseRequestSuperadminRole, supabaseRetryEmail, supabaseRevokeUserSessions, supabaseSignOutCurrent, supabaseTeam, supabaseUpdatePassword, supabaseSignIn, supabaseSignUp, supabaseUser, supabaseVerifyStaffMfa } from './supabase.js'
 import { getAdminCase, getAdminOverview, getAdminQaCase, issueAdminPlan, issueAdminScopeChange, listAdminQaAssignments, recordAdminReview } from './adminStore.js'
 import { getSuperadminActivity, getSuperadminOverview } from './superadminStore.js'
 import { checkMalwareScanner, inspectUpload } from './uploadSafety.js'
@@ -64,6 +65,9 @@ import { activePolicies, validatePolicyConsents } from './policyRegistry.js'
 import { drainEmailOutbox } from './emailOutbox.js'
 import { observeRequest, observabilitySnapshot } from './observability.js'
 import { callSolvy, normalizeSolvyAnalysis } from './solvyClient.js'
+import { appealRefundRequest, createRefundRequest, decideRefundRequest, listRefundQueue, listStudentRefunds, markRefundResult } from './refundStore.js'
+import { decidePayout, expertEarnings, listPayoutRequests, requestExpertPayout } from './payoutStore.js'
+import { anonymizeStudentRecords, listPrivacyRequests, prepareAccountClosure } from './privacyStore.js'
 
 const PORT = Number(process.env.PORT || 4174)
 const COOKIE = 'sn_sid'
@@ -268,6 +272,23 @@ async function syncApprovedScopeChange(scopeChangeId) {
   publishExpert(task.assignedExpertId, 'AssignmentChanged', { assignmentId: task.assignmentId, at: now() })
 }
 
+async function reconcileStripePayments(actorId = 'scheduler') {
+  if (!stripe) return { checked: 0, changed: 0, unavailable: true }
+  const pending = (await readTaskStore()).payments.filter((item) => ['pending', 'processing'].includes(item.status) && String(item.providerId || '').startsWith('cs_')).slice(0, 100)
+  let changed = 0
+  const failures = []
+  for (const payment of pending) {
+    try {
+      const session = await stripe.checkout.sessions.retrieve(payment.providerId)
+      const status = session.payment_status === 'paid' ? 'succeeded' : session.status === 'expired' ? 'canceled' : null
+      if (status && status !== payment.status) { await announceFundedTask(await recordPaymentStatus(session.id, status, false, session)); changed += 1 }
+    } catch (error) { failures.push({ paymentId: payment.id, code: String(error.code || error.message).slice(0, 120) }) }
+  }
+  const report = { checked: pending.length, changed, failures, at: now(), actorId }
+  await withTaskStore((store) => { store.adminAudit.unshift({ id: crypto.randomUUID(), action: 'stripe_reconciliation', actorId, note: `${report.checked} checked, ${report.changed} changed, ${failures.length} failed`, report, at: report.at }) })
+  return report
+}
+
 app.post('/api/payments/stripe/webhook', express.raw({ type: 'application/json' }), asyncRoute(async (req, res) => {
   if (!stripe || !process.env.STRIPE_WEBHOOK_SECRET) return res.status(503).json({ error: 'PAYMENTS_NOT_CONFIGURED' })
   let event
@@ -321,6 +342,15 @@ app.post('/api/payments/stripe/webhook', express.raw({ type: 'application/json' 
     console.error('[stripe-webhook] reconciliation failed', error)
     res.status(503).json({ error: 'PAYMENT_RECONCILIATION_PENDING' })
   }
+}))
+app.post('/api/email/delivery-webhook', asyncRoute(async (req, res) => {
+  const secret = String(process.env.EMAIL_WEBHOOK_SECRET || '')
+  const supplied = String(req.headers['x-solvenest-email-secret'] || '')
+  if (!secret || supplied.length !== secret.length || !crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(secret))) return safeError(res, 401, 'INVALID_EMAIL_WEBHOOK', 'Email webhook authentication failed.')
+  const event = String(req.body?.event || '').toLowerCase(); const email = String(req.body?.email || '').trim().toLowerCase()
+  if (!['bounce', 'complaint', 'delivered'].includes(event) || !/^\S+@\S+\.\S+$/.test(email)) return safeError(res, 400, 'EMAIL_EVENT_INVALID', 'Invalid email delivery event.')
+  await withTaskStore((store) => { store.emailSuppressions ||= []; const current = store.emailSuppressions.find((item) => item.email === email); if (['bounce', 'complaint'].includes(event)) { if (current) Object.assign(current, { active: true, reason: event, updatedAt: now() }); else store.emailSuppressions.unshift({ id: crypto.randomUUID(), email, reason: event, active: true, createdAt: now(), updatedAt: now() }) } store.securityEvents ||= []; store.securityEvents.unshift({ id: crypto.randomUUID(), type: `email_${event}`, severity: event === 'complaint' ? 'high' : event === 'bounce' ? 'medium' : 'info', subjectId: email, providerId: req.body?.id || null, at: now() }) })
+  res.json({ received: true })
 }))
 app.use(express.json({ limit: '1mb' }))
 
@@ -380,6 +410,28 @@ async function analyzeWithSolvy(files) {
   const inputs = await Promise.all(files.map(async (file) => ({ id: file.id, role: file.role, name: file.originalName, mimeType: file.mimeType, size: file.size, url: await signedObjectUrl(file.storageKey, file.originalName) })))
   if (process.env.NODE_ENV === 'production' && inputs.some((file) => !file.url)) throw new Error('ANALYSIS_FILE_ACCESS_UNAVAILABLE')
   return normalizeSolvyAnalysis(await callSolvy('analyze', { fileIds: files.map((file) => file.id), files: inputs }))
+}
+
+async function processSolvyJob(jobId) {
+  const claimed = await withTaskStore((store) => { const job = store.solvyJobs.find((item) => item.id === jobId && ['queued', 'retry'].includes(item.status)); if (!job) return null; job.status = 'processing'; job.attempts = Number(job.attempts || 0) + 1; job.startedAt = now(); job.updatedAt = job.startedAt; return structuredClone(job) })
+  if (!claimed) return
+  try {
+    const state = await readTaskStore()
+    const files = state.files.filter((file) => claimed.fileIds.includes(file.id) && file.studentId === claimed.studentId)
+    if (files.length !== claimed.fileIds.length) throw new Error('ANALYSIS_FILES_CHANGED')
+    const result = await analyzeWithSolvy(files)
+    const analysis = { id: crypto.randomUUID(), studentId: claimed.studentId, sessionId: claimed.sessionId, fileIds: claimed.fileIds, status: 'COMPLETED', result, createdAt: now(), updatedAt: now() }
+    await withTaskStore((store) => { store.analyses.push(analysis); const job = store.solvyJobs.find((item) => item.id === jobId); Object.assign(job, { status: 'completed', analysisId: analysis.id, completedAt: now(), updatedAt: now(), estimatedCost: Number(process.env.SOLVY_ANALYSIS_UNIT_COST || 0) }); addActivity(store, { id: crypto.randomUUID(), studentId: claimed.studentId, type: 'AnalysisCompleted', text: 'Task analysis completed.', createdAt: analysis.createdAt }) })
+    publish(claimed.studentId, { type: 'AnalysisCompleted', analysisId: analysis.id, jobId, status: 'COMPLETED' })
+  } catch (error) {
+    await withTaskStore((store) => { const job = store.solvyJobs.find((item) => item.id === jobId); if (job) Object.assign(job, { status: job.attempts < 3 ? 'retry' : 'failed', errorCode: String(error.code || error.message).slice(0, 120), nextAttemptAt: new Date(Date.now() + Math.min(60_000, 5000 * 2 ** job.attempts)).toISOString(), updatedAt: now() }) })
+  }
+}
+
+async function drainSolvyJobs() {
+  const state = await readTaskStore()
+  const due = (state.solvyJobs || []).filter((item) => item.status === 'queued' || (item.status === 'retry' && Date.parse(item.nextAttemptAt || 0) <= Date.now())).slice(0, 3)
+  for (const job of due) await processSolvyJob(job.id)
 }
 
 async function solvyOperation(operation, payload) {
@@ -647,12 +699,24 @@ app.post('/api/student/task-creation/analyze', requireStudent, asyncRoute(async 
   const sessionId = String(req.body?.sessionId || '')
   const draft = (await readTaskStore()).drafts.find((item) => item.id === sessionId && item.studentId === req.student.studentId && item.status === 'ACTIVE' && new Date(item.expiresAt).getTime() > Date.now())
   if (!draft || files.some((file) => file.analysisSessionId !== draft.id)) return safeError(res, 409, 'SESSION_INVALID', 'Start a new task setup session and upload the files again.')
-  let result
-  try { result = await analyzeWithSolvy(files) } catch (error) { return safeError(res, 502, 'ANALYSIS_FAILED', 'Solvy could not analyze these files. Your uploads are preserved; please retry.', {}, error) }
-  const analysis = { id: crypto.randomUUID(), studentId: req.student.studentId, sessionId, fileIds: files.map((file) => file.id), status: 'COMPLETED', result, createdAt: now(), updatedAt: now() }
-  await withTaskStore((store) => { store.analyses.push(analysis); addActivity(store, { id: crypto.randomUUID(), studentId: req.student.studentId, type: 'AnalysisCompleted', text: 'Task analysis completed.', createdAt: analysis.createdAt }) })
-  publish(req.student.studentId, { type: 'AnalysisCompleted', analysisId: analysis.id, status: analysis.status })
-  res.status(201).json({ analysis: { ...analysis.result, id: analysis.id, status: analysis.status } })
+  const day = now().slice(0, 10)
+  const state = await readTaskStore()
+  const daily = (state.solvyJobs || []).filter((item) => item.studentId === req.student.studentId && String(item.createdAt).startsWith(day) && item.status !== 'cancelled').length
+  const limit = Math.max(1, Number(process.env.SOLVY_DAILY_STUDENT_LIMIT || 10))
+  if (daily >= limit) return safeError(res, 429, 'ANALYSIS_DAILY_LIMIT', 'Your daily analysis limit has been reached. Try again tomorrow or contact support.')
+  const existing = (state.solvyJobs || []).find((item) => item.studentId === req.student.studentId && item.sessionId === sessionId && item.fileIds.length === files.length && item.fileIds.every((id) => fileIds.includes(id)) && !['failed', 'cancelled'].includes(item.status))
+  if (existing) return res.status(existing.status === 'completed' ? 200 : 202).json({ job: existing })
+  const job = { id: crypto.randomUUID(), type: 'analysis', studentId: req.student.studentId, sessionId, fileIds: files.map((file) => file.id), status: 'queued', attempts: 0, modelVersion: process.env.SOLVY_MODEL_VERSION || 'default', promptVersion: process.env.SOLVY_PROMPT_VERSION || 'v1', createdAt: now(), updatedAt: now() }
+  await withTaskStore((store) => store.solvyJobs.push(job))
+  void drainSolvyJobs()
+  res.status(202).json({ job })
+}))
+
+app.get('/api/student/task-creation/analysis-jobs/:jobId', requireStudent, asyncRoute(async (req, res) => {
+  const state = await readTaskStore(); const job = (state.solvyJobs || []).find((item) => item.id === req.params.jobId && item.studentId === req.student.studentId)
+  if (!job) return safeError(res, 404, 'ANALYSIS_JOB_NOT_FOUND', 'Analysis job not found.')
+  const analysis = job.analysisId ? state.analyses.find((item) => item.id === job.analysisId) : null
+  res.json({ job, analysis: analysis ? { ...analysis.result, id: analysis.id, status: analysis.status } : null })
 }))
 
 app.post('/api/student/task-creation/tasks', requireStudent, asyncRoute(async (req, res) => {
@@ -1040,6 +1104,25 @@ app.get('/api/student/payments/payments/:paymentId/receipt', requireStudent, asy
   res.json({ url: charge.receipt_url, filename: null })
 }))
 
+app.get('/api/student/payments/refunds', requireStudent, asyncRoute(async (req, res) => {
+  res.json({ refunds: await listStudentRefunds(req.student.studentId) })
+}))
+
+app.post('/api/student/payments/payments/:paymentId/refund-request', requireStudent, asyncRoute(async (req, res) => {
+  if (!await limited(`refund-request:${req.student.studentId}`, 5)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before submitting another refund request.')
+  const result = await createRefundRequest(req.student.studentId, req.params.paymentId, req.body)
+  if (result.error) {
+    const status = result.error === 'PAYMENT_NOT_REFUNDABLE' ? 409 : result.error === 'REFUND_ALREADY_OPEN' ? 409 : 400
+    return safeError(res, status, result.error, result.error === 'REFUND_ALREADY_OPEN' ? 'A refund review is already open for this payment.' : result.error === 'REFUND_REASON_REQUIRED' ? 'Explain the refund request in at least 20 characters.' : 'This payment is not available for the requested refund amount.')
+  }
+  res.status(201).json(result)
+}))
+app.post('/api/student/payments/refunds/:requestId/appeal', requireStudent, asyncRoute(async (req, res) => {
+  const result = await appealRefundRequest(req.student.studentId, req.params.requestId, req.body)
+  if (result.error) return safeError(res, result.error === 'REFUND_REQUEST_NOT_FOUND' ? 404 : 409, result.error, result.error === 'APPEAL_REASON_REQUIRED' ? 'Explain the appeal in at least 20 characters.' : 'This refund decision is not eligible for appeal.')
+  res.status(201).json(result)
+}))
+
 app.get('/api/student/payments/tasks/:taskId/scope-change', requireStudent, asyncRoute(async (req, res) => {
   const task = await getStudentTask(req.student.studentId, req.params.taskId)
   const change = (await readTaskStore()).scopeChanges.find((item) => item.taskId === req.params.taskId && item.studentId === req.student.studentId && ['REQUESTED', 'AWAITING_PAYMENT'].includes(item.status))
@@ -1231,22 +1314,28 @@ function clearStudentCookies(res) {
   res.setHeader('Set-Cookie', [`sn_access=; ${expired}`, `sn_refresh=; ${expired}`, `${COOKIE}=; ${expired}`])
 }
 
-function accountSessions(req) {
-  if (hasSupabaseAuth()) return { sessions: [{ id: 'current-browser', device: req.student.device, createdAt: now(), lastActiveAt: now() }], activeSessionId: 'current-browser', sessionRevoke: false }
+async function accountSessions(req) {
+  if (hasSupabaseAuth()) {
+    const cookies = parseCookies(req.headers.cookie)
+    const rows = await supabaseListUserAppSessions(req.student.studentId)
+    return { sessions: rows.map((item) => ({ id: item.id, device: item.device, createdAt: item.created_at, lastActiveAt: item.last_active_at, expiresAt: item.expires_at })), activeSessionId: cookies.sn_access ? supabaseAppSessionId(cookies.sn_access) : null, sessionRevoke: true }
+  }
   return { sessions: studentSessionList(req.student.studentId, req.student.id), activeSessionId: req.student.id, sessionRevoke: true }
 }
 
 async function ensureStudentSession(req, res) {
   const cookies = parseCookies(req.headers.cookie)
   if (hasSupabaseAuth()) {
-    let user = await supabaseUser(cookies.sn_access)
+    let activeToken = cookies.sn_access
+    let user = await supabaseUser(activeToken)
     if (!user && cookies.sn_refresh) {
       const session = await supabaseRefresh(cookies.sn_refresh)
-      if (session) { setSupabaseCookies(res, session); user = await supabaseUser(session.access_token) }
+      if (session) { activeToken = session.access_token; setSupabaseCookies(res, session); user = await supabaseUser(activeToken); if (user) await supabaseCreateAppSession(activeToken, user.id, 'Student', userAgentLabel(req.headers['user-agent'])) }
     }
     if (user) {
       const profile = await supabaseProfile(user.id)
-      if (profile?.role === 'Student') return { id: user.id, role: 'Student', studentId: user.id, name: profile.name || user.user_metadata?.name || 'Student', email: user.email || null, emailVerified: Boolean(user.email_confirmed_at), createdAt: user.created_at || null, device: userAgentLabel(req.headers['user-agent']) }
+      const appSession = activeToken ? await supabaseGetAppSession(activeToken) : null
+      if (profile?.role === 'Student' && appSession?.role === 'Student' && appSession.user_id === user.id) return { id: supabaseAppSessionId(activeToken), role: 'Student', studentId: user.id, name: profile.name || user.user_metadata?.name || 'Student', email: user.email || null, emailVerified: Boolean(user.email_confirmed_at), createdAt: user.created_at || null, device: userAgentLabel(req.headers['user-agent']) }
     }
     const err = new Error('STUDENT_ACCESS_REQUIRED')
     err.status = 401
@@ -1385,7 +1474,7 @@ async function requireExpert(req, res, next) {
       req.expert.name = profile.name
       req.expert.email = profile.email
     }
-    if (!req.path.endsWith('/logout') && !req.path.endsWith('/me')) {
+    if (!req.path.endsWith('/logout') && !req.path.endsWith('/me') && !req.path.endsWith('/profile')) {
       const accountState = await runForExpert({ id: req.expert.expertId, name: req.expert.name }, async () => (await readExpertStore()).expert?.accountState)
       if (accountState && accountState !== 'approved') return safeError(res, 403, 'EXPERT_ACCOUNT_SUSPENDED', accountState === 'pending' ? 'This Expert profile is still awaiting approval.' : 'This Expert account is suspended.')
     }
@@ -1440,6 +1529,19 @@ app.patch('/api/expert/profile', requireExpert, expertRoute(async (req, res) => 
   const result = await updateExpertProfile(req.body)
   if (result.error) return safeError(res, 400, result.error, result.error === 'CAPACITY_INVALID' ? 'Capacity must be between 1 and 20 active assignments.' : result.error === 'TIMEZONE_INVALID' ? 'Choose a valid IANA timezone.' : 'Add at least one competency and keep profile entries under 80 characters.')
   res.json(result)
+}))
+
+app.get('/api/expert/earnings', requireExpert, expertRoute(async (req, res) => {
+  const workspace = await readExpertStore()
+  res.json(await expertEarnings(req.expert.expertId, workspace.assignments))
+}))
+
+app.post('/api/expert/payouts', requireExpert, expertRoute(async (req, res) => {
+  if (!await limited(`expert-payout:${req.expert.expertId}`, 3)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before requesting another payout.')
+  const workspace = await readExpertStore()
+  const result = await requestExpertPayout({ id: req.expert.expertId, name: req.expert.name }, workspace.assignments, req.body)
+  if (result.error) return safeError(res, 409, result.error, result.error === 'NO_EARNINGS_AVAILABLE' ? 'There are no delivered, funded assignments available for payout.' : 'One or more assignments are already included in a payout request.')
+  res.status(201).json(result)
 }))
 
 function publishExpert(expertId, type, payload) { publish('expert:' + expertId, { type, ...payload }) }
@@ -1526,6 +1628,16 @@ app.get('/api/expert/assignments/:assignmentId', requireExpert, expertRoute(asyn
   const assignment = await getAssignmentDetail(req.params.assignmentId)
   if (!assignment) return safeError(res, 404, 'ASSIGNMENT_NOT_FOUND', 'Assignment not found.')
   res.json({ assignment })
+}))
+
+app.post('/api/expert/assignments/:assignmentId/operations-request', requireExpert, expertRoute(async (req, res) => {
+  const type = String(req.body?.type || ''); const reason = String(req.body?.reason || '').trim().slice(0, 2000); const requestedDeadline = req.body?.requestedDeadline || null
+  if (!['decline', 'reassignment', 'deadline_extension'].includes(type) || reason.length < 20) return safeError(res, 400, 'EXPERT_REQUEST_INVALID', 'Choose a request type and explain it in at least 20 characters.')
+  if (type === 'deadline_extension' && (!requestedDeadline || Date.parse(requestedDeadline) <= Date.now())) return safeError(res, 400, 'DEADLINE_INVALID', 'Choose a future requested deadline.')
+  const assignment = await getAssignmentDetail(req.params.assignmentId)
+  if (!assignment || assignment.workState === 'delivered') return safeError(res, 409, 'ASSIGNMENT_REQUEST_UNAVAILABLE', 'This assignment cannot accept an operational request.')
+  const item = await withTaskStore((store) => { store.expertRequests ||= []; const existing = store.expertRequests.find((entry) => entry.assignmentId === assignment.id && entry.expertId === req.expert.expertId && entry.status === 'pending'); if (existing) return existing; const created = { id: crypto.randomUUID(), type, reason, requestedDeadline, assignmentId: assignment.id, taskId: assignment.taskId, taskTitle: assignment.title, expertId: req.expert.expertId, expertName: req.expert.name, status: 'pending', requestedAt: now(), updatedAt: now() }; store.expertRequests.unshift(created); return created })
+  res.status(201).json({ request: item })
 }))
 
 app.get('/api/expert/assignments/:assignmentId/requirements', requireExpert, expertRoute(async (req, res) => {
@@ -1862,6 +1974,7 @@ app.post('/api/auth/login', asyncRoute(async (req, res) => {
     if (error || !data.session) return safeError(res, 401, 'INVALID_CREDENTIALS', 'Those details did not match an account.')
     const profile = await supabaseProfile(data.user.id)
     if (profile?.role !== 'Student') return safeError(res, 403, 'STUDENT_ACCESS_REQUIRED', 'This account does not have Student access.')
+    await supabaseCreateAppSession(data.session.access_token, data.user.id, 'Student', userAgentLabel(req.headers['user-agent']))
     setSupabaseCookies(res, data.session)
     return res.json({ user: { id: data.user.id, role: 'Student', name: data.user.user_metadata?.name || data.user.email?.split('@')[0], email: data.user.email } })
   }
@@ -1910,20 +2023,24 @@ app.post('/api/contact', asyncRoute(async (req, res, next) => {
   if (req.file && await rejectInvalidUpload(res, req.file)) return
   const { intent, name, email, message, ...details } = req.body || {}
   if (!['general', 'task', 'payment', 'technical', 'business'].includes(intent) || !String(name || '').trim() || !/^\S+@\S+\.\S+$/.test(String(email || '')) || !String(message || '').trim()) return safeError(res, 400, 'CONTACT_INVALID', 'Complete the required contact fields.')
-  if (!hasEmail() || !process.env.CONTACT_EMAIL) return safeError(res, 503, 'CONTACT_UNAVAILABLE', 'Contact messages are not configured yet.')
+  const reference = `SN-CON-${crypto.randomUUID().slice(0, 8).toUpperCase()}`
+  const stamp = now()
+  await withTaskStore((store) => { store.supportTickets.unshift({ id: reference, status: 'received', category: intent === 'payment' ? 'payment' : intent === 'technical' ? 'technical' : 'general', categoryLabel: `${intent[0].toUpperCase()}${intent.slice(1)}`, issue: 'public_contact', issueLabel: 'Website contact', message: String(message).trim().slice(0, 4000), context: { studentName: String(name).trim().slice(0, 120), email: String(email).trim().toLowerCase(), details: Object.fromEntries(Object.entries(details).filter(([, value]) => typeof value === 'string').map(([key, value]) => [key, value.slice(0, 500)])), attachmentName: req.file?.originalname || null }, createdAt: stamp, updatedAt: stamp, history: [], studentUpdates: [] }) })
   const lines = [`Type: ${intent}`, `Name: ${String(name).trim()}`, `Email: ${String(email).trim()}`, ...Object.entries(details).filter(([, value]) => typeof value === 'string').map(([key, value]) => `${key}: ${value}`), '', String(message)]
+  if (!hasEmail() || !process.env.CONTACT_EMAIL) return res.status(202).json({ ok: true, reference, delivery: 'queued_for_staff' })
   try {
     const result = await sendEmail({ to: process.env.CONTACT_EMAIL, subject: `SolveNest ${intent} enquiry`, text: lines.join('\n'), replyTo: String(email).trim(), attachments: req.file ? [{ filename: req.file.originalname, content: req.file.buffer }] : [] })
     if (!result.delivered) throw new Error('CONTACT_NOT_DELIVERED')
-    res.status(202).json({ ok: true })
+    res.status(202).json({ ok: true, reference, delivery: 'email_sent' })
   } catch {
-    safeError(res, 503, 'CONTACT_UNAVAILABLE', 'Your message could not be sent. Please try again later.')
+    res.status(202).json({ ok: true, reference, delivery: 'queued_for_staff' })
   }
 }))
 
 async function logoutStudent(req, res) {
   if (hasSupabaseAuth()) {
     const cookies = parseCookies(req.headers.cookie)
+    if (cookies.sn_access) await supabaseDeleteAppSession(cookies.sn_access)
     await supabaseSignOutCurrent(cookies.sn_access, cookies.sn_refresh)
   }
   else deleteSession(req.student.id)
@@ -1984,7 +2101,7 @@ app.get('/api/student/account', requireStudent, accountRoute(async (req, res) =>
   res.json({
     account: await getAccountView({
       student: req.student,
-      ...accountSessions(req),
+      ...await accountSessions(req),
       activeTasks,
     }),
   })
@@ -2005,7 +2122,7 @@ app.patch('/api/student/account', requireStudent, accountRoute(async (req, res) 
   res.json({
     account: await getAccountView({
       student: req.student,
-      ...accountSessions(req),
+      ...await accountSessions(req),
       activeTasks,
     }),
   })
@@ -2023,9 +2140,15 @@ app.delete('/api/student/account/sessions/current', requireStudent, asyncRoute(a
   res.json({ ok: true, signedOut: true })
 }))
 
-app.delete('/api/student/account/sessions/:sessionId', requireStudent, (req, res) => {
-  if (hasSupabaseAuth()) return safeError(res, 501, 'SESSION_REVOKE_UNAVAILABLE', 'Remote session management is not available for this account.')
+app.delete('/api/student/account/sessions/:sessionId', requireStudent, asyncRoute(async (req, res) => {
   const sessionId = String(req.params.sessionId || '')
+  if (hasSupabaseAuth()) {
+    const removed = await supabaseDeleteOwnedAppSession(req.student.studentId, sessionId)
+    if (!removed) return safeError(res, 404, 'SESSION_NOT_FOUND', 'That session is no longer active.')
+    const cookies = parseCookies(req.headers.cookie)
+    if (cookies.sn_access && supabaseAppSessionId(cookies.sn_access) === sessionId) { await supabaseSignOutCurrent(cookies.sn_access, cookies.sn_refresh); clearStudentCookies(res) }
+    return res.json({ ok: true })
+  }
   const target = getSession(sessionId)
   if (!target || target.studentId !== req.student.studentId) {
     res.status(404).json({ error: 'SESSION_NOT_FOUND' })
@@ -2039,7 +2162,7 @@ app.delete('/api/student/account/sessions/:sessionId', requireStudent, (req, res
   }
   deleteSession(sessionId)
   res.json({ ok: true })
-})
+}))
 
 app.get('/api/student/help', requireStudent, supportRoute(async (req, res) => {
   res.json({ ...getCatalog(), tickets: await listStudentSupportTickets(req.student.studentId) })
@@ -2180,6 +2303,20 @@ app.post('/api/admin/login', staffRoute((req, res) => staffLogin(req, res, 'Admi
 app.get('/api/admin/me', requireAdmin, (req, res) => res.json({ staff: req.staff }))
 app.post('/api/admin/logout', requireAdmin, staffRoute((req, res) => staffLogout(req, res, 'Admin')))
 app.get('/api/admin/overview', requireAdmin, staffRoute(async (_req, res) => res.json(await getAdminOverview())))
+app.get('/api/admin/expert-requests', requireAdmin, staffRoute(async (_req, res) => res.json({ requests: (await readTaskStore()).expertRequests || [] })))
+app.post('/api/admin/expert-requests/:requestId/decision', requireAdmin, staffRoute(async (req, res) => {
+  const decision = String(req.body?.decision || ''); const note = String(req.body?.note || '').trim().slice(0, 2000)
+  if (!['approved', 'rejected'].includes(decision) || note.length < 10) return safeError(res, 400, 'EXPERT_REQUEST_DECISION_INVALID', 'Choose a decision and add a note of at least 10 characters.')
+  const result = await withTaskStore((store) => { const item = (store.expertRequests || []).find((entry) => entry.id === req.params.requestId && entry.status === 'pending'); if (!item) return null; Object.assign(item, { status: decision, decisionNote: note, decidedBy: req.staff.id, decidedAt: now(), updatedAt: now() }); const task = store.tasks.find((entry) => entry.id === item.taskId); if (decision === 'approved' && item.type === 'deadline_extension' && task) task.deadline = item.requestedDeadline; if (decision === 'approved' && ['decline', 'reassignment'].includes(item.type) && task) { task.assignedExpertId = null; task.assignedExpertName = null; task.assignmentId = null; task.status = 'ASSIGNMENT_PENDING' } store.adminAudit.unshift({ id: crypto.randomUUID(), actorId: req.staff.id, action: `expert_request_${decision}`, taskId: item.taskId, subjectId: item.id, note, at: item.decidedAt }); return item })
+  if (!result) return safeError(res, 404, 'EXPERT_REQUEST_NOT_FOUND', 'This request is no longer pending.')
+  res.json({ request: result })
+}))
+app.get('/api/admin/solvy-jobs', requireAdmin, staffRoute(async (_req, res) => res.json({ jobs: (await readTaskStore()).solvyJobs || [] })))
+app.post('/api/admin/solvy-jobs/:jobId/retry', requireAdmin, staffRoute(async (req, res) => {
+  const retried = await withTaskStore((store) => { const job = (store.solvyJobs || []).find((item) => item.id === req.params.jobId && item.status === 'failed'); if (!job) return false; Object.assign(job, { status: 'queued', attempts: 0, errorCode: null, updatedAt: now() }); return true })
+  if (!retried) return safeError(res, 409, 'SOLVY_JOB_NOT_RETRYABLE', 'Only failed analysis jobs can be retried.')
+  void drainSolvyJobs(); res.json({ queued: true })
+}))
 app.get('/api/admin/opportunities/interests', requireAdmin, staffRoute(async (_req, res) => res.json({ interests: await listExpertInterests() })))
 app.post('/api/admin/opportunities', requireAdmin, staffRoute(async (req, res) => {
   const seed = req.body || {}
@@ -2276,36 +2413,70 @@ app.post('/api/admin/tasks/:taskId/plan', requireAdmin, staffRoute(async (req, r
   res.status(201).json({ plan: result.plan })
 }))
 
-app.post('/api/admin/payments/:paymentId/refund', requireAdmin, staffRoute(async (req, res) => {
-  if (!stripe) return safeError(res, 503, 'PROVIDER_UNAVAILABLE', 'Stripe refunds are not configured.')
-  if (!await limited(`admin-refund:${req.staff.id}`, 10)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before processing another refund.')
-  const note = String(req.body?.note || '').trim().slice(0, 2000)
-  if (note.length < 10) return safeError(res, 400, 'REFUND_NOTE_REQUIRED', 'Record the refund decision in at least 10 characters.')
+async function executeApprovedRefund(request, actorId) {
+  if (!stripe) return { error: 'PROVIDER_UNAVAILABLE', message: 'Stripe refunds are not configured.' }
   const state = await readTaskStore()
-  const payment = state.payments.find((item) => item.id === req.params.paymentId)
-  if (!payment || !['succeeded', 'partially_refunded'].includes(payment.status)) return safeError(res, 409, 'PAYMENT_NOT_REFUNDABLE', 'This payment is not available for a refund.')
+  const payment = state.payments.find((item) => item.id === request.paymentId)
+  if (!payment || !['succeeded', 'partially_refunded'].includes(payment.status)) return { error: 'PAYMENT_NOT_REFUNDABLE', message: 'This payment is no longer refundable.' }
   const remaining = Math.max(0, Number(payment.amount || 0) - Number(payment.refundedAmount || 0))
-  const amount = req.body?.amount == null ? remaining : Number(req.body.amount)
-  if (!Number.isInteger(amount) || amount <= 0 || amount > remaining) return safeError(res, 400, 'REFUND_AMOUNT_INVALID', 'Enter a valid whole-number refund amount.')
-  const task = state.tasks.find((item) => item.id === payment.taskId)
-  if (['DELIVERED', 'COMPLETED'].includes(task?.status) && req.body?.completedWorkReview !== true) return safeError(res, 409, 'REFUND_REVIEW_REQUIRED', 'Completed work requires an explicit staff review before refunding.')
+  if (request.amount > remaining) return { error: 'REFUND_AMOUNT_INVALID', message: 'The refundable balance changed during review.' }
   let paymentIntentId = payment.paymentIntentId
   if (!paymentIntentId && String(payment.providerId || '').startsWith('cs_')) {
     const session = await stripe.checkout.sessions.retrieve(payment.providerId)
     paymentIntentId = typeof session.payment_intent === 'string' ? session.payment_intent : session.payment_intent?.id
   }
-  if (!paymentIntentId) return safeError(res, 409, 'PAYMENT_INTENT_MISSING', 'The Stripe payment cannot be identified.')
-  const refund = await stripe.refunds.create({ payment_intent: paymentIntentId, amount: amount * 100, reason: 'requested_by_customer', metadata: { solveNestPaymentId: payment.id, taskId: payment.taskId, actorId: req.staff.id } }, { idempotencyKey: `refund-${payment.id}-${Number(payment.refundedAmount || 0)}-${amount}` })
-  const reconciled = await recordRefundStatus(paymentIntentId, (Number(payment.refundedAmount || 0) + amount) * 100, refund.id)
-  await withTaskStore((store) => {
-    store.adminAudit = store.adminAudit || []
-    store.adminAudit.unshift({ id: crypto.randomUUID(), taskId: payment.taskId, actorId: req.staff.id, action: 'payment_refund', note, amount, currency: payment.currency, paymentId: payment.id, refundId: refund.id, at: now() })
-  })
-  if (reconciled?.task) {
-    try { await addNotification({ id: crypto.randomUUID(), studentId: reconciled.task.studentId, title: 'Refund processed', body: `A refund of ${payment.currency.toUpperCase()} ${amount} was processed.`, task: { title: reconciled.task.title, ref: reconciled.task.id }, route: `/student/payments?task=${reconciled.task.id}&section=history`, isRead: false, requiresAction: false, createdAt: now() }) } catch (error) { console.error('[refund] notification failed', error) }
-    publish(reconciled.task.studentId, { type: 'PaymentRefunded', taskId: reconciled.task.id })
+  if (!paymentIntentId) return { error: 'PAYMENT_INTENT_MISSING', message: 'The Stripe payment cannot be identified.' }
+  try {
+    const refund = await stripe.refunds.create({ payment_intent: paymentIntentId, amount: request.amount * 100, reason: 'requested_by_customer', metadata: { solveNestPaymentId: payment.id, refundRequestId: request.id, taskId: payment.taskId, actorId } }, { idempotencyKey: `refund-request-${request.id}` })
+    const reconciled = await recordRefundStatus(paymentIntentId, (Number(payment.refundedAmount || 0) + request.amount) * 100, refund.id)
+    await markRefundResult(request.id, { ok: true, refundId: refund.id, message: 'The approved refund was sent to the payment provider.' })
+    await withTaskStore((store) => { store.adminAudit.unshift({ id: crypto.randomUUID(), taskId: payment.taskId, actorId, action: 'payment_refund', note: request.adminReview?.note || request.superadminReview?.note, amount: request.amount, currency: payment.currency, paymentId: payment.id, refundId: refund.id, refundRequestId: request.id, at: now() }) })
+    if (reconciled?.task) {
+      await addNotification({ id: crypto.randomUUID(), studentId: reconciled.task.studentId, title: 'Refund processed', body: `A refund of ${payment.currency.toUpperCase()} ${request.amount} was sent to your payment provider.`, task: { title: reconciled.task.title, ref: reconciled.task.id }, route: `/student/payments?task=${reconciled.task.id}&section=history`, isRead: false, requiresAction: false, createdAt: now() })
+      publish(reconciled.task.studentId, { type: 'PaymentRefunded', taskId: reconciled.task.id })
+    }
+    return { refund, payment: reconciled?.payment }
+  } catch (error) {
+    await markRefundResult(request.id, { ok: false, errorCode: error.code || 'PROVIDER_ERROR', message: 'The provider did not complete the refund. Staff can retry after checking Stripe.' })
+    throw error
   }
-  res.status(201).json({ refund: { id: refund.id, status: refund.status, amount, currency: payment.currency }, payment: reconciled?.payment })
+}
+
+app.get('/api/admin/refunds', requireAdmin, staffRoute(async (_req, res) => res.json({ refunds: await listRefundQueue() })))
+app.get('/api/admin/payments', requireAdmin, staffRoute(async (_req, res) => {
+  const state = await readTaskStore()
+  res.json({ payments: [...state.payments].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))) })
+}))
+app.post('/api/admin/payments/:paymentId/dispute', requireAdmin, staffRoute(async (req, res) => {
+  const status = String(req.body?.status || '')
+  const note = String(req.body?.note || '').trim()
+  if (!['needs_response', 'under_review', 'won', 'lost'].includes(status) || note.length < 10) return safeError(res, 400, 'DISPUTE_UPDATE_INVALID', 'Choose a dispute status and add a note of at least 10 characters.')
+  const result = await withTaskStore((store) => {
+    const payment = store.payments.find((item) => item.id === req.params.paymentId)
+    if (!payment) return null
+    payment.dispute = { ...(payment.dispute || {}), status, internalNote: note, reviewedBy: req.staff.id, reviewedAt: now() }
+    store.adminAudit.unshift({ id: crypto.randomUUID(), taskId: payment.taskId, actorId: req.staff.id, action: 'payment_dispute_review', note, paymentId: payment.id, disputeId: payment.dispute.id || null, status, at: payment.dispute.reviewedAt })
+    return payment
+  })
+  if (!result) return safeError(res, 404, 'PAYMENT_NOT_FOUND', 'Payment not found.')
+  res.json({ payment: result })
+}))
+app.get('/api/admin/payouts', requireAdmin, staffRoute(async (_req, res) => res.json({ payouts: await listPayoutRequests() })))
+app.post('/api/admin/payouts/:requestId/decision', requireAdmin, staffRoute(async (req, res) => {
+  if (!await limited(`admin-payout:${req.staff.id}`, 20)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before reviewing another payout.')
+  const result = await decidePayout(req.params.requestId, req.staff, req.body)
+  if (result.error) return safeError(res, result.error === 'PAYOUT_NOT_FOUND' ? 404 : 409, result.error, 'Provide a note and a payment reference when marking a payout paid.')
+  res.json(result)
+}))
+app.post('/api/admin/refunds/:requestId/decision', requireAdmin, staffRoute(async (req, res) => {
+  if (!await limited(`admin-refund:${req.staff.id}`, 10)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before reviewing another refund.')
+  const result = await decideRefundRequest(req.params.requestId, req.staff, 'Admin', req.body)
+  if (result.error) return safeError(res, result.error === 'REFUND_REQUEST_NOT_FOUND' ? 404 : 409, result.error, 'This refund request could not be decided. Refresh the queue and try again.')
+  if (result.execute) {
+    const executed = await executeApprovedRefund(result.request, req.staff.id)
+    if (executed.error) return safeError(res, 503, executed.error, executed.message)
+  }
+  res.json({ request: result.request, awaitingSecondApproval: !result.execute && req.body?.decision === 'approved' })
 }))
 
 app.post('/api/admin/tasks/:taskId/scope-change', requireAdmin, staffRoute(async (req, res) => {
@@ -2326,14 +2497,24 @@ app.post('/api/admin/tasks/:taskId/scope-change', requireAdmin, staffRoute(async
 
 app.get('/api/admin/experts', requireAdmin, staffRoute(async (req, res) => {
   const profiles = req.staff.demo ? [{ id: 'demo-expert', name: 'Alex Morgan', email: null, role: 'Expert' }] : await supabaseExpertProfiles()
+  const interests = await listExpertInterests()
   const experts = await Promise.all(profiles.map(async (profile) => {
     const store = await runForExpert(profile, readExpertStore)
     const activeAssignments = store.assignments.filter((item) => item.workState !== 'delivered').length
     const capacity = Math.max(1, Math.min(20, Number(store.expert.capacity) || 4))
     const competencies = Array.isArray(store.expert.competencies) ? store.expert.competencies : []
-    return { id: profile.id, name: profile.name, email: profile.email, availability: store.expert.availability, verified: Boolean(store.expert.verified), accountState: store.expert.accountState || 'approved', activeAssignments, capacity, competencies, conflictDomains: Array.isArray(store.expert.conflictDomains) ? store.expert.conflictDomains : [], eligible: Boolean(store.expert.verified) && (store.expert.accountState || 'approved') === 'approved' && store.expert.availability !== 'unavailable' && activeAssignments < capacity && competencies.length > 0 }
+    return { id: profile.id, name: profile.name, email: profile.email, availability: store.expert.availability, verified: Boolean(store.expert.verified), accountState: store.expert.accountState || 'pending', activeAssignments, capacity, competencies, qualificationSummary: store.expert.qualificationSummary || '', portfolioUrl: store.expert.portfolioUrl || '', experienceYears: Number(store.expert.experienceYears || 0), payoutReady: Boolean(store.expert.payoutMethod && store.expert.payoutAccountName && store.expert.payoutAccountLast4), taxCountry: store.expert.taxCountry || 'LK', conflictDomains: Array.isArray(store.expert.conflictDomains) ? store.expert.conflictDomains : [], verificationHistory: store.expert.verificationHistory || [], interestedTaskIds: interests.filter((item) => item.expertId === profile.id).map((item) => item.taskId), eligible: Boolean(store.expert.verified) && (store.expert.accountState || 'pending') === 'approved' && store.expert.availability !== 'unavailable' && activeAssignments < capacity && competencies.length > 0 }
   }))
   res.json({ experts })
+}))
+
+app.post('/api/admin/experts/:expertId/review', requireAdmin, staffRoute(async (req, res) => {
+  if (!await limited(`expert-review:${req.staff.id}`, 20)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before reviewing another Expert.')
+  const profile = req.staff.demo && req.params.expertId === 'demo-expert' ? { id: 'demo-expert', name: 'Alex Morgan', role: 'Expert' } : req.staff.demo ? null : await supabaseProfile(req.params.expertId)
+  if (profile?.role !== 'Expert') return safeError(res, 404, 'EXPERT_NOT_FOUND', 'Choose a valid Expert account.')
+  const result = await runForExpert(profile, () => reviewExpertAccount(req.staff, String(req.body?.decision || ''), req.body?.note))
+  if (result.error) return safeError(res, 409, result.error, result.error === 'EXPERT_PROFILE_INCOMPLETE' ? 'The Expert must add at least one competency before approval.' : 'Add a decision note of at least 10 characters.')
+  res.json(result)
 }))
 
 app.post('/api/admin/tasks/:taskId/assign', requireAdmin, staffRoute(async (req, res) => {
@@ -2406,7 +2587,7 @@ app.get('/api/admin/support/:ticketId', requireAdmin, staffRoute(async (req, res
 }))
 app.post('/api/admin/support/:ticketId/status', requireAdmin, staffRoute(async (req, res) => {
   if (!await limited(`admin-support:${req.staff.id}`, 30)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before updating another request.')
-  const result = await updateSupportTicket(req.params.ticketId, req.staff.id, req.body?.status, req.body?.note, req.body?.studentMessage)
+  const result = await updateSupportTicket(req.params.ticketId, req.staff.id, req.body?.status, req.body?.note, req.body?.studentMessage, { priority: req.body?.priority, assignToMe: req.body?.assignToMe })
   if (result.error) return safeError(res, result.error === 'TICKET_NOT_FOUND' ? 404 : result.error === 'STATUS_UNCHANGED' ? 409 : 400, result.error, result.error === 'NOTE_REQUIRED' ? 'Add an internal note of at least 10 characters.' : result.error === 'STUDENT_MESSAGE_REQUIRED' ? 'Explain what the Student needs to provide.' : 'This support request could not be updated.')
   const studentId = result.ticket.context?.studentId
   if (studentId) {
@@ -2488,6 +2669,92 @@ app.get('/api/superadmin/activity', requireSuperadmin, staffRoute(async (req, re
   res.json({ activity: await getSuperadminActivity(!req.staff.demo && hasSupabase()) })
 }))
 app.get('/api/superadmin/metrics', requireSuperadmin, (_req, res) => res.json(observabilitySnapshot()))
+app.get('/api/superadmin/governance', requireSuperadmin, staffRoute(async (_req, res) => {
+  const state = await readTaskStore()
+  res.json({
+    sessions: await supabaseListStaffSessions(),
+    securityEvents: (state.securityEvents || []).slice(0, 200),
+    legalHolds: state.legalHolds || [],
+    retentionRuns: (state.retentionRuns || []).slice(0, 50),
+    policies: state.policies || [],
+    backup: { configured: Boolean(process.env.BACKUP_STATUS_URL), statusUrl: process.env.BACKUP_STATUS_URL || null, lastVerifiedAt: process.env.BACKUP_LAST_VERIFIED_AT || null },
+  })
+}))
+app.delete('/api/superadmin/sessions/:sessionId', requireSuperadmin, staffRoute(async (req, res) => {
+  const removed = await supabaseDeleteAppSessionById(req.params.sessionId)
+  if (!removed) return safeError(res, 404, 'SESSION_NOT_FOUND', 'This staff session is no longer active.')
+  await withTaskStore((store) => { store.securityEvents ||= []; store.securityEvents.unshift({ id: crypto.randomUUID(), type: 'staff_session_revoked', severity: 'high', actorId: req.staff.id, subjectId: req.params.sessionId, at: now() }) })
+  res.json({ ok: true })
+}))
+app.post('/api/superadmin/legal-holds', requireSuperadmin, staffRoute(async (req, res) => {
+  const subjectId = String(req.body?.subjectId || '').trim().slice(0, 120); const reason = String(req.body?.reason || '').trim().slice(0, 2000)
+  if (!subjectId || reason.length < 10) return safeError(res, 400, 'LEGAL_HOLD_INVALID', 'Enter a subject and a reason of at least 10 characters.')
+  const hold = await withTaskStore((store) => { store.legalHolds ||= []; const item = { id: crypto.randomUUID(), subjectId, reason, status: 'active', createdBy: req.staff.id, createdAt: now() }; store.legalHolds.unshift(item); return item })
+  res.status(201).json({ hold })
+}))
+app.post('/api/superadmin/legal-holds/:holdId/release', requireSuperadmin, staffRoute(async (req, res) => {
+  const reason = String(req.body?.reason || '').trim().slice(0, 2000)
+  const hold = await withTaskStore((store) => { const item = (store.legalHolds || []).find((entry) => entry.id === req.params.holdId && entry.status === 'active'); if (!item) return null; Object.assign(item, { status: 'released', releaseReason: reason, releasedBy: req.staff.id, releasedAt: now() }); return item })
+  if (!hold) return safeError(res, 404, 'LEGAL_HOLD_NOT_FOUND', 'Active legal hold not found.')
+  res.json({ hold })
+}))
+app.post('/api/superadmin/policies', requireSuperadmin, staffRoute(async (req, res) => {
+  const kind = String(req.body?.kind || '').trim(); const version = String(req.body?.version || '').trim(); const content = String(req.body?.content || '').trim()
+  if (!['privacy', 'terms', 'refund', 'retention'].includes(kind) || !version || content.length < 50) return safeError(res, 400, 'POLICY_INVALID', 'Choose a policy, version it, and provide at least 50 characters.')
+  const policy = await withTaskStore((store) => { store.policies ||= []; store.policies.forEach((item) => { if (item.kind === kind) item.active = false }); const item = { id: crypto.randomUUID(), kind, version, content, active: true, publishedBy: req.staff.id, publishedAt: now() }; store.policies.unshift(item); store.adminAudit.unshift({ id: crypto.randomUUID(), actorId: req.staff.id, action: 'policy_published', subjectId: item.id, note: `${kind} ${version}`, at: item.publishedAt }); return item })
+  res.status(201).json({ policy })
+}))
+app.post('/api/superadmin/retention/run', requireSuperadmin, staffRoute(async (req, res) => {
+  const result = await withTaskStore((store) => {
+    const cutoff = Date.now() - Math.max(30, Number(process.env.RETENTION_OPERATIONAL_DAYS || 365)) * 86400000
+    const held = new Set((store.legalHolds || []).filter((item) => item.status === 'active').map((item) => item.subjectId))
+    const before = { notifications: (store.notifications || []).length, activity: (store.activity || []).length }
+    store.notifications = (store.notifications || []).filter((item) => held.has(item.studentId) || Date.parse(item.createdAt || 0) >= cutoff)
+    store.activity = (store.activity || []).filter((item) => held.has(item.studentId) || Date.parse(item.createdAt || 0) >= cutoff)
+    const run = { id: crypto.randomUUID(), actorId: req.staff.id, at: now(), deleted: { notifications: before.notifications - store.notifications.length, activity: before.activity - store.activity.length }, retentionDays: Math.max(30, Number(process.env.RETENTION_OPERATIONAL_DAYS || 365)), holdsApplied: held.size }
+    store.retentionRuns ||= []; store.retentionRuns.unshift(run); return run
+  })
+  res.json({ run: result })
+}))
+app.get('/api/superadmin/email-outbox', requireSuperadmin, staffRoute(async (_req, res) => res.json({ messages: await supabaseEmailOutbox(), suppressions: (await readTaskStore()).emailSuppressions || [] })))
+app.delete('/api/superadmin/email-suppressions/:id', requireSuperadmin, staffRoute(async (req, res) => { const changed = await withTaskStore((store) => { const item = (store.emailSuppressions || []).find((entry) => entry.id === req.params.id); if (!item) return false; item.active = false; item.removedAt = now(); item.removedBy = req.staff.id; return true }); if (!changed) return safeError(res, 404, 'SUPPRESSION_NOT_FOUND', 'Suppression entry not found.'); res.json({ ok: true }) }))
+app.post('/api/superadmin/email-outbox/:id/retry', requireSuperadmin, staffRoute(async (req, res) => {
+  const queued = await supabaseRetryEmail(req.params.id)
+  if (!queued) return safeError(res, 409, 'EMAIL_RETRY_UNAVAILABLE', 'Only failed or retrying messages can be queued again.')
+  res.json({ queued: true })
+}))
+app.post('/api/superadmin/payments/reconcile', requireSuperadmin, staffRoute(async (req, res) => {
+  if (!await limited(`stripe-reconcile:${req.staff.id}`, 3)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before starting another reconciliation.')
+  res.json(await reconcileStripePayments(req.staff.id))
+}))
+app.get('/api/superadmin/privacy', requireSuperadmin, staffRoute(async (_req, res) => {
+  const requests = await listPrivacyRequests()
+  const enriched = await Promise.all(requests.map(async (item) => ({ ...item, closure: await prepareAccountClosure(item.context?.studentId) })))
+  res.json({ requests: enriched })
+}))
+app.post('/api/superadmin/privacy/:studentId/close', requireSuperadmin, staffRoute(async (req, res) => {
+  if (req.staff.demo || !hasSupabase()) return safeError(res, 503, 'PRIVACY_ACTION_UNAVAILABLE', 'Account closure requires a real Super Admin account and Supabase.')
+  if (!await limited(`privacy-close:${req.staff.id}`, 5)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before processing another closure.')
+  if (String(req.body?.note || '').trim().length < 10) return safeError(res, 400, 'NOTE_REQUIRED', 'Add a closure decision note of at least 10 characters.')
+  const readiness = await prepareAccountClosure(req.params.studentId)
+  if (!readiness.eligible) return safeError(res, 409, 'ACCOUNT_CLOSURE_BLOCKED', 'Resolve active tasks, refund reviews, and payment disputes first.', readiness.blockers)
+  for (const key of readiness.storageKeys) await removeStoredObject(key)
+  await supabaseAnonymizeUser(req.params.studentId)
+  const result = await anonymizeStudentRecords(req.params.studentId, req.staff, req.body?.note)
+  if (result.error) return safeError(res, result.error === 'CLOSURE_REQUEST_NOT_FOUND' ? 404 : 400, result.error, 'A closure request and decision note are required.')
+  res.json(result)
+}))
+app.get('/api/superadmin/refunds', requireSuperadmin, staffRoute(async (_req, res) => res.json({ refunds: (await listRefundQueue()).filter((item) => item.status === 'pending_superadmin') })))
+app.post('/api/superadmin/refunds/:requestId/decision', requireSuperadmin, staffRoute(async (req, res) => {
+  if (!await limited(`superadmin-refund:${req.staff.id}`, 10)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before reviewing another refund.')
+  const result = await decideRefundRequest(req.params.requestId, req.staff, 'Superadmin', req.body)
+  if (result.error) return safeError(res, result.error === 'REFUND_REQUEST_NOT_FOUND' ? 404 : 409, result.error, result.error === 'SECOND_APPROVER_REQUIRED' ? 'A different privileged account must provide the second approval.' : 'This refund request could not be decided. Refresh the queue and try again.')
+  if (result.execute) {
+    const executed = await executeApprovedRefund(result.request, req.staff.id)
+    if (executed.error) return safeError(res, 503, executed.error, executed.message)
+  }
+  res.json({ request: result.request })
+}))
 app.post('/api/superadmin/team/:profileId/role', requireSuperadmin, staffRoute(async (req, res) => {
   if (req.staff.demo || !hasSupabase()) return safeError(res, 503, 'ROLE_MANAGEMENT_UNAVAILABLE', 'Role management requires a real Super Admin account and Supabase.')
   if (!await limited(`staff-role:${req.staff.id}`, 20)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before changing another role.')
@@ -2644,6 +2911,13 @@ runUploadCleanup()
 const emailOutboxTimer = setInterval(() => drainEmailOutbox().catch((error) => console.error('[email-outbox] drain failed', error.message)), 15_000)
 emailOutboxTimer.unref()
 drainEmailOutbox().catch((error) => console.error('[email-outbox] drain failed', error.message))
+const solvyJobTimer = setInterval(async () => { try { if (await supabaseClaimScheduledJob('solvy-jobs', 25)) await drainSolvyJobs() } catch (error) { console.error('[solvy] job drain failed', error.message) } }, 30_000)
+solvyJobTimer.unref()
+const stripeReconciliationTimer = setInterval(async () => {
+  try { if (await supabaseClaimScheduledJob('stripe-reconciliation', 9 * 60)) await reconcileStripePayments() }
+  catch (error) { console.error('[stripe] scheduled reconciliation failed', error.message) }
+}, 10 * 60_000)
+stripeReconciliationTimer.unref()
 let shuttingDown = false
 function shutdown(signal) {
   if (shuttingDown) return
@@ -2651,6 +2925,8 @@ function shutdown(signal) {
   clearInterval(scopeSyncTimer)
   clearInterval(uploadCleanupTimer)
   clearInterval(emailOutboxTimer)
+  clearInterval(stripeReconciliationTimer)
+  clearInterval(solvyJobTimer)
   closeStreams()
   console.log(JSON.stringify({ level: 'info', type: 'shutdown', signal }))
   server.close((error) => process.exit(error ? 1 : 0))

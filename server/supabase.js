@@ -17,6 +17,7 @@ function appSessionId(token) {
   const hash = crypto.createHash('sha256').update(token).digest('hex')
   return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20, 32)}`
 }
+export function supabaseAppSessionId(token) { return appSessionId(token) }
 export async function supabaseCreateAppSession(token, userId, role, device) {
   if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED')
   const expires_at = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
@@ -39,10 +40,43 @@ export async function supabaseDeleteUserAppSessions(userId) {
   const { error } = await adminClient.from('app_sessions').delete().eq('user_id', userId)
   if (error) throw error
 }
+export async function supabaseListUserAppSessions(userId) {
+  if (!adminClient) return []
+  const { data, error } = await adminClient.from('app_sessions').select('id,device,created_at,last_active_at,expires_at').eq('user_id', userId).gt('expires_at', new Date().toISOString()).order('last_active_at', { ascending: false })
+  if (error) throw error
+  return data || []
+}
+export async function supabaseListStaffSessions() {
+  if (!adminClient) return []
+  const { data, error } = await adminClient.from('app_sessions').select('id,user_id,role,device,created_at,last_active_at,expires_at').in('role', ['Admin', 'Superadmin']).gt('expires_at', new Date().toISOString()).order('last_active_at', { ascending: false })
+  if (error) throw error
+  return data || []
+}
+export async function supabaseDeleteAppSessionById(sessionId) {
+  if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED')
+  const { data, error } = await adminClient.from('app_sessions').delete().eq('id', sessionId).select('id').maybeSingle()
+  if (error) throw error
+  return Boolean(data)
+}
+export async function supabaseDeleteOwnedAppSession(userId, sessionId) {
+  if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED')
+  const { data, error } = await adminClient.from('app_sessions').delete().eq('id', sessionId).eq('user_id', userId).select('id').maybeSingle()
+  if (error) throw error
+  return Boolean(data)
+}
 export async function supabaseRevokeUserSessions(userId) {
   if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED')
   await supabaseDeleteUserAppSessions(userId)
   const { error } = await adminClient.auth.admin.signOut(userId, 'global')
+  if (error) throw error
+}
+export async function supabaseAnonymizeUser(userId) {
+  if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED')
+  const anonymousEmail = `closed-${userId}@deleted.invalid`
+  await supabaseDeleteUserAppSessions(userId)
+  const { error: authError } = await adminClient.auth.admin.updateUserById(userId, { email: anonymousEmail, password: crypto.randomBytes(32).toString('hex'), email_confirm: true, user_metadata: { name: 'Closed account', account_closed: true } })
+  if (authError) throw authError
+  const { error } = await adminClient.from('profiles').update({ name: 'Closed account', email: anonymousEmail, updated_at: new Date().toISOString() }).eq('id', userId)
   if (error) throw error
 }
 export async function supabaseSignOutCurrent(accessToken, refreshToken) {
@@ -103,6 +137,18 @@ export async function supabaseCompleteEmailOutbox(id, delivered, errorMessage = 
   if (!adminClient) return
   const { error } = await adminClient.rpc('complete_notification_outbox', { p_id: id, p_delivered: Boolean(delivered), p_error: errorMessage ? String(errorMessage).slice(0, 1000) : null })
   if (error) throw error
+}
+export async function supabaseEmailOutbox() {
+  if (!adminClient) return []
+  const { data, error } = await adminClient.from('notification_outbox').select('id,to_email,subject,status,attempts,next_attempt_at,delivered_at,last_error,created_at').order('created_at', { ascending: false }).limit(100)
+  if (error) throw error
+  return data || []
+}
+export async function supabaseRetryEmail(id) {
+  if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED')
+  const { data, error } = await adminClient.from('notification_outbox').update({ status: 'queued', attempts: 0, next_attempt_at: new Date().toISOString(), claimed_at: null, last_error: null }).eq('id', id).in('status', ['failed', 'retry']).select('id').maybeSingle()
+  if (error) throw error
+  return Boolean(data)
 }
 export async function supabaseReadExpertWorkspace(expertId) {
   if (!adminClient) throw new Error('SUPABASE_NOT_CONFIGURED')
@@ -197,7 +243,7 @@ export async function supabaseDecideSuperadminRole(actorId, requestId, decision)
   if (error) throw error
   return data
 }
-const domainCollections = ['tasks', 'files', 'deliveryFiles', 'analyses', 'reviews', 'drafts', 'guestTransfers', 'conversations', 'messages', 'payments', 'plans', 'scopeChanges', 'explainSessions', 'explainArtifacts', 'explainRequests', 'supportTickets', 'activity', 'notifications', 'adminAudit']
+const domainCollections = ['tasks', 'files', 'deliveryFiles', 'analyses', 'reviews', 'drafts', 'guestTransfers', 'conversations', 'messages', 'payments', 'plans', 'scopeChanges', 'explainSessions', 'explainArtifacts', 'explainRequests', 'supportTickets', 'refundRequests', 'payoutRequests', 'solvyJobs', 'expertRequests', 'legalHolds', 'securityEvents', 'retentionRuns', 'policies', 'emailSuppressions', 'activity', 'notifications', 'adminAudit']
 function emptyDomainState() { return Object.fromEntries([...domainCollections.map((name) => [name, []]), ['idempotency', {}]]) }
 function recordKey(item, index) { return String(item?.id || item?.token || `${index}`) }
 function flattenDomainState(state) {
