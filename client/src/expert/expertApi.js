@@ -80,6 +80,9 @@ export function updateExpertProfile(profile) {
   return apiFetch('/api/expert/profile', { method: 'PATCH', body: profile })
 }
 
+export function fetchExpertEarnings({ signal } = {}) { return apiFetch('/api/expert/earnings', { signal }) }
+export function requestExpertPayout(taskIds) { return apiFetch('/api/expert/payouts', { method: 'POST', body: { taskIds } }) }
+
 export function fetchExpertDashboard({ signal } = {}) {
   return apiFetch('/api/expert/dashboard', { signal })
 }
@@ -95,6 +98,9 @@ export function fetchExpertAssignments({ search = '', filter = 'all', sort = 'de
 export function fetchAssignmentOverview(assignmentId, { signal } = {}) {
   return apiFetch(`/api/expert/assignments/${encodeURIComponent(assignmentId)}`, { signal })
     .then((payload) => payload.assignment)
+}
+export function requestAssignmentOperation(assignmentId, request) {
+  return apiFetch(`/api/expert/assignments/${encodeURIComponent(assignmentId)}/operations-request`, { method: 'POST', body: request })
 }
 
 export function fetchAssignmentRequirements(assignmentId, { signal } = {}) {

@@ -542,6 +542,19 @@ export async function fetchPaymentRecord(paymentId, { signal } = {}) {
   return mapPaymentRecord(await readJson(response))
 }
 
+export async function requestPaymentRefund(paymentId, { amount, reason, workCompletedClaim, expectedScope, deliveredDifference, evidenceReferences }) {
+  const response = await apiFetch(`/api/student/payments/payments/${encodeURIComponent(paymentId)}/refund-request`, {
+    method: 'POST',
+    body: { amount, reason, workCompletedClaim, expectedScope, deliveredDifference, evidenceReferences },
+  })
+  return readJson(response)
+}
+
+export async function fetchRefundRequests({ signal } = {}) {
+  const response = await apiFetch('/api/student/payments/refunds', { signal })
+  return readJson(response)
+}
+
 export async function fetchReceipt(paymentId, { signal } = {}) {
   const response = await apiFetch(`/api/student/payments/payments/${encodeURIComponent(paymentId)}/receipt`, { signal })
   if (response.status === 404 || response.status === 501) return null
@@ -870,3 +883,8 @@ export function buildStudentPaymentsViewModel({ focus, tasks, plan, structure, h
 }
 
 export { formatDate, formatRelativeTime }
+
+export async function appealRefundRequest(requestId, reason) {
+  const response = await apiFetch(`/api/student/payments/refunds/${encodeURIComponent(requestId)}/appeal`, { method: 'POST', body: { reason } })
+  return readJson(response)
+}

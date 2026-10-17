@@ -25,7 +25,7 @@ import {
   formatFileSize,
 } from '../../expert/assignmentState.js'
 import { useAssignmentRealtime, useAssignmentWorkspace, useQaDeliveryWorkflow } from '../../expert/assignmentData.js'
-import { fetchExpertFileAccess } from '../../expert/expertApi.js'
+import { fetchExpertFileAccess, requestAssignmentOperation } from '../../expert/expertApi.js'
 import { ExpertAssignmentsSkeletons, qaLabel } from './ExpertAssignments.jsx'
 import { goExpert } from './ExpertAppShell.jsx'
 import './expert-assignments.css'
@@ -1011,6 +1011,8 @@ function ErrorScreen({ onRetry, onBack }) {
 export function ExpertAssignmentWorkspace({ assignmentId, initialTab = 'overview' }) {
   const workspace = useAssignmentWorkspace(assignmentId, initialTab)
   const [toast, setToast] = useState(null)
+  const [operation, setOperation] = useState({ type: 'deadline_extension', reason: '', requestedDeadline: '' })
+  const [operationBusy, setOperationBusy] = useState(false)
   const lastReload = useRef(0)
   const { setTab } = workspace
 
@@ -1085,6 +1087,7 @@ export function ExpertAssignmentWorkspace({ assignmentId, initialTab = 'overview
             revisionActive={Boolean(qaFlow.revision?.active)}
             onGoTab={goTab}
           />
+          {workspace.tab === 'overview' && !assignment.display?.closed && <form className="exp-panel" onSubmit={async (event) => { event.preventDefault(); setOperationBusy(true); try { await requestAssignmentOperation(assignmentId, operation); notify('REQUEST SENT', 'SolveNest operations will review your request.'); setOperation({ type: 'deadline_extension', reason: '', requestedDeadline: '' }) } catch (error) { notify('REQUEST FAILED', error.serverMessage || 'The request could not be sent.') } finally { setOperationBusy(false) } }}><div className="exp-panel-head"><div><p className="exp-overline">OPERATIONS REQUEST</p><h3>Assignment support</h3></div></div><label>Request type<select value={operation.type} onChange={(event) => setOperation({ ...operation, type: event.target.value })}><option value="deadline_extension">Deadline extension</option><option value="reassignment">Reassignment</option><option value="decline">Decline assignment</option></select></label>{operation.type === 'deadline_extension' && <label>Requested deadline<input type="date" required value={operation.requestedDeadline} onChange={(event) => setOperation({ ...operation, requestedDeadline: event.target.value })} /></label>}<label>Reason<textarea required minLength={20} maxLength={2000} rows={3} value={operation.reason} onChange={(event) => setOperation({ ...operation, reason: event.target.value })} /></label><button className="exp-button exp-button--secondary" disabled={operationBusy || operation.reason.trim().length < 20}>{operationBusy ? 'Sending…' : 'Send request'}</button></form>}
           <WorkspaceTabs tab={workspace.tab} onGoTab={goTab} badges={badges} />
 
           <div className="exp-a-ws-panel">

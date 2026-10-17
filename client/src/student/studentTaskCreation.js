@@ -33,8 +33,19 @@ export function removeStudentTaskFile(fileId) {
   return request(`/files/${encodeURIComponent(fileId)}`, { method: 'DELETE', headers: { Accept: 'application/json' } })
 }
 
-export function analyzeStudentTask(fileIds, sessionId) {
-  return request('/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ fileIds, sessionId }) })
+export async function analyzeStudentTask(fileIds, sessionId) {
+  const started = await request('/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ fileIds, sessionId }) })
+  if (started.analysis) return started
+  const jobId = started.job?.id
+  if (!jobId) throw new Error('The analysis job could not be started.')
+  const deadline = Date.now() + 5 * 60_000
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 1500))
+    const result = await request(`/analysis-jobs/${encodeURIComponent(jobId)}`, { headers: { Accept: 'application/json' } })
+    if (result.analysis) return { analysis: result.analysis, job: result.job }
+    if (result.job?.status === 'failed') throw new Error('Analysis could not be completed. Your files are saved and staff can retry the job.')
+  }
+  throw new Error('Analysis is still processing. Keep this task setup open and try again shortly.')
 }
 
 export function createStudentTask(payload) {

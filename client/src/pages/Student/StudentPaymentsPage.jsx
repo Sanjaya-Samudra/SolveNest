@@ -20,6 +20,7 @@ import {
   PAYMENT_STATUS_LABELS,
   fetchPaymentRecord,
   fetchReceipt,
+  requestPaymentRefund,
   filterPaymentHistory,
   filterTaskFundingSummaries,
   formatCurrency,
@@ -631,7 +632,16 @@ function PaymentHistoryLedger({ rows, loading, error, search, filter, onSearch, 
   )
 }
 
-function PaymentRecordInspector({ record, onDownload, downloading, onBack, taskOnly }) {
+function PaymentRecordInspector({ record, onDownload, downloading, onBack, taskOnly, onRefunded }) {
+  const [refundOpen, setRefundOpen] = useState(false)
+  const [refundReason, setRefundReason] = useState('')
+  const [workCompletedClaim, setWorkCompletedClaim] = useState(false)
+  const [expectedScope, setExpectedScope] = useState('')
+  const [deliveredDifference, setDeliveredDifference] = useState('')
+  const [evidenceReferences, setEvidenceReferences] = useState('')
+  const [refundBusy, setRefundBusy] = useState(false)
+  const [refundError, setRefundError] = useState('')
+  const submitRefund = async (event) => { event.preventDefault(); setRefundBusy(true); setRefundError(''); try { await requestPaymentRefund(record.id, { reason: refundReason, workCompletedClaim, expectedScope, deliveredDifference, evidenceReferences: evidenceReferences.split('\n').map((item) => item.trim()).filter(Boolean) }); setRefundOpen(false); setRefundReason(''); onRefunded?.() } catch (issue) { setRefundError(issue.message || 'Could not submit the refund request.') } finally { setRefundBusy(false) } }
   if (!record) {
     return (
       <EmptyState
@@ -709,8 +719,10 @@ function PaymentRecordInspector({ record, onDownload, downloading, onBack, taskO
         ) : (
           <span className="sn-pay-record__no-receipt">Receipt unavailable until payment is confirmed.</span>
         )}
+        {['succeeded', 'paid', 'partially_refunded'].includes(record.status) && <button type="button" className="student-button student-button--secondary" onClick={() => setRefundOpen(true)}>Request refund</button>}
         <PaymentHelpLink />
       </footer>
+      {refundOpen && <div className="student-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setRefundOpen(false) }}><form className="student-modal" role="dialog" aria-modal="true" aria-labelledby="refund-title" onSubmit={submitRefund}><span className="student-overline">Refund review</span><h2 id="refund-title">Request a refund</h2><p>Explain what was not completed or how delivered work differed from the accepted scope. Staff will review the task and payment history.</p><label>Reason<textarea required minLength={20} maxLength={2000} rows={5} value={refundReason} onChange={(event) => setRefundReason(event.target.value)} placeholder="Describe what happened and the outcome you expect…" /></label><label>Accepted scope expectation<textarea maxLength={2000} rows={3} value={expectedScope} onChange={(event) => setExpectedScope(event.target.value)} placeholder="Quote or summarize the part of the accepted scope involved." /></label><label>Difference in delivered work<textarea maxLength={2000} rows={3} value={deliveredDifference} onChange={(event) => setDeliveredDifference(event.target.value)} placeholder="Describe the exact gap between the scope and delivery." /></label><label>Evidence references<textarea maxLength={2000} rows={3} value={evidenceReferences} onChange={(event) => setEvidenceReferences(event.target.value)} placeholder="One task message, filename, or delivery reference per line." /></label><label className="student-check"><input type="checkbox" checked={workCompletedClaim} onChange={(event) => setWorkCompletedClaim(event.target.checked)} /> Work was delivered, but I believe it did not match the accepted scope</label>{refundError && <div className="student-error" role="alert">{refundError}</div>}<div className="student-modal-actions"><button type="button" className="student-button student-button--secondary" onClick={() => setRefundOpen(false)}>Cancel</button><button className="student-button student-button--primary" disabled={refundBusy || refundReason.trim().length < 20}>{refundBusy ? 'Submitting…' : 'Submit for review'}</button></div></form></div>}
     </article>
   )
 }
@@ -1175,6 +1187,7 @@ export default function StudentPaymentsPage() {
               record={inspectorRecord}
               onDownload={downloadReceipt}
               downloading={receiptBusy}
+              onRefunded={() => { historyQuery.reload(); setReceiptError('Refund request submitted for staff review.') }}
               onBack={() => patch({ selectedPaymentId: null })}
             />
           ) : null}

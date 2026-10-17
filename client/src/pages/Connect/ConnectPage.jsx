@@ -143,6 +143,7 @@ export function ConnectPage() {
   const [errors, setErrors] = useState({})
   const [status, setStatus] = useState('idle')
   const [submitError, setSubmitError] = useState('')
+  const [reference, setReference] = useState('')
   const fileRef = useRef(null)
   const timers = useRef([])
   useEffect(() => () => timers.current.forEach(clearTimeout), [])
@@ -196,6 +197,7 @@ export function ConnectPage() {
       const response = await fetch('/api/contact', { method: 'POST', body })
       const payload = await response.json().catch(() => ({}))
       if (!response.ok) throw new Error(payload.message || 'Your message could not be sent. Please try again.')
+      setReference(payload.reference || '')
       setStatus('sent')
     } catch (error) {
       setSubmitError(error.message || 'Your message could not be sent. Please try again.')
@@ -207,6 +209,7 @@ export function ConnectPage() {
     setErrors({})
     setStatus('idle')
     setSubmitError('')
+    setReference('')
     if (fileRef.current) fileRef.current.value = ''
   }
 
@@ -279,7 +282,7 @@ export function ConnectPage() {
                 <motion.div key="done" className="cn-done" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.25 * D }} aria-live="polite">
                   <span className="cn-done-check"><Check size={16} /></span>
                   <span className="cn-card-label">MESSAGE RECEIVED</span>
-                  <p>Your {SENT_NOUN[intent]} has been sent to SolveNest.</p>
+                  <p>Your {SENT_NOUN[intent]} has been sent to SolveNest.{reference ? ` Reference: ${reference}.` : ''}</p>
                   <div className="cn-done-actions">
                     <button className="cn-cta-ghost" onClick={() => nav('/')}>Return Home →</button>
                     <button className="cn-cta-ghost" onClick={() => nav('/help')}>Visit Help Centre →</button>

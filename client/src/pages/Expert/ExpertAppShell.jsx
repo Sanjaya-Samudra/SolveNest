@@ -16,6 +16,7 @@ import {
   PanelLeftOpen,
   Settings,
   User,
+  WalletCards,
   X,
 } from 'lucide-react'
 import logo from '../../assets/logo-mark.webp'
@@ -30,6 +31,7 @@ const workspaceItems = [
   ['Assignments', '/expert/assignments', Briefcase],
   ['Available for You', '/expert/available', Compass],
   ['Activity', '/expert/activity', Activity],
+  ['Earnings', '/expert/earnings', WalletCards],
 ]
 
 const systemItems = [
