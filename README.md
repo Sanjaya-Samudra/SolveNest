@@ -37,6 +37,12 @@ For production deployment, follow `PRODUCTION_CHECKLIST.md`. The included Docker
 
 Use the showcase for portfolio/demo review only. Do not accept registrations, uploads, payments, or real customer data on it. To launch the complete product, configure every provider in `server/.env.production.example`, run the migrations, disable `SHOWCASE_MODE`, and complete `PRODUCTION_CHECKLIST.md`.
 
+### Card-free Vercel alternative
+
+`vercel.json` deploys the same read-only showcase on Vercel Hobby without a custom domain. The build copies the Vite output to Vercel's static `public` output and exports the Express application as one serverless function. Vercel supplies the final `VERCEL_URL`; the server converts it to `PUBLIC_APP_URL` automatically. The committed configuration enables `SHOWCASE_MODE=1`, so no provider secrets are required.
+
+Import the GitHub repository at `https://vercel.com/new`, keep the repository root as the Root Directory, and deploy with the detected settings. Vercel Hobby is for personal/non-commercial projects. Serverless hosting also cannot provide this application's private ClamAV service, durable background timers, or large upload workflow, so do not disable showcase mode there.
+
 Admin operations are split into task intake (`/admin`), quality review (`/admin/qa`), and support requests (`/admin/support`). Reviewers can inspect files in the relevant case before acting. Support status changes and quality decisions are recorded for Super Admin oversight. The Super Admin control room uses live operational counts and clearly labels service configuration checks as configuration signals rather than uptime checks.
 
 Students can see only their own support requests. When an Admin marks a request as waiting on the Student, a separate Student-facing message explains what is needed; internal staff notes remain private.

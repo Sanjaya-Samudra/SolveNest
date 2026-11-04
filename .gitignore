@@ -11,5 +11,6 @@ server/.env.*
 server/private-uploads/
 client/node_modules/
 client/dist/
+/public/
 outputs/
 work/

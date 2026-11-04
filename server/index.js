@@ -74,6 +74,9 @@ import { anonymizeStudentRecords, listPrivacyRequests, prepareAccountClosure } f
 if (!process.env.PUBLIC_APP_URL && process.env.RENDER_EXTERNAL_URL) {
   process.env.PUBLIC_APP_URL = process.env.RENDER_EXTERNAL_URL
 }
+if (!process.env.PUBLIC_APP_URL && process.env.VERCEL_URL) {
+  process.env.PUBLIC_APP_URL = `https://${process.env.VERCEL_URL}`
+}
 
 const PORT = Number(process.env.PORT || 4174)
 const showcaseMode = process.env.SHOWCASE_MODE === '1'
@@ -2890,14 +2893,17 @@ if (process.env.NODE_ENV === 'production') {
   if (showcaseMode) console.warn('[startup] SHOWCASE_MODE is enabled: all API mutations are disabled.')
 }
 
-const server = app.listen(PORT, () => {
-  console.log(`SolveNest API listening on http://127.0.0.1:${server.address().port}`)
-})
-server.requestTimeout = 5 * 60_000
-server.headersTimeout = 65_000
-server.keepAliveTimeout = 60_000
-let scopeSyncRunning = false
-const scopeSyncTimer = setInterval(async () => {
+export default app
+
+if (!process.env.VERCEL) {
+  const server = app.listen(PORT, () => {
+    console.log(`SolveNest API listening on http://127.0.0.1:${server.address().port}`)
+  })
+  server.requestTimeout = 5 * 60_000
+  server.headersTimeout = 65_000
+  server.keepAliveTimeout = 60_000
+  let scopeSyncRunning = false
+  const scopeSyncTimer = setInterval(async () => {
   if (scopeSyncRunning) return
   scopeSyncRunning = true
   try {
@@ -2909,10 +2915,10 @@ const scopeSyncTimer = setInterval(async () => {
     }
   } catch (error) { console.error('[scope-change] Expert sync retry failed', error) }
   finally { scopeSyncRunning = false }
-}, 60_000)
-scopeSyncTimer.unref()
-let uploadCleanupRunning = false
-const runUploadCleanup = async () => {
+  }, 60_000)
+  scopeSyncTimer.unref()
+  let uploadCleanupRunning = false
+  const runUploadCleanup = async () => {
   if (uploadCleanupRunning) return
   uploadCleanupRunning = true
   try {
@@ -2921,22 +2927,22 @@ const runUploadCleanup = async () => {
   }
   catch (error) { console.error('[uploads] cleanup failed', error.message) }
   finally { uploadCleanupRunning = false }
-}
-const uploadCleanupTimer = setInterval(runUploadCleanup, 6 * 60 * 60 * 1000)
-uploadCleanupTimer.unref()
-runUploadCleanup()
-const emailOutboxTimer = setInterval(() => drainEmailOutbox().catch((error) => console.error('[email-outbox] drain failed', error.message)), 15_000)
-emailOutboxTimer.unref()
-drainEmailOutbox().catch((error) => console.error('[email-outbox] drain failed', error.message))
-const solvyJobTimer = setInterval(async () => { try { if (await supabaseClaimScheduledJob('solvy-jobs', 25)) await drainSolvyJobs() } catch (error) { console.error('[solvy] job drain failed', error.message) } }, 30_000)
-solvyJobTimer.unref()
-const stripeReconciliationTimer = setInterval(async () => {
+  }
+  const uploadCleanupTimer = setInterval(runUploadCleanup, 6 * 60 * 60 * 1000)
+  uploadCleanupTimer.unref()
+  runUploadCleanup()
+  const emailOutboxTimer = setInterval(() => drainEmailOutbox().catch((error) => console.error('[email-outbox] drain failed', error.message)), 15_000)
+  emailOutboxTimer.unref()
+  drainEmailOutbox().catch((error) => console.error('[email-outbox] drain failed', error.message))
+  const solvyJobTimer = setInterval(async () => { try { if (await supabaseClaimScheduledJob('solvy-jobs', 25)) await drainSolvyJobs() } catch (error) { console.error('[solvy] job drain failed', error.message) } }, 30_000)
+  solvyJobTimer.unref()
+  const stripeReconciliationTimer = setInterval(async () => {
   try { if (await supabaseClaimScheduledJob('stripe-reconciliation', 9 * 60)) await reconcileStripePayments() }
   catch (error) { console.error('[stripe] scheduled reconciliation failed', error.message) }
-}, 10 * 60_000)
-stripeReconciliationTimer.unref()
-let shuttingDown = false
-function shutdown(signal) {
+  }, 10 * 60_000)
+  stripeReconciliationTimer.unref()
+  let shuttingDown = false
+  function shutdown(signal) {
   if (shuttingDown) return
   shuttingDown = true
   clearInterval(scopeSyncTimer)
@@ -2948,6 +2954,7 @@ function shutdown(signal) {
   console.log(JSON.stringify({ level: 'info', type: 'shutdown', signal }))
   server.close((error) => process.exit(error ? 1 : 0))
   setTimeout(() => { server.closeAllConnections?.(); process.exit(1) }, 10_000).unref()
+  }
+  process.on('SIGTERM', () => shutdown('SIGTERM'))
+  process.on('SIGINT', () => shutdown('SIGINT'))
 }
-process.on('SIGTERM', () => shutdown('SIGTERM'))
-process.on('SIGINT', () => shutdown('SIGINT'))

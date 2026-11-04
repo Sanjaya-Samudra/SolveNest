@@ -1,0 +1,24 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "installCommand": "npm ci --prefix client --no-audit --no-fund && npm ci --prefix server --no-audit --no-fund",
+  "buildCommand": "npm run build:vercel",
+  "outputDirectory": "public",
+  "fluid": true,
+  "env": {
+    "SHOWCASE_MODE": "1",
+    "TRUST_PROXY_HOPS": "1"
+  },
+  "functions": {
+    "index.js": {
+      "maxDuration": 60,
+      "includeFiles": ["client/dist/**", "server/migrations/**"]
+    }
+  },
+  "rewrites": [
+    { "source": "/api/:path*", "destination": "/index" },
+    { "source": "/robots.txt", "destination": "/index" },
+    { "source": "/sitemap.xml", "destination": "/index" },
+    { "source": "/:path*", "destination": "/index.html" }
+  ]
+}
