@@ -10,15 +10,16 @@
     "TRUST_PROXY_HOPS": "1"
   },
   "functions": {
-    "index.js": {
+    "api/index.js": {
       "maxDuration": 60,
       "includeFiles": "{client/dist/**,server/migrations/**}"
     }
   },
   "rewrites": [
-    { "source": "/api/:path*", "destination": "/index" },
-    { "source": "/robots.txt", "destination": "/index" },
-    { "source": "/sitemap.xml", "destination": "/index" },
+    { "source": "/api", "destination": "/api?__originalPath=/api" },
+    { "source": "/api/:path*", "destination": "/api?__originalPath=/api/:path*" },
+    { "source": "/robots.txt", "destination": "/api?__originalPath=/robots.txt" },
+    { "source": "/sitemap.xml", "destination": "/api?__originalPath=/sitemap.xml" },
     { "source": "/:path*", "destination": "/index.html" }
   ]
 }
