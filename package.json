@@ -5,6 +5,6 @@
   "scripts": {
     "dev": "node scripts/dev.js",
     "build": "npm --prefix client run build",
-    "build:vercel": "npm run build && node scripts/build-vercel.js"
+    "build:vercel": "npm ci --prefix client --include=dev --no-audit --no-fund && npm run build && node scripts/build-vercel.js"
   }
 }
