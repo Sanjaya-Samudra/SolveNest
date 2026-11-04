@@ -40,26 +40,42 @@ test('Student flow is authenticated, idempotent, and ownership-scoped', async (t
   const studentA = client()
   const studentB = client()
   const suffix = crypto.randomUUID()
+  const policyResponse = await fetch(`${base}/api/policies/current`)
+  assert.equal(policyResponse.status, 200)
+  const { policies } = await policyResponse.json()
+  const policyConsents = policies.map(({ id, version, contentHash }) => ({ id, version, contentHash, acceptedAt: new Date().toISOString() }))
   const register = async (api, email) => {
-    const result = await api.call('/api/auth/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Test Student', email, password: 'correct horse battery staple' }) })
+    const result = await api.call('/api/auth/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Test Student', email, password: 'correct horse battery staple', policyConsents }) })
     assert.equal(result.response.status, 201)
   }
   await register(studentA, `a-${suffix}@example.com`)
   await register(studentB, `b-${suffix}@example.com`)
 
+  const setup = await studentA.call('/api/student/task-creation/session', { method: 'POST' })
+  assert.equal(setup.response.status, 201)
+  const sessionId = setup.body.session.id
+
   const form = new FormData()
-  form.append('file', new Blob([Buffer.from('brief')], { type: 'image/png' }), 'brief.png')
+  const pngBrief = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from('brief')])
+  form.append('file', new Blob([pngBrief], { type: 'image/png' }), 'brief.png')
   form.append('kind', 'brief')
+  form.append('sessionId', sessionId)
   const upload = await studentA.call('/api/student/task-creation/files', { method: 'POST', body: form })
   assert.equal(upload.response.status, 201)
   const fileId = upload.body.file.id
 
-  const analysis = await studentA.call('/api/student/task-creation/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fileIds: [fileId] }) })
-  assert.equal(analysis.response.status, 201)
-  assert.equal(analysis.body.analysis.status, 'COMPLETED')
+  const analysis = await studentA.call('/api/student/task-creation/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fileIds: [fileId], sessionId }) })
+  assert.equal(analysis.response.status, 202)
+  let analyzed
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const result = await studentA.call(`/api/student/task-creation/analysis-jobs/${analysis.body.job.id}`)
+    if (result.body.analysis) { analyzed = result.body.analysis; break }
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+  assert.equal(analyzed?.status, 'COMPLETED')
 
   const headers = { 'Content-Type': 'application/json', 'Idempotency-Key': `create-${suffix}` }
-  const payload = JSON.stringify({ fileIds: [fileId], analysis: analysis.body.analysis })
+  const payload = JSON.stringify({ fileIds: [fileId], analysisId: analyzed.id })
   const created = await studentA.call('/api/student/task-creation/tasks', { method: 'POST', headers, body: payload })
   const replayed = await studentA.call('/api/student/task-creation/tasks', { method: 'POST', headers, body: payload })
   assert.equal(created.response.status, 201)
@@ -79,7 +95,7 @@ test('Student flow is authenticated, idempotent, and ownership-scoped', async (t
   const payment = await studentA.call('/api/student/payments/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ taskId: created.body.task.id, idempotencyKey: `payment-${suffix}` }) })
   assert.equal(payment.response.status, 503)
   const explain = await studentA.call(`/api/student/explain/tasks/${created.body.task.id}/explain`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'explain', question: 'What is the task asking?' }) })
-  assert.equal(explain.response.status, 503)
+  assert.equal(explain.response.status, 409)
 
   const access = await studentA.call(`/api/student/files/${fileId}/access`)
   assert.equal(access.response.status, 200)
