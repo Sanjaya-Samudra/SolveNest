@@ -69,7 +69,14 @@ import { appealRefundRequest, createRefundRequest, decideRefundRequest, listRefu
 import { decidePayout, expertEarnings, listPayoutRequests, requestExpertPayout } from './payoutStore.js'
 import { anonymizeStudentRecords, listPrivacyRequests, prepareAccountClosure } from './privacyStore.js'
 
+// Render provides the final HTTPS origin at runtime. Prefer an explicitly
+// configured URL, but make zero-config free deployments use their managed URL.
+if (!process.env.PUBLIC_APP_URL && process.env.RENDER_EXTERNAL_URL) {
+  process.env.PUBLIC_APP_URL = process.env.RENDER_EXTERNAL_URL
+}
+
 const PORT = Number(process.env.PORT || 4174)
+const showcaseMode = process.env.SHOWCASE_MODE === '1'
 const COOKIE = 'sn_sid'
 const EXPERT_COOKIE = 'sn_eid'
 const expertSessions = new Map()
@@ -125,6 +132,13 @@ app.use('/api', (req, res, next) => {
   if (process.env.NODE_ENV !== 'production' && /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin || '')) trusted = true
   if (req.headers['sec-fetch-site'] === 'cross-site' || !trusted) return safeError(res, 403, 'ORIGIN_REJECTED', 'This request must come from the SolveNest website.')
   next()
+})
+// A free showcase deployment intentionally has no customer data or provider
+// secrets. Keep it read-only so the UI can be reviewed without pretending that
+// accounts, payments, analysis, support, or uploads are operational.
+app.use('/api', (req, res, next) => {
+  if (!showcaseMode || ['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next()
+  return safeError(res, 503, 'SHOWCASE_READ_ONLY', 'This free preview is read-only. Live customer workflows are not enabled yet.')
 })
 const trustedProxyHops = Number(process.env.TRUST_PROXY_HOPS || 0)
 if (Number.isSafeInteger(trustedProxyHops) && trustedProxyHops > 0 && trustedProxyHops <= 3) app.set('trust proxy', trustedProxyHops)
@@ -2862,15 +2876,18 @@ if (process.env.NODE_ENV === 'production') {
   const missing = []
   if (!Number.isSafeInteger(PORT) || PORT < 1 || PORT > 65535) missing.push('valid PORT')
   if (!fs.existsSync(path.join(clientDist, 'index.html'))) missing.push('built client/dist application')
-  if (!hasSupabase()) missing.push('Supabase Auth and service role')
-  if (!hasObjectStorage()) missing.push('private object storage')
-  if (String(process.env.FILE_SIGNING_SECRET || '').length < 32) missing.push('FILE_SIGNING_SECRET (32+ characters)')
-  if (!process.env.SOLVY_API_URL || !process.env.SOLVY_API_KEY) missing.push('Solvy endpoint and key')
-  if (!stripe || !process.env.STRIPE_WEBHOOK_SECRET) missing.push('Stripe key and webhook secret')
-  if (!hasEmail() || !process.env.CONTACT_EMAIL) missing.push('SMTP and contact email')
-  if (!process.env.CLAMD_HOST) missing.push('private ClamAV clamd host')
+  if (!showcaseMode) {
+    if (!hasSupabase()) missing.push('Supabase Auth and service role')
+    if (!hasObjectStorage()) missing.push('private object storage')
+    if (String(process.env.FILE_SIGNING_SECRET || '').length < 32) missing.push('FILE_SIGNING_SECRET (32+ characters)')
+    if (!process.env.SOLVY_API_URL || !process.env.SOLVY_API_KEY) missing.push('Solvy endpoint and key')
+    if (!stripe || !process.env.STRIPE_WEBHOOK_SECRET) missing.push('Stripe key and webhook secret')
+    if (!hasEmail() || !process.env.CONTACT_EMAIL) missing.push('SMTP and contact email')
+    if (!process.env.CLAMD_HOST) missing.push('private ClamAV clamd host')
+  }
   if (!/^https:\/\//i.test(process.env.PUBLIC_APP_URL || '')) missing.push('HTTPS PUBLIC_APP_URL')
   if (missing.length) throw new Error(`Production configuration incomplete: ${missing.join(', ')}`)
+  if (showcaseMode) console.warn('[startup] SHOWCASE_MODE is enabled: all API mutations are disabled.')
 }
 
 const server = app.listen(PORT, () => {

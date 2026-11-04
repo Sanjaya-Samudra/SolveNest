@@ -31,6 +31,12 @@ The Super Admin workspace is at `/superadmin`. It shows governance signals, serv
 
 For production deployment, follow `PRODUCTION_CHECKLIST.md`. The included Docker Compose stack serves the built React application and API from one origin and runs ClamAV on a private container network.
 
+## Free public showcase
+
+`render.yaml` deploys a read-only public showcase on Render's free web-service tier and supplies a free `onrender.com` HTTPS address. It builds the same production Docker image, but sets `SHOWCASE_MODE=1`, which rejects every API mutation. This is deliberate: free Render instances cannot run the separate ClamAV service, block SMTP ports, sleep while idle, and have an ephemeral filesystem.
+
+Use the showcase for portfolio/demo review only. Do not accept registrations, uploads, payments, or real customer data on it. To launch the complete product, configure every provider in `server/.env.production.example`, run the migrations, disable `SHOWCASE_MODE`, and complete `PRODUCTION_CHECKLIST.md`.
+
 Admin operations are split into task intake (`/admin`), quality review (`/admin/qa`), and support requests (`/admin/support`). Reviewers can inspect files in the relevant case before acting. Support status changes and quality decisions are recorded for Super Admin oversight. The Super Admin control room uses live operational counts and clearly labels service configuration checks as configuration signals rather than uptime checks.
 
 Students can see only their own support requests. When an Admin marks a request as waiting on the Student, a separate Student-facing message explains what is needed; internal staff notes remain private.

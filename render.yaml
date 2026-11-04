@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: solvenest-sanjaya
+    runtime: docker
+    plan: free
+    autoDeployTrigger: commit
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: SHOWCASE_MODE
+        value: "1"
+      - key: TRUST_PROXY_HOPS
+        value: "1"
