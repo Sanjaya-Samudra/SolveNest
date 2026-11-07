@@ -385,7 +385,7 @@ export function IntakeCanvas({ onAnalyze, onUpload, onPreview }) {
                 <span className="sni-idle-icon"><UploadCloud size={22} strokeWidth={1.6} /></span>
                 <h2 className="sni-idle-title">Drop your brief on the desk</h2>
                 <button type="button" className="sni-choose">or choose a file</button>
-                <span className="sni-support">PDF · DOCX · PPTX · JPG · PNG — up to 25 MB</span>
+                <span className="sni-support">PDF · DOCX · PPTX · JPG · PNG — up to 4 MB</span>
                 <div className="sni-error" style={{ display: 'none' }} role="alert" />
                 <div className="sni-hit" role="button" tabIndex={0} aria-label="Upload your brief" />
               </div>

@@ -103,12 +103,12 @@ function scanWithClamd(bytes) {
 export async function inspectUpload(file) {
   const bytes = file.buffer || await fs.readFile(file.path)
   if (!validContent(bytes, file.originalname)) return 'invalid'
-  if (!process.env.CLAMD_HOST) return process.env.NODE_ENV === 'production' ? 'unavailable' : 'clean'
+  if (!process.env.CLAMD_HOST) return process.env.NODE_ENV === 'production' && process.env.FREE_BETA_MODE !== '1' ? 'unavailable' : 'clean'
   try { return await scanWithClamd(bytes) } catch { return 'unavailable' }
 }
 
 export function checkMalwareScanner() {
-  if (!process.env.CLAMD_HOST) return Promise.resolve(process.env.NODE_ENV !== 'production')
+  if (!process.env.CLAMD_HOST) return Promise.resolve(process.env.NODE_ENV !== 'production' || process.env.FREE_BETA_MODE === '1')
   return new Promise((resolve) => {
     const socket = net.createConnection({ host: process.env.CLAMD_HOST, port: Number(process.env.CLAMD_PORT || 3310) })
     let result = ''

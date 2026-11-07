@@ -176,7 +176,7 @@ export function ConnectPage() {
     const errs = {}
     visibleFields.forEach((f) => { const m = validateField(f, data[f.k], data); if (m) errs[f.k] = m })
     const attachment = fileRef.current?.files?.[0]
-    if (attachment && attachment.size > 5 * 1024 * 1024) errs.attachment = 'Choose a file smaller than 5 MB.'
+    if (attachment && attachment.size > 4 * 1024 * 1024) errs.attachment = 'Choose a file smaller than 4 MB.'
     if (attachment && !/\.(pdf|png|jpe?g|docx)$/i.test(attachment.name)) errs.attachment = 'Choose a PDF, PNG, JPG or DOCX file.'
     setErrors(errs)
     if (Object.keys(errs).length) {

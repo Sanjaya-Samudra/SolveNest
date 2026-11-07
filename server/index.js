@@ -80,6 +80,7 @@ if (!process.env.PUBLIC_APP_URL && process.env.VERCEL_URL) {
 
 const PORT = Number(process.env.PORT || 4174)
 const showcaseMode = process.env.SHOWCASE_MODE === '1'
+const freeBetaMode = process.env.FREE_BETA_MODE === '1'
 const COOKIE = 'sn_sid'
 const EXPERT_COOKIE = 'sn_eid'
 const expertSessions = new Map()
@@ -108,7 +109,7 @@ const upload = multer({
     destination: uploadDir,
     filename: (_req, file, callback) => callback(null, `${crypto.randomUUID()}${path.extname(file.originalname).toLowerCase()}`),
   }),
-  limits: { fileSize: 100 * 1024 * 1024, files: 1 },
+  limits: { fileSize: process.env.VERCEL ? 4 * 1024 * 1024 : 100 * 1024 * 1024, files: 1 },
   fileFilter: (_req, file, callback) => {
     const extension = path.extname(file.originalname).slice(1).toLowerCase()
     callback(null, allowedExtensions.has(extension))
@@ -420,7 +421,7 @@ function normalizeAnalysis(files) {
 }
 
 async function analyzeWithSolvy(files) {
-  if (!process.env.SOLVY_API_URL) {
+  if (!process.env.SOLVY_API_URL && !process.env.GEMINI_API_KEY) {
     if (process.env.NODE_ENV === 'production') throw new Error('SOLVY_NOT_CONFIGURED')
     return { ...normalizeAnalysis(files), provider: 'local-intake', provisional: true }
   }
@@ -441,7 +442,7 @@ async function processSolvyJob(jobId) {
     await withTaskStore((store) => { store.analyses.push(analysis); const job = store.solvyJobs.find((item) => item.id === jobId); Object.assign(job, { status: 'completed', analysisId: analysis.id, completedAt: now(), updatedAt: now(), estimatedCost: Number(process.env.SOLVY_ANALYSIS_UNIT_COST || 0) }); addActivity(store, { id: crypto.randomUUID(), studentId: claimed.studentId, type: 'AnalysisCompleted', text: 'Task analysis completed.', createdAt: analysis.createdAt }) })
     publish(claimed.studentId, { type: 'AnalysisCompleted', analysisId: analysis.id, jobId, status: 'COMPLETED' })
   } catch (error) {
-    await withTaskStore((store) => { const job = store.solvyJobs.find((item) => item.id === jobId); if (job) Object.assign(job, { status: job.attempts < 3 ? 'retry' : 'failed', errorCode: String(error.code || error.message).slice(0, 120), nextAttemptAt: new Date(Date.now() + Math.min(60_000, 5000 * 2 ** job.attempts)).toISOString(), updatedAt: now() }) })
+    await withTaskStore((store) => { const job = store.solvyJobs.find((item) => item.id === jobId); if (job) Object.assign(job, { status: process.env.VERCEL || job.attempts >= 3 ? 'failed' : 'retry', errorCode: String(error.code || error.message).slice(0, 120), nextAttemptAt: new Date(Date.now() + Math.min(60_000, 5000 * 2 ** job.attempts)).toISOString(), updatedAt: now() }) })
   }
 }
 
@@ -506,7 +507,7 @@ async function syncStudentDelivery(expertId, assignmentId) {
       if (!file.storageKey) continue
       if (!store.deliveryFiles.some((item) => item.id === file.id && item.studentId === task.studentId)) store.deliveryFiles.push({ id: file.id, studentId: task.studentId, taskId: task.id, role: 'DELIVERY', originalName: file.name, storageKey: file.storageKey, mimeType: file.type, size: file.size, state: 'READY', createdAt: latest.deliveredAt })
     }
-    const delivery = { id: `${assignmentId}-v${latest.version}`, version: latest.version, deliveredAt: latest.deliveredAt, status: 'ready_to_review', files, note: latest.note, qa: { state: 'approved' }, revision: { status: remaining ? 'available' : 'limit_reached', remaining }, explainAndDefend: process.env.SOLVY_API_URL ? { eligible: true } : { eligible: false, reason: 'Explain & Defend is not configured yet.' } }
+    const delivery = { id: `${assignmentId}-v${latest.version}`, version: latest.version, deliveredAt: latest.deliveredAt, status: 'ready_to_review', files, note: latest.note, qa: { state: 'approved' }, revision: { status: remaining ? 'available' : 'limit_reached', remaining }, explainAndDefend: process.env.SOLVY_API_URL || process.env.GEMINI_API_KEY ? { eligible: true } : { eligible: false, reason: 'Explain & Defend is not configured yet.' } }
     task.deliveryVersions.push(delivery)
     task.status = 'DELIVERED'
     task.hasNewDelivery = true
@@ -547,10 +548,10 @@ app.get('/api/student/task-creation/session/:sessionId', requireStudent, asyncRo
 app.post('/api/guest/analyze', asyncRoute(async (req, res, next) => {
   if (!await limited(`guest-analysis:${req.ip}`, 3)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before analyzing another brief.')
   next()
-}), (req, res, next) => upload.single('file')(req, res, (error) => error ? safeError(res, error.code === 'LIMIT_FILE_SIZE' ? 413 : 400, 'FILE_UPLOAD_REJECTED', 'Choose a supported file up to 25 MB.') : next()), asyncRoute(async (req, res) => {
-  if (!req.file || req.file.size > 25 * 1024 * 1024) {
+}), (req, res, next) => upload.single('file')(req, res, (error) => error ? safeError(res, error.code === 'LIMIT_FILE_SIZE' ? 413 : 400, 'FILE_UPLOAD_REJECTED', `Choose a supported file up to ${process.env.VERCEL ? 4 : 25} MB.`) : next()), asyncRoute(async (req, res) => {
+  if (!req.file || req.file.size > (process.env.VERCEL ? 4 : 25) * 1024 * 1024) {
     if (req.file?.path) try { fs.unlinkSync(req.file.path) } catch {}
-    return safeError(res, 400, 'FILE_REQUIRED', 'Choose a supported brief up to 25 MB.')
+    return safeError(res, 400, 'FILE_REQUIRED', `Choose a supported brief up to ${process.env.VERCEL ? 4 : 25} MB.`)
   }
   if (await rejectInvalidUpload(res, req.file)) return
   const file = { id: crypto.randomUUID(), studentId: null, taskId: null, analysisSessionId: null, role: 'BRIEF', originalName: path.basename(req.file.originalname), storageKey: hasObjectStorage() ? `guest/${req.file.filename}` : req.file.filename, mimeType: req.file.mimetype, size: req.file.size, state: 'READY', createdAt: now() }
@@ -592,7 +593,7 @@ app.post('/api/student/task-creation/files', requireStudent, asyncRoute(async (r
   upload.single('file')(req, res, (error) => {
     if (error) {
       const code = error.code === 'LIMIT_FILE_SIZE' ? 'FILE_TOO_LARGE' : 'FILE_UPLOAD_REJECTED'
-      safeError(res, 400, code, code === 'FILE_TOO_LARGE' ? 'File exceeds the 100 MB limit.' : 'This file type is not supported.')
+      safeError(res, 400, code, code === 'FILE_TOO_LARGE' ? `File exceeds the ${process.env.VERCEL ? 4 : 100} MB limit.` : 'This file type is not supported.')
       return
     }
     next()
@@ -725,6 +726,11 @@ app.post('/api/student/task-creation/analyze', requireStudent, asyncRoute(async 
   if (existing) return res.status(existing.status === 'completed' ? 200 : 202).json({ job: existing })
   const job = { id: crypto.randomUUID(), type: 'analysis', studentId: req.student.studentId, sessionId, fileIds: files.map((file) => file.id), status: 'queued', attempts: 0, modelVersion: process.env.SOLVY_MODEL_VERSION || 'default', promptVersion: process.env.SOLVY_PROMPT_VERSION || 'v1', createdAt: now(), updatedAt: now() }
   await withTaskStore((store) => store.solvyJobs.push(job))
+  if (process.env.VERCEL) {
+    await processSolvyJob(job.id)
+    const completed = (await readTaskStore()).solvyJobs.find((item) => item.id === job.id) || job
+    return res.status(completed.status === 'completed' ? 200 : 202).json({ job: completed })
+  }
   void drainSolvyJobs()
   res.status(202).json({ job })
 }))
@@ -1618,7 +1624,7 @@ const EXPERT_ERROR_MESSAGE = {
   FILE_REQUIRED: 'Choose a file to upload.',
   FILE_NOT_FOUND: 'File not found.',
   FILE_IMMUTABLE: 'Files provided with the assignment cannot be removed.',
-  FILE_TOO_LARGE: 'File exceeds the 100 MB limit.',
+  FILE_TOO_LARGE: `File exceeds the ${process.env.VERCEL ? 4 : 100} MB limit.`,
   FILE_UPLOAD_REJECTED: 'This file type is not supported.',
   TITLE_REQUIRED: 'An assignment title is required.',
 }
@@ -2032,7 +2038,7 @@ app.post('/api/auth/password-reset/complete', asyncRoute(async (req, res) => {
   }
 }))
 
-const contactUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 1 }, fileFilter: (_req, file, callback) => callback(null, /\.(pdf|png|jpe?g|docx)$/i.test(file.originalname)) })
+const contactUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: (process.env.VERCEL ? 4 : 5) * 1024 * 1024, files: 1 }, fileFilter: (_req, file, callback) => callback(null, /\.(pdf|png|jpe?g|docx)$/i.test(file.originalname)) })
 app.post('/api/contact', asyncRoute(async (req, res, next) => {
   if (!await limited(`contact:${req.ip}`, 5)) return safeError(res, 429, 'RATE_LIMITED', 'Please wait before sending another message.')
   next()
@@ -2870,7 +2876,7 @@ app.use((error, req, res, next) => {
   if (res.headersSent) return next(error)
   if (error.type === 'entity.parse.failed') return safeError(res, 400, 'INVALID_JSON', 'The request contains invalid JSON.')
   if (error.type === 'entity.too.large') return safeError(res, 413, 'REQUEST_TOO_LARGE', 'The request is too large.')
-  if (error instanceof multer.MulterError) return safeError(res, error.code === 'LIMIT_FILE_SIZE' ? 413 : 400, error.code, error.code === 'LIMIT_FILE_SIZE' ? 'Files must be 100 MB or smaller.' : 'The upload could not be accepted.')
+  if (error instanceof multer.MulterError) return safeError(res, error.code === 'LIMIT_FILE_SIZE' ? 413 : 400, error.code, error.code === 'LIMIT_FILE_SIZE' ? `Files must be ${process.env.VERCEL ? 4 : 100} MB or smaller.` : 'The upload could not be accepted.')
   console.error(JSON.stringify({ level: 'error', type: 'api_error', requestId: req.requestId, method: req.method, path: req.path, message: error.message }))
   safeError(res, 500, 'INTERNAL_ERROR', 'The request could not be completed.')
 })
@@ -2883,14 +2889,15 @@ if (process.env.NODE_ENV === 'production') {
     if (!hasSupabase()) missing.push('Supabase Auth and service role')
     if (!hasObjectStorage()) missing.push('private object storage')
     if (String(process.env.FILE_SIGNING_SECRET || '').length < 32) missing.push('FILE_SIGNING_SECRET (32+ characters)')
-    if (!process.env.SOLVY_API_URL || !process.env.SOLVY_API_KEY) missing.push('Solvy endpoint and key')
+    if (!process.env.GEMINI_API_KEY && (!process.env.SOLVY_API_URL || !process.env.SOLVY_API_KEY)) missing.push('Gemini key or Solvy endpoint and key')
     if (!stripe || !process.env.STRIPE_WEBHOOK_SECRET) missing.push('Stripe key and webhook secret')
-    if (!hasEmail() || !process.env.CONTACT_EMAIL) missing.push('SMTP and contact email')
-    if (!process.env.CLAMD_HOST) missing.push('private ClamAV clamd host')
+    if (!freeBetaMode && (!hasEmail() || !process.env.CONTACT_EMAIL)) missing.push('SMTP and contact email')
+    if (!freeBetaMode && !process.env.CLAMD_HOST) missing.push('private ClamAV clamd host')
   }
   if (!/^https:\/\//i.test(process.env.PUBLIC_APP_URL || '')) missing.push('HTTPS PUBLIC_APP_URL')
   if (missing.length) throw new Error(`Production configuration incomplete: ${missing.join(', ')}`)
   if (showcaseMode) console.warn('[startup] SHOWCASE_MODE is enabled: all API mutations are disabled.')
+  if (freeBetaMode) console.warn('[startup] FREE_BETA_MODE is enabled: uploads are signature-validated but not malware-scanned, and email may be unavailable.')
 }
 
 export default app

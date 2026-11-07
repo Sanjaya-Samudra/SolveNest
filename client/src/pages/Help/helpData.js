@@ -12,7 +12,7 @@ export const CATEGORIES = [
     links: [{ t: 'Analyze My Task', to: '/analyze' }],
     articles: [
       { q: 'Do I need an account to analyze a task?', a: 'No. The Guest Quick Scan works before account creation: Solvy identifies visible requirements and returns an approximate effort, turnaround, and price range. It is not a binding quote.' },
-      { q: 'What files can I upload?', a: 'PDF, DOCX and images, up to 100 MB in total. Files are validated and processed privately.' },
+      { q: 'What files can I upload?', a: 'PDF, DOCX, PPTX and images, up to 4 MB each and 8 MB per task during the free beta. Files are validated and stored privately.' },
       { q: 'How do I continue after an estimate?', a: 'Create an account for full analysis and human feasibility review. An authorized admin then confirms the official scope, price, delivery date, and revision allowance.' },
     ],
   },
@@ -147,7 +147,7 @@ export const CATEGORIES = [
     related: ['account', 'payments'],
     links: [{ t: 'Analyze My Task', to: '/analyze' }],
     articles: [
-      { q: 'Upload not working?', a: 'Check the file type (PDF, DOCX, images) and the 100 MB total limit, then retry in a current browser.' },
+      { q: 'Upload not working?', a: 'Check the supported file type, the 4 MB per-file limit, and the 8 MB task limit, then retry in a current browser.' },
       { q: 'Page not loading?', a: 'Refresh, check your connection, and try another browser. If it persists, contact support with what happened and where.' },
       { q: 'Payment issue?', a: 'Confirm the quote was accepted and the payment method is valid. For anything unresolved, contact payment support through Connect.' },
     ],

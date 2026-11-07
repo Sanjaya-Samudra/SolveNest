@@ -46,7 +46,7 @@ const ACTION_ERROR_COPY = {
   MESSAGE_INVALID: 'Messages must be between 1 and 4000 characters.',
   UPDATE_INVALID: 'Progress updates must be between 1 and 4000 characters.',
   FILE_UPLOAD_REJECTED: 'This file type is not supported.',
-  FILE_TOO_LARGE: 'File exceeds the 100 MB limit.',
+  FILE_TOO_LARGE: 'File exceeds the 4 MB free-beta limit.',
   FILE_IMMUTABLE: 'Files provided with the assignment cannot be removed.',
   RATE_LIMITED: 'Too many requests — wait a moment and try again.',
   EXPERT_LOAD_FAILED: 'The workspace could not be loaded. Try again.',

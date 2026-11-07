@@ -6,7 +6,8 @@
   "outputDirectory": "public",
   "fluid": true,
   "env": {
-    "SHOWCASE_MODE": "1",
+    "SHOWCASE_MODE": "0",
+    "FREE_BETA_MODE": "1",
     "TRUST_PROXY_HOPS": "1"
   },
   "functions": {

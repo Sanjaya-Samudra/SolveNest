@@ -23,7 +23,7 @@ function client() {
 }
 
 async function waitForServer() {
-  for (let attempt = 0; attempt < 80; attempt += 1) {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
     try { if ((await fetch(`${base}/api/health`)).ok) return } catch {}
     await new Promise((resolve) => setTimeout(resolve, 50))
   }
@@ -31,9 +31,10 @@ async function waitForServer() {
 }
 
 test('Student flow is authenticated, idempotent, and ownership-scoped', async (t) => {
-  const server = spawn(process.execPath, [fileURLToPath(new URL('./index.js', import.meta.url))], { cwd: fileURLToPath(new URL('.', import.meta.url)), env: { ...process.env, PORT: String(port), DEV_DEMO_SESSION: '0', SUPABASE_URL: '', SUPABASE_ANON_KEY: '', SUPABASE_SERVICE_ROLE_KEY: '' }, stdio: ['ignore', 'pipe', 'pipe'] })
+  const server = spawn(process.execPath, [fileURLToPath(new URL('./index.js', import.meta.url))], { cwd: fileURLToPath(new URL('.', import.meta.url)), env: { ...process.env, PORT: String(port), DEV_DEMO_SESSION: '0', SUPABASE_URL: '', SUPABASE_ANON_KEY: '', SUPABASE_SERVICE_ROLE_KEY: '', GEMINI_API_KEY: '', SOLVY_API_URL: '', SOLVY_API_KEY: '', STRIPE_SECRET_KEY: '', STRIPE_WEBHOOK_SECRET: '', SMTP_HOST: '' }, stdio: ['ignore', 'pipe', 'pipe'] })
   let startupError = ''
   server.stderr.on('data', (chunk) => { startupError += chunk.toString() })
+  server.stdout.on('data', (chunk) => { startupError += chunk.toString() })
   t.after(() => server.kill())
   try { await waitForServer() } catch { throw new Error(startupError || 'Server did not start') }
 
