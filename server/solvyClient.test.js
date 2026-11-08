@@ -83,3 +83,19 @@ test('platform-scale systems separate effort from rush turnaround', () => {
   assert.equal(estimate.urgencyOptions.find((item) => item.id === 'priority').labelPrice, 'LKR 30,000 – 45,000')
   assert.equal(estimate.urgencyOptions.find((item) => item.id === 'rush').labelPrice, 'LKR 45,000 – 60,000')
 })
+
+test('R statistics coursework stays within a Sri Lankan student-friendly range', () => {
+  const estimate = buildProvisionalEstimate({
+    complexity: 'High', estimatedEffortHours: 14,
+    taskType: 'R programming and statistical analysis assignment',
+    title: 'Statistical Methods Assignment 03',
+    scope: 'Answer four questions using hypothesis tests, regression, R code, output and plots',
+    deliverables: ['1(a) code and output', '1(b) interpretation', '2(a) regression', '2(b) output', '3(a) plot', '3(b) analysis', '4(c) code and output'],
+  })
+  assert.equal(estimate.complexity, 'Medium')
+  assert.equal(estimate.estimatedEffortHours, 6)
+  assert.equal(estimate.low, 6000)
+  assert.equal(estimate.high, 8000)
+  assert.equal(estimate.pricingBasis, 'Statistical coursework')
+  assert.equal(estimate.urgencyOptions.find((item) => item.id === 'priority').labelPrice, 'LKR 8,500 – 11,000')
+})

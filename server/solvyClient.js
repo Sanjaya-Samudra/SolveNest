@@ -110,7 +110,7 @@ export function normalizeSolvyAnalysis(payload) {
   const text = (value, max = 500) => value == null ? null : String(value).trim().slice(0, max) || null
   const list = (value, max = 20) => Array.isArray(value) ? value.slice(0, max).map((item) => typeof item === 'string' ? item.slice(0, 500) : item).filter(Boolean) : []
   const rawEstimate = source.estimate && typeof source.estimate === 'object' && !Array.isArray(source.estimate) ? source.estimate : {}
-  const estimate = buildProvisionalEstimate({ ...rawEstimate, taskType: source.taskType, title: source.title, requiredSections: source.requiredSections, deliverables: source.deliverables })
+  const estimate = buildProvisionalEstimate({ ...rawEstimate, taskType: source.taskType, title: source.title, scope: source.scope, notes: source.notes, requiredSections: source.requiredSections, deliverables: source.deliverables })
   const result = {
     taskType: text(source.taskType, 100) || 'Academic task', title: text(source.title, 200) || 'New academic task', subject: text(source.subject, 120), deadline: text(source.deadline, 40), citationStyle: text(source.citationStyle, 80),
     requiredSections: list(source.requiredSections), deliverables: list(source.deliverables), missingInformation: list(source.missingInformation), rubric: source.rubric && typeof source.rubric === 'object' && !Array.isArray(source.rubric) ? source.rubric : null, estimate,
@@ -127,18 +127,22 @@ export function buildProvisionalEstimate(rawEstimate = {}) {
   const isApplicationProject = softwareSignals.length >= 2 || /(?:build|develop|implement|design)\s+(?:a|an|the)?\s*(?:complete|full|web|mobile|software)?\s*(?:application|system|platform)/i.test(scopeText)
   const isPlatformScale = isApplicationProject && /(?:android|ios|admin console|multi[ -]?tenant|multi[ -]?club|role[ -]?based|offline|audit trail|full product|operating platform)/i.test(scopeText)
   const isShortGuidedActivity = !isApplicationProject && /(?:\b[1-3][ -]?hour\b|group activity|class activity|in-class|guided worksheet|workshop activity)/i.test(scopeText)
+  // A multi-question statistics/programming assignment is not a software project.
+  // Screenshots, plots and numbered answers are supporting evidence, so they must
+  // not inflate the quote just because Gemini lists each one as a deliverable.
+  const isStatisticalCoursework = !isApplicationProject && /(?:\br\s+(?:code|programming|studio)\b|statistic(?:s|al)|hypothesis test|regression|anova|confidence interval|code and output|data analysis)/i.test(scopeText)
   const deliverableCount = Array.isArray(rawEstimate.deliverables) ? rawEstimate.deliverables.length : 0
-  const scopedComplexity = isApplicationProject ? 'Very high' : isShortGuidedActivity ? 'Low' : deliverableCount >= 6 && normalizedComplexity === 'Medium' ? 'High' : normalizedComplexity
+  const scopedComplexity = isApplicationProject ? 'Very high' : isShortGuidedActivity ? 'Low' : isStatisticalCoursework ? 'Medium' : deliverableCount >= 6 && normalizedComplexity === 'Medium' ? 'High' : normalizedComplexity
   const defaultHours = { Low: 4, Medium: 6, High: 12, 'Very high': 20 }[scopedComplexity]
   const providerHours = Number(rawEstimate.estimatedEffortHours || rawEstimate.effortHours) || defaultHours
-  const scopeMinimumHours = isPlatformScale ? 40 : isApplicationProject ? 16 : isShortGuidedActivity ? 2.5 : deliverableCount >= 6 ? 10 : 2
-  const effortHours = isShortGuidedActivity ? Math.min(3, Math.max(scopeMinimumHours, providerHours)) : Math.min(120, Math.max(scopeMinimumHours, providerHours))
+  const scopeMinimumHours = isPlatformScale ? 40 : isApplicationProject ? 16 : isShortGuidedActivity ? 2.5 : isStatisticalCoursework ? 4 : deliverableCount >= 6 ? 10 : 2
+  const effortHours = isShortGuidedActivity ? Math.min(3, Math.max(scopeMinimumHours, providerHours)) : isStatisticalCoursework ? Math.min(6, Math.max(scopeMinimumHours, providerHours)) : Math.min(120, Math.max(scopeMinimumHours, providerHours))
   const lowRate = Math.max(100, Number(process.env.SOLVY_LKR_LOW_HOURLY || 1300))
   const highRate = Math.max(lowRate, Number(process.env.SOLVY_LKR_HIGH_HOURLY || 1700))
   const round500 = (value) => Math.max(500, Math.round(value / 500) * 500)
   const categoryFloor = isApplicationProject ? 22000 : scopedComplexity === 'Very high' ? 18000 : 0
-  const low = isPlatformScale ? 20000 : Math.max(categoryFloor, round500(effortHours * lowRate))
-  const high = isPlatformScale ? 30000 : isShortGuidedActivity ? Math.max(low + 500, Math.min(5000, round500(effortHours * highRate))) : Math.max(low + 500, round500(effortHours * highRate))
+  const low = isPlatformScale ? 20000 : isStatisticalCoursework ? 6000 : Math.max(categoryFloor, round500(effortHours * lowRate))
+  const high = isPlatformScale ? 30000 : isStatisticalCoursework ? 8000 : isShortGuidedActivity ? Math.max(low + 500, Math.min(5000, round500(effortHours * highRate))) : Math.max(low + 500, round500(effortHours * highRate))
   const urgency = (id, label, hours, multiplier, note) => {
     const optionLow = round500(low * multiplier)
     const optionHigh = Math.max(optionLow + 500, round500(high * multiplier))
@@ -148,12 +152,16 @@ export function buildProvisionalEstimate(rawEstimate = {}) {
     { id: 'standard', label: 'Standard delivery', turnaroundHours: null, low: 20000, high: 30000, labelPrice: 'LKR 20,000 – 30,000', note: 'Delivery date is confirmed after human scope and feasibility review.' },
     { id: 'priority', label: 'Priority one-day delivery', turnaroundHours: 24, low: 30000, high: 45000, labelPrice: 'LKR 30,000 – 45,000', note: 'A focused milestone or feasible build is prioritised for one-day delivery.' },
     { id: 'rush', label: 'Urgent delivery', turnaroundHours: 6, low: 45000, high: 60000, labelPrice: 'LKR 45,000 – 60,000', note: 'Urgent work carries a major premium and requires human feasibility confirmation.' },
+  ] : isStatisticalCoursework ? [
+    { id: 'standard', label: 'Standard delivery', turnaroundHours: null, low: 6000, high: 8000, labelPrice: 'LKR 6,000 – 8,000', note: 'Student-friendly schedule confirmed during human review.' },
+    { id: 'priority', label: 'Priority one-day delivery', turnaroundHours: 24, low: 8500, high: 11000, labelPrice: 'LKR 8,500 – 11,000', note: 'Expedited scheduling, subject to the dataset and expert availability.' },
+    { id: 'rush', label: 'Rush 6-hour review', turnaroundHours: 6, low: 11500, high: 15000, labelPrice: 'LKR 11,500 – 15,000', note: 'Rush delivery requires human feasibility confirmation.' },
   ] : [
     urgency('standard', 'Standard delivery', null, 1, 'Best-value schedule confirmed during human review.'),
     urgency('priority', 'Priority one-day delivery', 24, 1.35, 'Expedited scheduling, subject to expert availability and feasible scope.'),
     urgency('rush', 'Rush 6-hour review', 6, 1.75, isApplicationProject ? 'Only a feasible prototype or agreed milestone can be promised in six hours.' : 'Rush delivery requires human confirmation.'),
   ]
-  const result = { ...rawEstimate, complexity: scopedComplexity, estimatedEffortHours: effortHours, pricingBasis: isPlatformScale ? 'Platform-scale product scope' : isApplicationProject ? 'End-to-end application scope' : isShortGuidedActivity ? 'Short guided activity' : `${scopedComplexity} complexity`, low, high, currency: 'LKR', label: `LKR ${low.toLocaleString('en-US')} – ${high.toLocaleString('en-US')}`, urgencyOptions, humanReviewRequired: true, provisional: true }
+  const result = { ...rawEstimate, complexity: scopedComplexity, estimatedEffortHours: effortHours, pricingBasis: isPlatformScale ? 'Platform-scale product scope' : isApplicationProject ? 'End-to-end application scope' : isShortGuidedActivity ? 'Short guided activity' : isStatisticalCoursework ? 'Statistical coursework' : `${scopedComplexity} complexity`, low, high, currency: 'LKR', label: `LKR ${low.toLocaleString('en-US')} – ${high.toLocaleString('en-US')}`, urgencyOptions, humanReviewRequired: true, provisional: true }
   for (const contextKey of ['taskType', 'title', 'requiredSections', 'deliverables']) delete result[contextKey]
   return result
 }
