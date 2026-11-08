@@ -778,6 +778,7 @@
   border-top: 1px solid var(--pay-line-soft);
 }
 .sn-pay-plan__negotiation-status{max-width:420px;color:#6857c7;font-size:12px;font-weight:650;line-height:1.5}
+.sn-pay-plan__support-links{display:flex;align-items:center;flex-wrap:wrap;gap:12px}.sn-pay-plan__support-links .sn-pay-help{white-space:nowrap}
 .sn-pay-plan__negotiation{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:18px;padding:22px;border:1px solid rgba(91,108,255,.18);border-radius:14px;background:linear-gradient(135deg,rgba(91,108,255,.055),rgba(34,197,139,.04))}
 .sn-pay-plan__negotiation>div:first-child{grid-column:1/-1}.sn-pay-plan__negotiation h4{margin:5px 0 6px;font-size:18px}.sn-pay-plan__negotiation p{margin:0;color:var(--student-muted);font-size:13px;line-height:1.55}.sn-pay-plan__negotiation label{display:grid;gap:7px;color:var(--student-muted);font-size:11px;font-weight:700}.sn-pay-plan__negotiation label:last-of-type{grid-column:1/-1}.sn-pay-plan__negotiation input,.sn-pay-plan__negotiation select,.sn-pay-plan__negotiation textarea{width:100%;padding:11px 12px;border:1px solid #dfe3e8;border-radius:9px;background:#fff;color:var(--student-ink);font:13px 'DM Sans',sans-serif}.sn-pay-plan__negotiation .student-modal-actions{grid-column:1/-1}
 @media(max-width:680px){.sn-pay-plan__negotiation{grid-template-columns:1fr}.sn-pay-plan__negotiation label:last-of-type{grid-column:auto}}

@@ -137,16 +137,20 @@ export function buildProvisionalEstimate(rawEstimate = {}) {
   const highRate = Math.max(lowRate, Number(process.env.SOLVY_LKR_HIGH_HOURLY || 1700))
   const round500 = (value) => Math.max(500, Math.round(value / 500) * 500)
   const categoryFloor = isApplicationProject ? 22000 : scopedComplexity === 'Very high' ? 18000 : 0
-  const low = Math.max(categoryFloor, round500(effortHours * lowRate))
-  const high = isShortGuidedActivity ? Math.max(low + 500, Math.min(5000, round500(effortHours * highRate))) : Math.max(low + 500, round500(effortHours * highRate))
+  const low = isPlatformScale ? 20000 : Math.max(categoryFloor, round500(effortHours * lowRate))
+  const high = isPlatformScale ? 30000 : isShortGuidedActivity ? Math.max(low + 500, Math.min(5000, round500(effortHours * highRate))) : Math.max(low + 500, round500(effortHours * highRate))
   const urgency = (id, label, hours, multiplier, note) => {
     const optionLow = round500(low * multiplier)
     const optionHigh = Math.max(optionLow + 500, round500(high * multiplier))
     return { id, label, turnaroundHours: hours, low: optionLow, high: optionHigh, labelPrice: `LKR ${optionLow.toLocaleString('en-US')} – ${optionHigh.toLocaleString('en-US')}`, note }
   }
-  const urgencyOptions = [
+  const urgencyOptions = isPlatformScale ? [
+    { id: 'standard', label: 'Standard delivery', turnaroundHours: null, low: 20000, high: 30000, labelPrice: 'LKR 20,000 – 30,000', note: 'Delivery date is confirmed after human scope and feasibility review.' },
+    { id: 'priority', label: 'Priority one-day delivery', turnaroundHours: 24, low: 30000, high: 45000, labelPrice: 'LKR 30,000 – 45,000', note: 'A focused milestone or feasible build is prioritised for one-day delivery.' },
+    { id: 'rush', label: 'Urgent delivery', turnaroundHours: 6, low: 45000, high: 60000, labelPrice: 'LKR 45,000 – 60,000', note: 'Urgent work carries a major premium and requires human feasibility confirmation.' },
+  ] : [
     urgency('standard', 'Standard delivery', null, 1, 'Best-value schedule confirmed during human review.'),
-    urgency('priority', 'Priority 12-hour review', 12, 1.35, 'Expedited scheduling, subject to expert availability and feasible scope.'),
+    urgency('priority', 'Priority one-day delivery', 24, 1.35, 'Expedited scheduling, subject to expert availability and feasible scope.'),
     urgency('rush', 'Rush 6-hour review', 6, 1.75, isApplicationProject ? 'Only a feasible prototype or agreed milestone can be promised in six hours.' : 'Rush delivery requires human confirmation.'),
   ]
   const result = { ...rawEstimate, complexity: scopedComplexity, estimatedEffortHours: effortHours, pricingBasis: isPlatformScale ? 'Platform-scale product scope' : isApplicationProject ? 'End-to-end application scope' : isShortGuidedActivity ? 'Short guided activity' : `${scopedComplexity} complexity`, low, high, currency: 'LKR', label: `LKR ${low.toLocaleString('en-US')} – ${high.toLocaleString('en-US')}`, urgencyOptions, humanReviewRequired: true, provisional: true }

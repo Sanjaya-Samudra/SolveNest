@@ -530,10 +530,10 @@ export function IntakeCanvas({ onAnalyze, onUpload, onPreview }) {
                   <span>Choose a preferred turnaround</span>
                   <div>
                     <button type="button" className="active" data-turnaround="standard">Standard<small>Best value</small></button>
-                    <button type="button" data-turnaround="priority">Priority<small>12-hour review</small></button>
-                    <button type="button" data-turnaround="rush">Rush<small>6-hour review</small></button>
+                    <button type="button" data-turnaround="priority">Priority<small>One-day delivery</small></button>
+                    <button type="button" data-turnaround="rush">Urgent<small>6-hour request</small></button>
                   </div>
-                  <p>All ranges are provisional. SolveNest confirms feasibility, final scope and price before payment.</p>
+                  <p>All ranges are provisional. Create your free account to live-chat with SolveNest and negotiate the scope, delivery and price before payment.</p>
                 </div>
 
                 <div className="sni-attachments">
