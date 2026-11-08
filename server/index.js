@@ -1,6 +1,7 @@
 import 'dotenv/config'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import express from 'express'
@@ -88,7 +89,12 @@ const staffSessions = new Map()
 const ADMIN_COOKIE = 'sn_admin'
 const SUPERADMIN_COOKIE = 'sn_superadmin'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const uploadDir = path.join(__dirname, 'private-uploads')
+// Vercel function bundles are read-only. Temporary upload content must be
+// written under the platform-provided writable temp directory before it is
+// persisted to private object storage.
+const uploadDir = process.env.VERCEL
+  ? path.join(os.tmpdir(), 'solvenest-private-uploads')
+  : path.join(__dirname, 'private-uploads')
 const dataDir = path.join(__dirname, 'data')
 const requestWindows = new Map()
 const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null

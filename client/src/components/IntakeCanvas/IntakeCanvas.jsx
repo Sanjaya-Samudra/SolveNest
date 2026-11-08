@@ -15,7 +15,7 @@ import { useEffect, useRef } from 'react'
 import { ArrowRight, Paperclip, UploadCloud } from 'lucide-react'
 
 const ACCEPTED = ['pdf', 'docx', 'pptx', 'jpg', 'jpeg', 'png']
-const MAX_MB = 25
+const MAX_MB = 4
 
 export function IntakeCanvas({ onAnalyze, onUpload, onPreview }) {
   const mountRef = useRef(null)
@@ -161,13 +161,16 @@ export function IntakeCanvas({ onAnalyze, onUpload, onPreview }) {
 
       if (onUploadRef.current) {
         if (uploadBar) uploadBar.hidden = false
+        paper.classList.add('is-processing')
         if (uploadLabel) uploadLabel.textContent = 'Uploading brief…'
+        say('Uploading your brief for analysis.')
         try {
           const result = await onUploadRef.current(file, (pct) => {
             const v = Math.max(0, Math.min(100, Math.round(pct || 0)))
             if (uploadFill) uploadFill.style.width = `${v}%`
-            if (uploadLabel) uploadLabel.textContent = `Uploading brief… ${v}%`
+            if (uploadLabel) uploadLabel.textContent = v >= 100 ? 'Solvy is reading and estimating…' : `Uploading brief… ${v}%`
           })
+          if (uploadLabel) uploadLabel.textContent = 'Analysis complete'
           const analysis = result?.analysis || null
           const estimate = analysis?.estimate || null
           const estimateValue = q('.sni-estimate-value')
@@ -176,12 +179,14 @@ export function IntakeCanvas({ onAnalyze, onUpload, onPreview }) {
           if (estimateMeta) estimateMeta.textContent = `${estimate?.complexity || 'Provisional'} complexity · ${estimate?.estimatedEffortHours || '—'} support hours`
           q('.sni-estimate')?.classList.add('show')
           if (analysis?.title) q('.sni-doc-title').textContent = analysis.title
+          say(`Analysis complete. ${estimate?.label || 'Your provisional estimate is ready.'}`)
         } catch (e) {
           errText.style.display = 'block'
           errText.textContent = e?.message || 'Upload failed.'
           say(errText.textContent)
           return
         } finally {
+          paper.classList.remove('is-processing')
           if (uploadBar) {
             timers.push(setTimeout(() => { uploadBar.hidden = true }, 450))
           }
@@ -599,6 +604,8 @@ const CSS = `
   border-color:rgba(124,92,255,.42);
   box-shadow:0 34px 76px rgba(2,6,18,.55),0 0 0 2px rgba(124,92,255,.22);
 }
+.sni-paper.is-processing{border-color:rgba(124,92,255,.34);box-shadow:0 34px 76px rgba(2,6,18,.55),0 0 0 2px rgba(124,92,255,.14)}
+.sni-paper.is-processing .sni-doc-state{color:var(--sni-mark)}
 .sni-paper-inner{position:relative;overflow:hidden;border-radius:8px;min-height:392px}
 .sni-rules{
   position:absolute;inset:0;pointer-events:none;opacity:.8;
@@ -681,7 +688,9 @@ const CSS = `
 .sni-upload{display:flex;align-items:center;gap:10px;margin:0 0 14px;font:11px 'DM Mono',monospace;color:var(--sni-soft)}
 .sni-upload[hidden]{display:none}
 .sni-upload-track{flex:1;height:4px;border-radius:4px;background:rgba(124,92,255,.14);overflow:hidden}
-.sni-upload-fill{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--sni-mark),var(--sni-mark-deep));transition:width .2s}
+.sni-upload-fill{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--sni-mark),var(--sni-mark-deep),var(--sni-cyan),var(--sni-mark));background-size:220% 100%;transition:width .2s}
+.sni-paper.is-processing .sni-upload-fill{animation:sni-analysis-flow 1.15s linear infinite}
+@keyframes sni-analysis-flow{to{background-position:-220% 0}}
 .sni-estimate{display:none;margin:0 0 16px;padding:13px 15px;border:1px solid rgba(124,92,255,.22);border-radius:10px;background:linear-gradient(135deg,rgba(124,92,255,.09),rgba(53,214,232,.06));position:relative;z-index:2}
 .sni-estimate.show{display:grid;gap:4px;animation:sni-fade-in .3s ease both}
 .sni-estimate span{font:600 9px 'DM Mono',monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--sni-mark)}
