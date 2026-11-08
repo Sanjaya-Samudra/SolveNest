@@ -31,9 +31,9 @@ test('Gemini provider returns normalized Solvy analysis JSON', async (t) => {
   assert.equal(analysis.title, 'Research report')
   assert.deepEqual(analysis.requiredSections, ['Introduction'])
   assert.equal(analysis.estimate.currency, 'LKR')
-  assert.equal(analysis.estimate.low, 8000)
-  assert.equal(analysis.estimate.high, 10000)
-  assert.equal(analysis.estimate.label, 'LKR 8,000 – 10,000')
+  assert.equal(analysis.estimate.low, 4500)
+  assert.equal(analysis.estimate.high, 6500)
+  assert.equal(analysis.estimate.label, 'LKR 4,500 – 6,500')
 })
 
 test('end-to-end application scopes receive a realistic minimum range', () => {
@@ -61,8 +61,8 @@ test('short guided group activities stay in the lightweight price band', () => {
   })
   assert.equal(estimate.complexity, 'Low')
   assert.equal(estimate.estimatedEffortHours, 3)
-  assert.equal(estimate.low, 4000)
-  assert.equal(estimate.high, 5000)
+  assert.equal(estimate.low, 3000)
+  assert.equal(estimate.high, 4500)
   assert.equal(estimate.pricingBasis, 'Short guided activity')
 })
 
@@ -84,7 +84,7 @@ test('platform-scale systems separate effort from rush turnaround', () => {
   assert.equal(estimate.urgencyOptions.find((item) => item.id === 'rush').labelPrice, 'LKR 45,000 – 60,000')
 })
 
-test('R statistics coursework stays within a Sri Lankan student-friendly range', () => {
+test('R statistics coursework follows the general student-friendly assignment range', () => {
   const estimate = buildProvisionalEstimate({
     complexity: 'High', estimatedEffortHours: 14,
     taskType: 'R programming and statistical analysis assignment',
@@ -92,10 +92,22 @@ test('R statistics coursework stays within a Sri Lankan student-friendly range',
     scope: 'Answer four questions using hypothesis tests, regression, R code, output and plots',
     deliverables: ['1(a) code and output', '1(b) interpretation', '2(a) regression', '2(b) output', '3(a) plot', '3(b) analysis', '4(c) code and output'],
   })
-  assert.equal(estimate.complexity, 'Medium')
-  assert.equal(estimate.estimatedEffortHours, 6)
+  assert.equal(estimate.complexity, 'High')
+  assert.equal(estimate.estimatedEffortHours, 8)
   assert.equal(estimate.low, 6000)
   assert.equal(estimate.high, 8000)
-  assert.equal(estimate.pricingBasis, 'Statistical coursework')
-  assert.equal(estimate.urgencyOptions.find((item) => item.id === 'priority').labelPrice, 'LKR 8,500 – 11,000')
+  assert.equal(estimate.pricingBasis, 'High academic scope')
+})
+
+test('ordinary assignments never receive the former LKR 18,000 floor', () => {
+  const estimate = buildProvisionalEstimate({
+    complexity: 'Very high', estimatedEffortHours: 30,
+    taskType: 'University assignment',
+    title: 'Business strategy report and presentation',
+    deliverables: ['Report', 'Presentation', 'References', 'Appendices', 'Charts', 'Reflection'],
+  })
+  assert.equal(estimate.estimatedEffortHours, 12)
+  assert.equal(estimate.low, 8000)
+  assert.equal(estimate.high, 12000)
+  assert.equal(estimate.pricingBasis, 'Very high academic scope')
 })
