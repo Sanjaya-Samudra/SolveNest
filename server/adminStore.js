@@ -49,14 +49,17 @@ export async function getAdminCase(taskId) {
   const store = await readTaskStore()
   const task = store.tasks.find((item) => item.id === taskId)
   if (!task) return null
+  const activePlan = store.plans.find((item) => item.taskId === taskId && !['superseded', 'revised'].includes(String(item.status).toLowerCase())) || null
+  const negotiation = activePlan?.negotiation?.status === 'REQUESTED' ? activePlan.negotiation : null
+  const negotiationNote = negotiation ? `Plan adjustment requested: proposed LKR ${Number(negotiation.proposedPrice).toLocaleString()}${negotiation.requestedTurnaround ? `, ${negotiation.requestedTurnaround}` : ''}. ${negotiation.message}` : null
   return {
     task: summary(store, task),
-    analysis: task.analysis || null,
+    analysis: task.analysis ? { ...task.analysis, missingInformation: [...(task.analysis.missingInformation || []), ...(negotiationNote ? [negotiationNote] : [])] } : null,
     review: reviewOf(store, task),
     files: store.files.filter((file) => file.taskId === taskId).map(({ id, originalName, role, mimeType, size, createdAt, state }) => ({ id, name: originalName, role, mimeType, size, createdAt, state })),
     activity: store.activity.filter((item) => item.taskId === taskId).slice(0, 20),
     audit: (store.adminAudit || []).filter((item) => item.taskId === taskId).slice(0, 20),
-    plan: store.plans.find((item) => item.taskId === taskId && !['superseded', 'revised'].includes(String(item.status).toLowerCase())) || null,
+    plan: activePlan,
     scopeChange: store.scopeChanges.find((item) => item.taskId === taskId && ['REQUESTED', 'AWAITING_PAYMENT'].includes(item.status)) || null,
   }
 }

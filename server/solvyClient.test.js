@@ -65,3 +65,19 @@ test('short guided group activities stay in the lightweight price band', () => {
   assert.equal(estimate.high, 5000)
   assert.equal(estimate.pricingBasis, 'Short guided activity')
 })
+
+test('platform-scale systems separate effort from rush turnaround', () => {
+  const estimate = buildProvisionalEstimate({
+    complexity: 'Medium', estimatedEffortHours: 6,
+    title: 'Full mobile operating platform',
+    taskType: 'Application development',
+    scope: 'Android and iOS mobile app with web admin console, multi-tenant roles, offline mode, audit trail and deployment',
+    deliverables: ['Mobile app', 'Admin console', 'Backend API', 'Database', 'Authentication', 'Testing'],
+  })
+  assert.equal(estimate.complexity, 'Very high')
+  assert.ok(estimate.estimatedEffortHours >= 40)
+  assert.equal(estimate.pricingBasis, 'Platform-scale product scope')
+  assert.equal(estimate.urgencyOptions.length, 3)
+  assert.ok(estimate.urgencyOptions.find((item) => item.id === 'rush').low > estimate.low)
+  assert.match(estimate.urgencyOptions.find((item) => item.id === 'rush').note, /prototype|milestone/i)
+})

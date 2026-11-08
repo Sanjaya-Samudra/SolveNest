@@ -304,7 +304,12 @@ function FundingStatusRail({ states }) {
   )
 }
 
-function OfficialPlanDocument({ plan, displayState, onAccept, accepting, canAccept }) {
+function OfficialPlanDocument({ plan, displayState, onAccept, accepting, canAccept, onNegotiate, negotiating }) {
+  const [showNegotiation, setShowNegotiation] = useState(false)
+  const [proposedPrice, setProposedPrice] = useState('')
+  const [requestedTurnaround, setRequestedTurnaround] = useState('standard')
+  const [message, setMessage] = useState('')
+  const [negotiationError, setNegotiationError] = useState('')
   if (!plan) {
     return (
       <EmptyState
@@ -379,6 +384,8 @@ function OfficialPlanDocument({ plan, displayState, onAccept, accepting, canAcce
       </dl>
       <footer className="sn-pay-plan__footer">
         <PaymentHelpLink />
+        {plan.negotiation?.status === 'REQUESTED' ? <span className="sn-pay-plan__negotiation-status">Adjustment requested · SolveNest is reviewing your price and turnaround.</span> : null}
+        {canAccept && (plan.canAccept || displayState.canAccept) && !plan.negotiation ? <button type="button" className="student-button student-button--secondary" onClick={() => setShowNegotiation((value) => !value)}>Discuss price or delivery</button> : null}
         {canAccept && (plan.canAccept || displayState.canAccept) ? (
           <button type="button" className="student-button student-button--primary" onClick={onAccept} disabled={accepting}>
             <CheckCircle2 size={16} aria-hidden="true" />
@@ -386,6 +393,14 @@ function OfficialPlanDocument({ plan, displayState, onAccept, accepting, canAcce
           </button>
         ) : null}
       </footer>
+      {showNegotiation ? <form className="sn-pay-plan__negotiation" onSubmit={async (event) => { event.preventDefault(); setNegotiationError(''); try { await onNegotiate({ proposedPrice: Number(proposedPrice), requestedTurnaround, message }); setShowNegotiation(false) } catch (issue) { setNegotiationError(issue.message || 'Could not submit your request.') } }}>
+        <div><span className="student-overline">Before payment</span><h4>Request a plan adjustment</h4><p>Suggest a budget or turnaround. SolveNest will confirm what scope is feasible and issue a revised official plan.</p></div>
+        <label>Proposed price in LKR<input type="number" min="1" step="1" required value={proposedPrice} onChange={(event) => setProposedPrice(event.target.value)} /></label>
+        <label>Preferred turnaround<select value={requestedTurnaround} onChange={(event) => setRequestedTurnaround(event.target.value)}><option value="standard">Standard delivery</option><option value="12 hours">Priority - 12 hours</option><option value="6 hours">Rush - 6 hours</option></select></label>
+        <label>What should change?<textarea required minLength={10} maxLength={2000} rows={4} value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Explain your budget, deadline, or the milestone you need first." /></label>
+        {negotiationError ? <div className="student-error" role="alert">{negotiationError}</div> : null}
+        <div className="student-modal-actions"><button type="button" className="student-button student-button--secondary" onClick={() => setShowNegotiation(false)}>Cancel</button><button className="student-button student-button--primary" disabled={negotiating}>{negotiating ? 'Sending…' : 'Send adjustment request'}</button></div>
+      </form> : null}
     </article>
   )
 }
@@ -1137,6 +1152,8 @@ export default function StudentPaymentsPage() {
             displayState={planDisplay}
             onAccept={() => setAcceptPlanOpen(true)}
             accepting={planQuery.accepting}
+            onNegotiate={planQuery.negotiate}
+            negotiating={planQuery.negotiating}
             canAccept={Boolean(viewState.taskId)}
           />
         )

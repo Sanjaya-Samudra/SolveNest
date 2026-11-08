@@ -1022,6 +1022,31 @@ app.post('/api/student/payments/plans/:planId/accept', requireStudent, asyncRout
   res.json({ plan: result.plan })
 }))
 
+app.post('/api/student/payments/plans/:planId/negotiate', requireStudent, asyncRoute(async (req, res) => {
+  const proposedPrice = Number(req.body?.proposedPrice)
+  const message = String(req.body?.message || '').trim().slice(0, 2000)
+  const requestedTurnaround = String(req.body?.requestedTurnaround || '').trim().slice(0, 80)
+  if (!Number.isSafeInteger(proposedPrice) || proposedPrice < 1 || proposedPrice > 100000000 || message.length < 10) return safeError(res, 400, 'NEGOTIATION_INVALID', 'Enter a proposed price and explain the adjustment you need.')
+  const result = await withTaskStore((store) => {
+    const plan = store.plans.find((candidate) => candidate.id === req.params.planId && candidate.studentId === req.student.studentId)
+    if (!plan) return { error: 'PLAN_NOT_FOUND' }
+    if (plan.status !== 'READY') return { error: 'PLAN_NOT_READY' }
+    const task = store.tasks.find((item) => item.id === plan.taskId && item.studentId === req.student.studentId)
+    if (!task) return { error: 'TASK_NOT_FOUND' }
+    const stamp = now()
+    plan.negotiation = { status: 'REQUESTED', proposedPrice, message, requestedTurnaround: requestedTurnaround || null, requestedAt: stamp }
+    plan.canAccept = false
+    task.status = 'QUOTE_NEGOTIATION'
+    task.latestUpdate = { text: 'Your plan adjustment request is waiting for SolveNest review.', createdAt: stamp }
+    task.nextAction = { label: 'Await revised plan', route: `/student/payments?task=${task.id}&section=plan` }
+    task.updatedAt = stamp
+    addActivity(store, { id: crypto.randomUUID(), studentId: task.studentId, taskId: task.id, type: 'PlanNegotiationRequested', text: task.latestUpdate.text, createdAt: stamp })
+    return { plan, task }
+  })
+  if (result.error) return safeError(res, result.error === 'PLAN_NOT_FOUND' || result.error === 'TASK_NOT_FOUND' ? 404 : 409, result.error, result.error === 'PLAN_NOT_READY' ? 'Only an unaccepted official plan can be negotiated.' : 'Plan not found.')
+  res.status(201).json({ plan: result.plan })
+}))
+
 app.get('/api/student/payments/tasks/:taskId/funding', requireStudent, asyncRoute(async (req, res) => {
   const task = await getStudentTask(req.student.studentId, req.params.taskId)
   const state = await readTaskStore()

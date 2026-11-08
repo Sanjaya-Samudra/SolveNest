@@ -227,6 +227,7 @@ export function mapOfficialPlan(raw) {
           label: estimate.label || null,
         }
       : null,
+    negotiation: plan.negotiation || null,
     canAccept: plan.canAccept ?? ['ready', 'awaiting_acceptance', 'pending_acceptance', 'draft'].includes(String(plan.status || '').toLowerCase()),
     isExpired: ['expired'].includes(String(plan.status || '').toLowerCase()),
     raw: plan,
@@ -479,6 +480,15 @@ export async function acceptOfficialPlan(planId) {
   return mapOfficialPlan(await readJson(response))
 }
 
+export async function requestOfficialPlanNegotiation(planId, input) {
+  const response = await apiFetch(`/api/student/payments/plans/${encodeURIComponent(planId)}/negotiate`, { method: 'POST', body: input })
+  if (!response.ok) {
+    const payload = await readJson(response)
+    throw new Error(payload.message || `PAYMENTS_NEGOTIATE_${response.status}`)
+  }
+  return mapOfficialPlan(await readJson(response))
+}
+
 export async function fetchFundingStructure(taskId, { signal } = {}) {
   const response = await apiFetch(`/api/student/payments/tasks/${encodeURIComponent(taskId)}/funding`, { signal })
   if (response.status === 404) return null
@@ -638,6 +648,7 @@ export function useOfficialPlan(taskId) {
     return fetchOfficialPlan(taskId, { signal })
   })
   const [accepting, setAccepting] = useState(false)
+  const [negotiating, setNegotiating] = useState(false)
   const accept = useCallback(async () => {
     if (!planState.data?.id || accepting) return null
     setAccepting(true)
@@ -649,7 +660,13 @@ export function useOfficialPlan(taskId) {
       setAccepting(false)
     }
   }, [planState, accepting])
-  return { ...planState, accept, accepting }
+  const negotiate = useCallback(async (input) => {
+    if (!planState.data?.id || negotiating) return null
+    setNegotiating(true)
+    try { const updated = await requestOfficialPlanNegotiation(planState.data.id, input); planState.reload(); return updated }
+    finally { setNegotiating(false) }
+  }, [planState, negotiating])
+  return { ...planState, accept, accepting, negotiate, negotiating }
 }
 
 export function useFundingStructure(taskId) {

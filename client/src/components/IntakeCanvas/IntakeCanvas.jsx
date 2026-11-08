@@ -47,6 +47,7 @@ export function IntakeCanvas({ onAnalyze, onUpload, onPreview }) {
     const uploadBar = q('.sni-upload')
     const uploadFill = q('.sni-upload-fill')
     const uploadLabel = q('.sni-upload-label')
+    const processingPanel = q('.sni-processing-panel')
     if (!paper) return
 
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -64,6 +65,7 @@ export function IntakeCanvas({ onAnalyze, onUpload, onPreview }) {
     let hasDoc = false
     let clipTarget = null
     let briefFile = null
+    let currentEstimate = null
     const attached = { rubric: null, refs: null, other: [] }
     const timers = []
 
@@ -161,6 +163,7 @@ export function IntakeCanvas({ onAnalyze, onUpload, onPreview }) {
 
       if (onUploadRef.current) {
         if (uploadBar) uploadBar.hidden = false
+        processingPanel?.classList.add('show')
         paper.classList.add('is-processing')
         if (uploadLabel) uploadLabel.textContent = 'Uploading brief…'
         say('Uploading your brief for analysis.')
@@ -173,6 +176,7 @@ export function IntakeCanvas({ onAnalyze, onUpload, onPreview }) {
           if (uploadLabel) uploadLabel.textContent = 'Analysis complete'
           const analysis = result?.analysis || null
           const estimate = analysis?.estimate || null
+          currentEstimate = estimate
           const estimateValue = q('.sni-estimate-value')
           const estimateMeta = q('.sni-estimate-meta')
           const deadlineValue = q('.sni-deadline-value')
@@ -186,6 +190,7 @@ export function IntakeCanvas({ onAnalyze, onUpload, onPreview }) {
           if (summaryValue) summaryValue.textContent = [...(analysis?.deliverables || []), ...(analysis?.requiredSections || [])].slice(0, 4).join(' · ') || estimate?.scope || 'Review the uploaded brief and confirm its full scope.'
           if (criteriaValue) criteriaValue.textContent = analysis?.rubric?.criteria?.length ? `${analysis.rubric.criteria.length} rubric criteria detected` : `${analysis?.deliverables?.length || 0} deliverables · ${analysis?.requiredSections?.length || 0} required sections`
           q('.sni-estimate')?.classList.add('show')
+          q('.sni-turnaround')?.classList.add('show')
           if (analysis?.title) q('.sni-doc-title').textContent = analysis.title
           say(`Analysis complete. ${estimate?.label || 'Your provisional estimate is ready.'}`)
         } catch (e) {
@@ -195,6 +200,7 @@ export function IntakeCanvas({ onAnalyze, onUpload, onPreview }) {
           return
         } finally {
           paper.classList.remove('is-processing')
+          processingPanel?.classList.remove('show')
           if (uploadBar) {
             timers.push(setTimeout(() => { uploadBar.hidden = true }, 450))
           }
@@ -282,10 +288,14 @@ export function IntakeCanvas({ onAnalyze, onUpload, onPreview }) {
     const onRemove = () => {
       hasDoc = false
       briefFile = null
+      currentEstimate = null
       doc.classList.remove('show')
       idle.style.display = 'flex'
       if (marginRule) marginRule.style.display = 'none'
       resetAnnotations()
+      q('.sni-estimate')?.classList.remove('show')
+      q('.sni-turnaround')?.classList.remove('show')
+      processingPanel?.classList.remove('show')
       if (cta) { cta.disabled = true; cta.querySelector('span').textContent = 'Continue with SolveNest' }
       attached.rubric = null
       attached.refs = null
@@ -355,6 +365,20 @@ export function IntakeCanvas({ onAnalyze, onUpload, onPreview }) {
     if (cta) {
       cta.addEventListener('click', onCtaClick)
     }
+    const onTurnaroundClick = (event) => {
+      const button = event.target.closest('[data-turnaround]')
+      if (!button || !currentEstimate) return
+      const option = currentEstimate.urgencyOptions?.find((item) => item.id === button.dataset.turnaround)
+      if (!option) return
+      qa('[data-turnaround]').forEach((item) => item.classList.toggle('active', item === button))
+      const estimateValue = q('.sni-estimate-value')
+      const estimateMeta = q('.sni-estimate-meta')
+      if (estimateValue) estimateValue.textContent = option.labelPrice
+      if (estimateMeta) estimateMeta.textContent = `${option.label} · ${option.note}`
+      say(`${option.label} selected. ${option.labelPrice}. Human confirmation is required.`)
+    }
+    const turnaround = q('.sni-turnaround')
+    turnaround?.addEventListener('click', onTurnaroundClick)
 
     return () => {
       timers.forEach(clearTimeout)
@@ -371,6 +395,7 @@ export function IntakeCanvas({ onAnalyze, onUpload, onPreview }) {
       if (attachments) attachments.removeEventListener('click', onClipClick)
       clipInput.removeEventListener('change', onClipChange)
       if (cta) { cta.removeEventListener('click', onCtaClick) }
+      turnaround?.removeEventListener('click', onTurnaroundClick)
       qa('.sni-mote').forEach((m) => m.remove())
       document.querySelectorAll('.sni-ghost').forEach((g) => g.remove())
     }
@@ -480,10 +505,26 @@ export function IntakeCanvas({ onAnalyze, onUpload, onPreview }) {
                   <span className="sni-upload-track"><i className="sni-upload-fill" /></span>
                 </div>
 
+                <div className="sni-processing-panel" aria-live="polite">
+                  <span className="sni-processing-core"><i /><i /><i /></span>
+                  <div><strong>Solvy is building the scope</strong><small>Reading requirements · measuring complexity · pricing delivery options</small></div>
+                  <span className="sni-processing-pulse" />
+                </div>
+
                 <div className="sni-estimate" aria-live="polite">
                   <span>Provisional support range</span>
                   <strong className="sni-estimate-value">Estimate pending</strong>
                   <small className="sni-estimate-meta">Human confirmation required</small>
+                </div>
+
+                <div className="sni-turnaround">
+                  <span>Choose a preferred turnaround</span>
+                  <div>
+                    <button type="button" className="active" data-turnaround="standard">Standard<small>Best value</small></button>
+                    <button type="button" data-turnaround="priority">Priority<small>12-hour review</small></button>
+                    <button type="button" data-turnaround="rush">Rush<small>6-hour review</small></button>
+                  </div>
+                  <p>All ranges are provisional. SolveNest confirms feasibility, final scope and price before payment.</p>
                 </div>
 
                 <div className="sni-attachments">
@@ -701,11 +742,19 @@ const CSS = `
 .sni-upload-fill{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--sni-mark),var(--sni-mark-deep),var(--sni-cyan),var(--sni-mark));background-size:220% 100%;transition:width .2s}
 .sni-paper.is-processing .sni-upload-fill{animation:sni-analysis-flow 1.15s linear infinite}
 @keyframes sni-analysis-flow{to{background-position:-220% 0}}
+.sni-processing-panel{display:none;grid-template-columns:auto 1fr auto;align-items:center;gap:14px;margin:0 0 15px;padding:16px 17px;border-radius:13px;color:#fff;background:linear-gradient(125deg,#171c3f,#37306f 58%,#155c68);box-shadow:0 15px 34px rgba(24,28,68,.2);overflow:hidden;position:relative}
+.sni-processing-panel.show{display:grid;animation:sni-fade-in .3s ease both}
+.sni-processing-panel strong,.sni-processing-panel small{display:block}.sni-processing-panel strong{font-size:14px}.sni-processing-panel small{margin-top:4px;color:#c8d0e8;font:9px/1.55 'DM Mono',monospace}
+.sni-processing-core{width:44px;height:44px;display:grid;place-items:center;position:relative;border:1px solid rgba(255,255,255,.24);border-radius:50%;animation:sni-core-turn 3.8s linear infinite}
+.sni-processing-core i{position:absolute;width:7px;height:7px;border-radius:50%;background:var(--sni-cyan);box-shadow:0 0 12px var(--sni-cyan)}.sni-processing-core i:nth-child(1){transform:translateY(-13px)}.sni-processing-core i:nth-child(2){transform:translate(11px,8px);background:#bcb4ff}.sni-processing-core i:nth-child(3){transform:translate(-11px,8px);background:#fff}
+.sni-processing-pulse{width:8px;height:8px;border-radius:50%;background:#54e3b0;box-shadow:0 0 0 0 rgba(84,227,176,.5);animation:sni-live-pulse 1.5s infinite}
+@keyframes sni-core-turn{to{transform:rotate(360deg)}}@keyframes sni-live-pulse{70%{box-shadow:0 0 0 10px rgba(84,227,176,0)}100%{box-shadow:0 0 0 0 rgba(84,227,176,0)}}
 .sni-estimate{display:none;margin:0 0 16px;padding:17px 18px;border:1px solid rgba(124,92,255,.24);border-radius:12px;background:linear-gradient(135deg,rgba(124,92,255,.11),rgba(53,214,232,.075));box-shadow:0 9px 24px rgba(68,61,150,.07);position:relative;z-index:2}
 .sni-estimate.show{display:grid;gap:4px;animation:sni-fade-in .3s ease both}
 .sni-estimate span{font:600 9px 'DM Mono',monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--sni-mark)}
 .sni-estimate strong{font:750 24px 'DM Sans',sans-serif;letter-spacing:-.035em;color:var(--sni-ink)}
 .sni-estimate small{font:10px 'DM Mono',monospace;color:var(--sni-soft)}
+.sni-turnaround{display:none;margin:-4px 0 18px}.sni-turnaround.show{display:block;animation:sni-fade-in .35s ease both}.sni-turnaround>span{display:block;margin-bottom:9px;font:700 9px 'DM Mono',monospace;letter-spacing:.09em;text-transform:uppercase;color:#536078}.sni-turnaround>div{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.sni-turnaround button{padding:11px 10px;border:1px solid #d9dced;border-radius:9px;background:#fff;color:#26324a;text-align:left;font:700 11px 'DM Sans',sans-serif;transition:.18s ease}.sni-turnaround button small{display:block;margin-top:3px;color:#788399;font:9px 'DM Mono',monospace}.sni-turnaround button.active{border-color:var(--sni-mark);background:#f1efff;box-shadow:0 6px 16px rgba(91,92,210,.1);color:#5f4fd0}.sni-turnaround p{margin:9px 0 0;color:#788399;font:9px/1.55 'DM Mono',monospace}
 .sni-attachments{
   display:flex;gap:12px;flex-wrap:wrap;padding-top:18px;border-top:1px dashed rgba(17,24,39,.12);
   opacity:0;transform:translateY(5px);position:relative;z-index:2;
@@ -744,6 +793,7 @@ const CSS = `
   .sni-paper{padding:26px 20px 24px}
   .sni-doc-para{max-width:none}
   .sni-insight-grid{grid-template-columns:1fr}
+  .sni-turnaround>div{grid-template-columns:1fr}
   .sni-scene{perspective:850px}
   .sni-head h1{font-size:clamp(44px,13vw,58px)}
   .sni-foot{gap:12px}

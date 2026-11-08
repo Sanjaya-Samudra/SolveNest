@@ -1,3 +1,5 @@
+import mammoth from 'mammoth'
+
 const circuit = { failures: 0, openedAt: 0 }
 const FAILURE_LIMIT = 5
 const RESET_MS = 60_000
@@ -32,12 +34,17 @@ async function geminiParts(operation, payload, signal) {
   if (operation !== 'analyze') return parts
   const supported = new Set(['application/pdf', 'image/png', 'image/jpeg', 'image/webp'])
   for (const file of (payload.files || []).slice(0, 6)) {
-    if (!file.url || !supported.has(file.mimeType)) { parts.push({ text: `File ${file.name} (${file.mimeType}) was supplied, but this beta analyzer can only read PDF and image content directly.` }); continue }
+    if (!file.url) { parts.push({ text: `File ${file.name} was supplied but its content is unavailable.` }); continue }
     const response = await fetch(file.url, { signal })
     if (!response.ok) throw Object.assign(new Error('SOLVY_FILE_FETCH_FAILED'), { code: 'SOLVY_PROVIDER_ERROR', retryable: response.status >= 500 })
     const bytes = Buffer.from(await response.arrayBuffer())
     if (bytes.length > 4 * 1024 * 1024) throw Object.assign(new Error('SOLVY_FILE_TOO_LARGE'), { code: 'SOLVY_PROVIDER_ERROR', retryable: false })
-    parts.push({ inlineData: { mimeType: file.mimeType, data: bytes.toString('base64') } })
+    if (supported.has(file.mimeType)) parts.push({ inlineData: { mimeType: file.mimeType, data: bytes.toString('base64') } })
+    else if (file.mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || /\.docx$/i.test(file.name || '')) {
+      const extracted = await mammoth.extractRawText({ buffer: bytes })
+      const documentText = String(extracted.value || '').trim().slice(0, 100_000)
+      parts.push({ text: documentText ? `Extracted Word document content from ${file.name}:\n\n${documentText}` : `The Word document ${file.name} contained no readable text.` })
+    } else parts.push({ text: `File ${file.name} (${file.mimeType}) was supplied, but its content format is not directly readable in this beta analyzer.` })
   }
   return parts
 }
@@ -118,12 +125,13 @@ export function buildProvisionalEstimate(rawEstimate = {}) {
   const scopeText = [rawEstimate.taskType, rawEstimate.title, rawEstimate.scope, rawEstimate.notes, ...(rawEstimate.requiredSections || []), ...(rawEstimate.deliverables || [])].filter(Boolean).join(' ')
   const softwareSignals = ['application', 'software', 'full stack', 'full-stack', 'frontend', 'backend', 'database', 'api', 'authentication', 'deployment', 'mobile app', 'web app', 'system development'].filter((term) => scopeText.toLowerCase().includes(term))
   const isApplicationProject = softwareSignals.length >= 2 || /(?:build|develop|implement|design)\s+(?:a|an|the)?\s*(?:complete|full|web|mobile|software)?\s*(?:application|system|platform)/i.test(scopeText)
+  const isPlatformScale = isApplicationProject && softwareSignals.length >= 5 && /(?:android|ios|admin console|multi[ -]?tenant|multi[ -]?club|role[ -]?based|offline|audit trail|full product|operating platform)/i.test(scopeText)
   const isShortGuidedActivity = !isApplicationProject && /(?:\b[1-3][ -]?hour\b|group activity|class activity|in-class|guided worksheet|workshop activity)/i.test(scopeText)
   const deliverableCount = Array.isArray(rawEstimate.deliverables) ? rawEstimate.deliverables.length : 0
   const scopedComplexity = isApplicationProject ? 'Very high' : isShortGuidedActivity ? 'Low' : deliverableCount >= 6 && normalizedComplexity === 'Medium' ? 'High' : normalizedComplexity
   const defaultHours = { Low: 4, Medium: 6, High: 12, 'Very high': 20 }[scopedComplexity]
   const providerHours = Number(rawEstimate.estimatedEffortHours || rawEstimate.effortHours) || defaultHours
-  const scopeMinimumHours = isApplicationProject ? 16 : isShortGuidedActivity ? 2.5 : deliverableCount >= 6 ? 10 : 2
+  const scopeMinimumHours = isPlatformScale ? 40 : isApplicationProject ? 16 : isShortGuidedActivity ? 2.5 : deliverableCount >= 6 ? 10 : 2
   const effortHours = isShortGuidedActivity ? Math.min(3, Math.max(scopeMinimumHours, providerHours)) : Math.min(120, Math.max(scopeMinimumHours, providerHours))
   const lowRate = Math.max(100, Number(process.env.SOLVY_LKR_LOW_HOURLY || 1300))
   const highRate = Math.max(lowRate, Number(process.env.SOLVY_LKR_HIGH_HOURLY || 1700))
@@ -131,7 +139,17 @@ export function buildProvisionalEstimate(rawEstimate = {}) {
   const categoryFloor = isApplicationProject ? 22000 : scopedComplexity === 'Very high' ? 18000 : 0
   const low = Math.max(categoryFloor, round500(effortHours * lowRate))
   const high = isShortGuidedActivity ? Math.max(low + 500, Math.min(5000, round500(effortHours * highRate))) : Math.max(low + 500, round500(effortHours * highRate))
-  const result = { ...rawEstimate, complexity: scopedComplexity, estimatedEffortHours: effortHours, pricingBasis: isApplicationProject ? 'End-to-end application scope' : isShortGuidedActivity ? 'Short guided activity' : `${scopedComplexity} complexity`, low, high, currency: 'LKR', label: `LKR ${low.toLocaleString('en-US')} – ${high.toLocaleString('en-US')}`, provisional: true }
+  const urgency = (id, label, hours, multiplier, note) => {
+    const optionLow = round500(low * multiplier)
+    const optionHigh = Math.max(optionLow + 500, round500(high * multiplier))
+    return { id, label, turnaroundHours: hours, low: optionLow, high: optionHigh, labelPrice: `LKR ${optionLow.toLocaleString('en-US')} – ${optionHigh.toLocaleString('en-US')}`, note }
+  }
+  const urgencyOptions = [
+    urgency('standard', 'Standard delivery', null, 1, 'Best-value schedule confirmed during human review.'),
+    urgency('priority', 'Priority 12-hour review', 12, 1.35, 'Expedited scheduling, subject to expert availability and feasible scope.'),
+    urgency('rush', 'Rush 6-hour review', 6, 1.75, isApplicationProject ? 'Only a feasible prototype or agreed milestone can be promised in six hours.' : 'Rush delivery requires human confirmation.'),
+  ]
+  const result = { ...rawEstimate, complexity: scopedComplexity, estimatedEffortHours: effortHours, pricingBasis: isPlatformScale ? 'Platform-scale product scope' : isApplicationProject ? 'End-to-end application scope' : isShortGuidedActivity ? 'Short guided activity' : `${scopedComplexity} complexity`, low, high, currency: 'LKR', label: `LKR ${low.toLocaleString('en-US')} – ${high.toLocaleString('en-US')}`, urgencyOptions, humanReviewRequired: true, provisional: true }
   for (const contextKey of ['taskType', 'title', 'requiredSections', 'deliverables']) delete result[contextKey]
   return result
 }
