@@ -136,9 +136,10 @@ app.use('/api', (req, res, next) => {
   res.setHeader('X-Robots-Tag', 'noindex, nofollow')
   if (['GET', 'HEAD', 'OPTIONS'].includes(req.method) || req.path === '/payments/stripe/webhook') return next()
   const origin = req.headers.origin
-  const allowed = process.env.PUBLIC_APP_URL || `${req.protocol}://${req.get('host')}`
+  const requestOrigin = `${req.protocol}://${req.get('host')}`
+  const allowedOrigins = new Set([configuredOrigin(process.env.PUBLIC_APP_URL), configuredOrigin(requestOrigin)].filter(Boolean))
   let trusted = !origin
-  try { if (origin) trusted = new URL(origin).origin === new URL(allowed).origin } catch { trusted = false }
+  try { if (origin) trusted = allowedOrigins.has(new URL(origin).origin) } catch { trusted = false }
   if (process.env.NODE_ENV !== 'production' && /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin || '')) trusted = true
   if (req.headers['sec-fetch-site'] === 'cross-site' || !trusted) return safeError(res, 403, 'ORIGIN_REJECTED', 'This request must come from the SolveNest website.')
   next()
