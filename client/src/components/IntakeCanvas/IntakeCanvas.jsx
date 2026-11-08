@@ -187,8 +187,17 @@ export function IntakeCanvas({ onAnalyze, onUpload, onPreview }) {
           if (estimateMeta) estimateMeta.textContent = `${estimate?.complexity || 'Provisional'} complexity · ${estimate?.estimatedEffortHours || '—'} support hours · ${estimate?.pricingBasis || 'scope-based estimate'}`
           if (deadlineValue) deadlineValue.textContent = analysis?.deadline ? `Due ${analysis.deadline}` : 'Deadline not detected'
           if (subjectValue) subjectValue.textContent = analysis?.subject || analysis?.taskType || 'Academic task'
-          if (summaryValue) summaryValue.textContent = [...(analysis?.deliverables || []), ...(analysis?.requiredSections || [])].slice(0, 4).join(' · ') || estimate?.scope || 'Review the uploaded brief and confirm its full scope.'
-          if (criteriaValue) criteriaValue.textContent = analysis?.rubric?.criteria?.length ? `${analysis.rubric.criteria.length} rubric criteria detected` : `${analysis?.deliverables?.length || 0} deliverables · ${analysis?.requiredSections?.length || 0} required sections`
+          if (summaryValue) {
+            const items = [...(analysis?.deliverables || []), ...(analysis?.requiredSections || [])].slice(0, 6)
+            summaryValue.replaceChildren()
+            if (items.length) items.forEach((item) => { const chip = document.createElement('span'); chip.textContent = typeof item === 'string' ? item : item?.title || item?.name || 'Deliverable'; summaryValue.appendChild(chip) })
+            else summaryValue.textContent = estimate?.scope || 'Review the uploaded brief and confirm its full scope.'
+          }
+          if (criteriaValue) {
+            const facts = [analysis?.rubric?.criteria?.length ? `${analysis.rubric.criteria.length} rubric criteria` : null, `${analysis?.deliverables?.length || 0} deliverables`, `${analysis?.requiredSections?.length || 0} required sections`, estimate?.complexity ? `${estimate.complexity} complexity` : null].filter(Boolean)
+            criteriaValue.replaceChildren()
+            facts.forEach((fact) => { const item = document.createElement('span'); item.textContent = fact; criteriaValue.appendChild(item) })
+          }
           q('.sni-estimate')?.classList.add('show')
           q('.sni-turnaround')?.classList.add('show')
           if (analysis?.title) q('.sni-doc-title').textContent = analysis.title
@@ -696,16 +705,18 @@ const CSS = `
 .sni-doc-kicker{display:inline-flex;align-items:center;gap:8px;font:10px 'DM Mono',monospace;letter-spacing:.12em;text-transform:uppercase;color:var(--sni-mark)}
 .sni-doc-kicker i{width:6px;height:6px;border-radius:50%;background:var(--sni-mark);box-shadow:0 0 12px var(--sni-mark)}
 .sni-doc-state{font:10px 'DM Mono',monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--sni-success)}
-.sni-doc-title{font-size:24px;font-weight:600;letter-spacing:-.03em;margin:0 0 8px;opacity:0;transform:translateY(5px)}
-.sni-doc-meta-row{display:flex;gap:18px;flex-wrap:wrap;font:12px 'DM Mono',monospace;color:var(--sni-soft);margin-bottom:20px;opacity:0;transform:translateY(5px);position:relative}
+.sni-doc-title{font-size:clamp(20px,3.2vw,28px);line-height:1.15;font-weight:650;letter-spacing:-.035em;margin:0 0 12px;overflow-wrap:anywhere;opacity:0;transform:translateY(5px)}
+.sni-doc-meta-row{display:flex;gap:10px 18px;flex-wrap:wrap;font:11px/1.5 'DM Mono',monospace;color:var(--sni-soft);margin-bottom:18px;opacity:0;transform:translateY(5px);position:relative}
+.sni-doc-meta-row>span{display:inline-flex;align-items:center;min-height:24px;padding:4px 8px;border-radius:6px;background:rgba(100,116,139,.07)}
 .sni-due{position:relative;padding:1px 2px}
-.sni-insight-grid{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(210px,.75fr);gap:12px;margin:0 0 18px}
-.sni-doc-para,.sni-doc-section{border:1px solid rgba(124,92,255,.13);border-radius:11px;background:linear-gradient(145deg,rgba(124,92,255,.055),rgba(255,255,255,.82));padding:16px 17px;min-height:112px}
+.sni-insight-grid{display:grid;grid-template-columns:minmax(0,1.45fr) minmax(220px,.8fr);align-items:start;gap:12px;margin:0 0 18px}
+.sni-doc-para,.sni-doc-section{border:1px solid rgba(124,92,255,.13);border-radius:11px;background:linear-gradient(145deg,rgba(124,92,255,.055),rgba(255,255,255,.82));padding:16px 17px;min-height:0}
 .sni-doc-para{font-size:14px;line-height:1.65;max-width:none;margin:0;opacity:0;transform:translateY(5px);position:relative}
 .sni-doc-para small,.sni-doc-section small{display:block;margin-bottom:9px;color:var(--sni-mark);font:700 9px 'DM Mono',monospace;letter-spacing:.1em;text-transform:uppercase}
-.sni-summary-value{display:block;color:#273247}
+.sni-summary-value{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;color:#273247}
+.sni-summary-value>span{display:block;padding:8px 9px;border:1px solid rgba(124,92,255,.11);border-radius:7px;background:rgba(255,255,255,.78);font-size:11px;line-height:1.4;overflow-wrap:anywhere}
 .sni-doc-section{font:600 12px/1.55 'DM Sans',sans-serif;color:#334155;margin:0;opacity:0;transform:translateY(5px);position:relative}
-.sni-criteria-value{display:block}
+.sni-criteria-value{display:flex;flex-wrap:wrap;gap:7px}.sni-criteria-value>span{display:inline-flex;padding:7px 8px;border-radius:999px;background:#ece9ff;color:#5d50b7;font:600 9px 'DM Mono',monospace}
 .sni-doc-bars{display:flex;flex-direction:column;gap:7px;margin:13px 0 0}
 .sni-doc-bar{height:9px;border-radius:3px;background:#e8e6fb;opacity:0;transform:translateY(5px)}
 .sni-doc-bar:nth-child(1){width:88%}
@@ -715,10 +726,11 @@ const CSS = `
 @keyframes sni-up{to{opacity:1;transform:translateY(0)}}
 .sni-paper.impact .sni-paper-inner{animation:sni-squash .32s ease}
 @keyframes sni-squash{0%{transform:scaleY(1)}35%{transform:scaleY(.976) scaleX(1.005)}100%{transform:scaleY(1)}}
-.sni-ann{position:absolute;overflow:visible;pointer-events:none}
+.sni-ann{display:none}
 .sni-ink{fill:none;stroke:var(--sni-mark);stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .sni-nib{opacity:0;color:var(--sni-mark)}
 .sni-tag{
+  display:none;
   position:absolute;font:500 10.5px 'DM Mono',monospace;white-space:nowrap;
   color:var(--sni-mark-deep);background:rgba(124,92,255,.10);border:1px solid rgba(124,92,255,.24);
   border-radius:999px;padding:2px 8px;opacity:0;transform:translateX(-4px);pointer-events:none;
@@ -793,6 +805,7 @@ const CSS = `
   .sni-paper{padding:26px 20px 24px}
   .sni-doc-para{max-width:none}
   .sni-insight-grid{grid-template-columns:1fr}
+  .sni-summary-value{grid-template-columns:1fr}
   .sni-turnaround>div{grid-template-columns:1fr}
   .sni-scene{perspective:850px}
   .sni-head h1{font-size:clamp(44px,13vw,58px)}
