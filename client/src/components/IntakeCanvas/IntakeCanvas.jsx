@@ -175,8 +175,16 @@ export function IntakeCanvas({ onAnalyze, onUpload, onPreview }) {
           const estimate = analysis?.estimate || null
           const estimateValue = q('.sni-estimate-value')
           const estimateMeta = q('.sni-estimate-meta')
+          const deadlineValue = q('.sni-deadline-value')
+          const subjectValue = q('.sni-subject-value')
+          const summaryValue = q('.sni-summary-value')
+          const criteriaValue = q('.sni-criteria-value')
           if (estimateValue) estimateValue.textContent = estimate?.label || (estimate?.low != null && estimate?.high != null ? `LKR ${Number(estimate.low).toLocaleString()} – ${Number(estimate.high).toLocaleString()}` : 'Estimate pending')
-          if (estimateMeta) estimateMeta.textContent = `${estimate?.complexity || 'Provisional'} complexity · ${estimate?.estimatedEffortHours || '—'} support hours`
+          if (estimateMeta) estimateMeta.textContent = `${estimate?.complexity || 'Provisional'} complexity · ${estimate?.estimatedEffortHours || '—'} support hours · ${estimate?.pricingBasis || 'scope-based estimate'}`
+          if (deadlineValue) deadlineValue.textContent = analysis?.deadline ? `Due ${analysis.deadline}` : 'Deadline not detected'
+          if (subjectValue) subjectValue.textContent = analysis?.subject || analysis?.taskType || 'Academic task'
+          if (summaryValue) summaryValue.textContent = [...(analysis?.deliverables || []), ...(analysis?.requiredSections || [])].slice(0, 4).join(' · ') || estimate?.scope || 'Review the uploaded brief and confirm its full scope.'
+          if (criteriaValue) criteriaValue.textContent = analysis?.rubric?.criteria?.length ? `${analysis.rubric.criteria.length} rubric criteria detected` : `${analysis?.deliverables?.length || 0} deliverables · ${analysis?.requiredSections?.length || 0} required sections`
           q('.sni-estimate')?.classList.add('show')
           if (analysis?.title) q('.sni-doc-title').textContent = analysis.title
           say(`Analysis complete. ${estimate?.label || 'Your provisional estimate is ready.'}`)
@@ -412,7 +420,7 @@ export function IntakeCanvas({ onAnalyze, onUpload, onPreview }) {
 
                 <div className="sni-doc-meta-row">
                   <span className="sni-due">
-                    Due Nov 14, 11:59 PM
+                    <span className="sni-deadline-value">Reading deadline…</span>
                     <svg className="sni-ann" viewBox="0 0 150 42" style={{ left: '-8px', top: '-11px', width: '150px', height: '42px' }} aria-hidden="true">
                       <path className="sni-ink" data-ann-path="deadline" d="M9,21 C9,9 42,3 72,4 C107,5 134,11 132,23 C130,35 96,39 66,38 C36,37 9,34 9,21 Z" />
                       <g className="sni-nib" data-ann-nib="deadline">
@@ -423,12 +431,11 @@ export function IntakeCanvas({ onAnalyze, onUpload, onPreview }) {
                     </svg>
                     <span className="sni-tag sni-tag-deadline">deadline noted</span>
                   </span>
-                  <span>2,500–3,000 words</span>
+                  <span className="sni-subject-value">Reading task type…</span>
                 </div>
 
                 <p className="sni-doc-para">
-                  Assess a primary source using two peer-reviewed secondary sources.
-                  Argue a clear thesis and address at least one counterargument.
+                  <span className="sni-summary-value">Extracting the actual requirements from your brief…</span>
                   <svg className="sni-ann" viewBox="0 0 22 92" style={{ left: '-18px', top: '-2px', width: '22px', height: '92px' }} aria-hidden="true">
                     <path className="sni-ink" data-ann-path="task" d="M15,4 C7,4 5,10 5,20 L5,72 C5,82 7,88 15,88" />
                     <g className="sni-nib" data-ann-nib="task">
@@ -441,7 +448,7 @@ export function IntakeCanvas({ onAnalyze, onUpload, onPreview }) {
                 </p>
 
                 <div className="sni-doc-section">
-                  Grading criteria
+                  <span className="sni-criteria-value">Finding deliverables and grading criteria…</span>
                   <svg className="sni-ann" viewBox="0 0 24 24" style={{ left: '-26px', top: '0px', width: '18px', height: '18px' }} aria-hidden="true">
                     <path className="sni-ink" data-ann-path="rubric" d="M5 12l5 5 9-10" />
                     <g className="sni-nib" data-ann-nib="rubric">
@@ -566,7 +573,7 @@ const CSS = `
   82%{opacity:.45}
   100%{opacity:0;transform:translate(var(--dx,30px),var(--dy,-130px))}
 }
-.sni-stage{position:relative;transform-style:preserve-3d;will-change:transform;z-index:2}
+.sni-stage{position:relative;z-index:2}
 .sni-corner{position:absolute;width:24px;height:24px;z-index:6;pointer-events:none}
 .sni-corner::before,.sni-corner::after{content:'';position:absolute;background:rgba(53,214,232,.42)}
 .sni-corner::before{width:100%;height:1px;top:0}
@@ -577,21 +584,15 @@ const CSS = `
 .sni-corner-br{bottom:12px;right:12px;transform:scale(-1)}
 
 .sni-paper{
-  position:relative;transform-style:preserve-3d;
+  position:relative;
   background:var(--sni-paper);color:var(--sni-ink);
   border:1px solid rgba(17,24,39,.08);
   border-radius:16px;
   box-shadow:0 28px 65px rgba(2,6,18,.52),0 10px 26px rgba(2,6,18,.28);
-  padding:36px 38px 30px;min-height:470px;overflow:visible;will-change:transform;
+  padding:36px 38px 30px;min-height:470px;overflow:visible;
   transition:box-shadow .3s ease,border-color .3s ease;
-  animation:sni-breathe 4.6s ease-in-out infinite;
-  transform-origin:50% 40%;
+  transform:none;
 }
-@keyframes sni-breathe{
-  0%,100%{transform:scale(1)}
-  50%{transform:scale(1.012)}
-}
-.sni-paper:hover{animation-play-state:paused}
 .sni-paper:hover .sni-idle-icon{animation-play-state:paused}
 .sni-paper.impact{animation:sni-thump .38s cubic-bezier(.34,1.4,.5,1)}
 @keyframes sni-thump{

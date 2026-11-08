@@ -17,13 +17,13 @@ const analysisSchema = {
     taskType: { type: 'STRING' }, title: { type: 'STRING' }, subject: { type: 'STRING', nullable: true }, deadline: { type: 'STRING', nullable: true }, citationStyle: { type: 'STRING', nullable: true },
     requiredSections: { type: 'ARRAY', items: { type: 'STRING' } }, deliverables: { type: 'ARRAY', items: { type: 'STRING' } }, missingInformation: { type: 'ARRAY', items: { type: 'STRING' } },
     rubric: { type: 'OBJECT', nullable: true, properties: { criteria: { type: 'ARRAY', items: { type: 'OBJECT', properties: { id: { type: 'STRING' }, label: { type: 'STRING' }, description: { type: 'STRING' } } } } } },
-    estimate: { type: 'OBJECT', nullable: true, properties: { complexity: { type: 'STRING' }, estimatedEffortHours: { type: 'NUMBER' }, suggestedDays: { type: 'NUMBER' }, notes: { type: 'STRING' } } },
+    estimate: { type: 'OBJECT', nullable: true, properties: { complexity: { type: 'STRING' }, estimatedEffortHours: { type: 'NUMBER' }, suggestedDays: { type: 'NUMBER' }, scope: { type: 'STRING' }, notes: { type: 'STRING' } } },
   },
   required: ['taskType', 'title', 'requiredSections', 'deliverables', 'missingInformation'],
 }
 
 function geminiPrompt(operation, payload) {
-  if (operation === 'analyze') return `You are Solvy, an academic task-intake assistant. Analyze only the supplied assignment materials. Extract the task type, concise title, subject, explicit deadline, citation style, required sections, deliverables, rubric criteria, missing information, and a non-binding effort estimate. Classify complexity as Low, Medium, High, or Very high and estimate the human support hours required. Do not calculate money; the application applies its own pricing policy. Do not invent requirements. Use null or an empty list when the material does not provide a value. File metadata: ${JSON.stringify((payload.files || []).map(({ id, role, name, mimeType, size }) => ({ id, role, name, mimeType, size })))}`
+  if (operation === 'analyze') return `You are Solvy, a careful senior project scoper. Analyze the actual supplied assignment materials, not merely the filename. Extract the exact visible assignment heading as title (never shorten it to a generic label), task type, subject, explicit deadline, citation style, required sections, every material deliverable, rubric criteria, and missing information. Then estimate realistic human support effort. Consider research depth, word/page count, number of deliverables, technical breadth, UI, frontend, backend, database, authentication, integrations, testing, documentation, deployment, and revision risk. A complete application or end-to-end software system is Very high complexity and normally requires at least 16 support hours; do not price it like an essay. Return a short scope explanation and realistic estimatedEffortHours. Do not calculate money; the application applies its pricing policy. Do not invent requirements. Use null or an empty list only when the material truly does not provide a value. File metadata: ${JSON.stringify((payload.files || []).map(({ id, role, name, mimeType, size }) => ({ id, role, name, mimeType, size })))}`
   return `You are Solvy Explain & Defend, a learning assistant. Respond to the student's request in clear language grounded in the supplied context. Never claim to have inspected an artifact when its content was not supplied. Return JSON with grounding set to "general", plainExplanation containing paragraphs and bullets, whyItMatters containing paragraphs and bullets, and trySayingIt as a short practice sentence. Request: ${JSON.stringify(payload)}`
 }
 
@@ -103,7 +103,7 @@ export function normalizeSolvyAnalysis(payload) {
   const text = (value, max = 500) => value == null ? null : String(value).trim().slice(0, max) || null
   const list = (value, max = 20) => Array.isArray(value) ? value.slice(0, max).map((item) => typeof item === 'string' ? item.slice(0, 500) : item).filter(Boolean) : []
   const rawEstimate = source.estimate && typeof source.estimate === 'object' && !Array.isArray(source.estimate) ? source.estimate : {}
-  const estimate = buildProvisionalEstimate(rawEstimate)
+  const estimate = buildProvisionalEstimate({ ...rawEstimate, taskType: source.taskType, title: source.title, requiredSections: source.requiredSections, deliverables: source.deliverables })
   const result = {
     taskType: text(source.taskType, 100) || 'Academic task', title: text(source.title, 200) || 'New academic task', subject: text(source.subject, 120), deadline: text(source.deadline, 40), citationStyle: text(source.citationStyle, 80),
     requiredSections: list(source.requiredSections), deliverables: list(source.deliverables), missingInformation: list(source.missingInformation), rubric: source.rubric && typeof source.rubric === 'object' && !Array.isArray(source.rubric) ? source.rubric : null, estimate,
@@ -115,12 +115,22 @@ export function buildProvisionalEstimate(rawEstimate = {}) {
   const textValue = (value, max = 500) => value == null ? null : String(value).trim().slice(0, max) || null
   const complexityText = textValue(rawEstimate.complexity, 40) || 'Medium'
   const normalizedComplexity = /very\s*high|advanced|extreme/i.test(complexityText) ? 'Very high' : /high|complex/i.test(complexityText) ? 'High' : /low|simple|basic/i.test(complexityText) ? 'Low' : 'Medium'
-  const defaultHours = { Low: 4, Medium: 6, High: 10, 'Very high': 16 }[normalizedComplexity]
-  const effortHours = Math.min(80, Math.max(2, Number(rawEstimate.estimatedEffortHours || rawEstimate.effortHours) || defaultHours))
+  const scopeText = [rawEstimate.taskType, rawEstimate.title, rawEstimate.scope, rawEstimate.notes, ...(rawEstimate.requiredSections || []), ...(rawEstimate.deliverables || [])].filter(Boolean).join(' ')
+  const softwareSignals = ['application', 'software', 'full stack', 'full-stack', 'frontend', 'backend', 'database', 'api', 'authentication', 'deployment', 'mobile app', 'web app', 'system development'].filter((term) => scopeText.toLowerCase().includes(term))
+  const isApplicationProject = softwareSignals.length >= 2 || /(?:build|develop|implement|design)\s+(?:a|an|the)?\s*(?:complete|full|web|mobile|software)?\s*(?:application|system|platform)/i.test(scopeText)
+  const deliverableCount = Array.isArray(rawEstimate.deliverables) ? rawEstimate.deliverables.length : 0
+  const scopedComplexity = isApplicationProject ? 'Very high' : deliverableCount >= 6 && normalizedComplexity === 'Medium' ? 'High' : normalizedComplexity
+  const defaultHours = { Low: 4, Medium: 6, High: 12, 'Very high': 20 }[scopedComplexity]
+  const providerHours = Number(rawEstimate.estimatedEffortHours || rawEstimate.effortHours) || defaultHours
+  const scopeMinimumHours = isApplicationProject ? 16 : deliverableCount >= 6 ? 10 : 2
+  const effortHours = Math.min(120, Math.max(scopeMinimumHours, providerHours))
   const lowRate = Math.max(100, Number(process.env.SOLVY_LKR_LOW_HOURLY || 1300))
   const highRate = Math.max(lowRate, Number(process.env.SOLVY_LKR_HIGH_HOURLY || 1700))
   const round500 = (value) => Math.max(500, Math.round(value / 500) * 500)
-  const low = round500(effortHours * lowRate)
+  const categoryFloor = isApplicationProject ? 22000 : scopedComplexity === 'Very high' ? 18000 : 0
+  const low = Math.max(categoryFloor, round500(effortHours * lowRate))
   const high = Math.max(low + 500, round500(effortHours * highRate))
-  return { ...rawEstimate, complexity: normalizedComplexity, estimatedEffortHours: effortHours, low, high, currency: 'LKR', label: `LKR ${low.toLocaleString('en-US')} – ${high.toLocaleString('en-US')}`, provisional: true }
+  const result = { ...rawEstimate, complexity: scopedComplexity, estimatedEffortHours: effortHours, pricingBasis: isApplicationProject ? 'End-to-end application scope' : `${scopedComplexity} complexity`, low, high, currency: 'LKR', label: `LKR ${low.toLocaleString('en-US')} – ${high.toLocaleString('en-US')}`, provisional: true }
+  for (const contextKey of ['taskType', 'title', 'requiredSections', 'deliverables']) delete result[contextKey]
+  return result
 }

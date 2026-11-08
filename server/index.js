@@ -434,7 +434,12 @@ async function analyzeWithSolvy(files) {
   }
   const inputs = await Promise.all(files.map(async (file) => ({ id: file.id, role: file.role, name: file.originalName, mimeType: file.mimeType, size: file.size, url: await signedObjectUrl(file.storageKey, file.originalName) })))
   if (process.env.NODE_ENV === 'production' && inputs.some((file) => !file.url)) throw new Error('ANALYSIS_FILE_ACCESS_UNAVAILABLE')
-  return normalizeSolvyAnalysis(await callSolvy('analyze', { fileIds: files.map((file) => file.id), files: inputs }))
+  const analysis = normalizeSolvyAnalysis(await callSolvy('analyze', { fileIds: files.map((file) => file.id), files: inputs }))
+  const brief = files.find((file) => file.role === 'BRIEF') || files[0]
+  if (!analysis.title || /^(new academic task|academic task|assignment|untitled brief)$/i.test(analysis.title.trim())) {
+    analysis.title = path.basename(brief?.originalName || 'New academic task', path.extname(brief?.originalName || ''))
+  }
+  return analysis
 }
 
 async function processSolvyJob(jobId) {
