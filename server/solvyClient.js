@@ -66,12 +66,12 @@ async function callGemini(operation, payload, config, signal) {
   catch { throw Object.assign(new Error('SOLVY_INVALID_RESPONSE'), { code: 'SOLVY_INVALID_RESPONSE', retryable: false }) }
 }
 
-export async function callSolvy(operation, payload, { timeoutMs = process.env.VERCEL ? 20_000 : 30_000 } = {}) {
+export async function callSolvy(operation, payload, { timeoutMs = process.env.VERCEL ? 45_000 : 30_000 } = {}) {
   const config = configuration()
   if (circuit.openedAt && Date.now() - circuit.openedAt < RESET_MS) throw Object.assign(new Error('SOLVY_CIRCUIT_OPEN'), { code: 'SOLVY_PROVIDER_UNAVAILABLE' })
   if (circuit.openedAt) Object.assign(circuit, { failures: 0, openedAt: 0 })
   let lastError
-  const maxAttempts = process.env.VERCEL ? 2 : 3
+  const maxAttempts = process.env.VERCEL ? 1 : 3
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), timeoutMs)
