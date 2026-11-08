@@ -434,7 +434,9 @@ export function IntakeCanvas({ onAnalyze, onUpload, onPreview }) {
                   <span className="sni-subject-value">Reading task type…</span>
                 </div>
 
+                <div className="sni-insight-grid">
                 <p className="sni-doc-para">
+                  <small>What Solvy found</small>
                   <span className="sni-summary-value">Extracting the actual requirements from your brief…</span>
                   <svg className="sni-ann" viewBox="0 0 22 92" style={{ left: '-18px', top: '-2px', width: '22px', height: '92px' }} aria-hidden="true">
                     <path className="sni-ink" data-ann-path="task" d="M15,4 C7,4 5,10 5,20 L5,72 C5,82 7,88 15,88" />
@@ -448,6 +450,7 @@ export function IntakeCanvas({ onAnalyze, onUpload, onPreview }) {
                 </p>
 
                 <div className="sni-doc-section">
+                  <small>Scope snapshot</small>
                   <span className="sni-criteria-value">Finding deliverables and grading criteria…</span>
                   <svg className="sni-ann" viewBox="0 0 24 24" style={{ left: '-26px', top: '0px', width: '18px', height: '18px' }} aria-hidden="true">
                     <path className="sni-ink" data-ann-path="rubric" d="M5 12l5 5 9-10" />
@@ -461,6 +464,7 @@ export function IntakeCanvas({ onAnalyze, onUpload, onPreview }) {
                 </div>
                 <div className="sni-doc-bars" aria-hidden="true">
                   <span className="sni-doc-bar" /><span className="sni-doc-bar" /><span className="sni-doc-bar" />
+                </div>
                 </div>
 
                 <div className="sni-doc-actions">
@@ -654,9 +658,14 @@ const CSS = `
 .sni-doc-title{font-size:24px;font-weight:600;letter-spacing:-.03em;margin:0 0 8px;opacity:0;transform:translateY(5px)}
 .sni-doc-meta-row{display:flex;gap:18px;flex-wrap:wrap;font:12px 'DM Mono',monospace;color:var(--sni-soft);margin-bottom:20px;opacity:0;transform:translateY(5px);position:relative}
 .sni-due{position:relative;padding:1px 2px}
-.sni-doc-para{font-size:15px;line-height:1.72;max-width:56ch;margin:0 0 22px;opacity:0;transform:translateY(5px);position:relative}
-.sni-doc-section{font:11px 'DM Mono',monospace;color:var(--sni-soft);margin-bottom:8px;opacity:0;transform:translateY(5px);position:relative}
-.sni-doc-bars{display:flex;flex-direction:column;gap:8px;margin-bottom:22px}
+.sni-insight-grid{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(210px,.75fr);gap:12px;margin:0 0 18px}
+.sni-doc-para,.sni-doc-section{border:1px solid rgba(124,92,255,.13);border-radius:11px;background:linear-gradient(145deg,rgba(124,92,255,.055),rgba(255,255,255,.82));padding:16px 17px;min-height:112px}
+.sni-doc-para{font-size:14px;line-height:1.65;max-width:none;margin:0;opacity:0;transform:translateY(5px);position:relative}
+.sni-doc-para small,.sni-doc-section small{display:block;margin-bottom:9px;color:var(--sni-mark);font:700 9px 'DM Mono',monospace;letter-spacing:.1em;text-transform:uppercase}
+.sni-summary-value{display:block;color:#273247}
+.sni-doc-section{font:600 12px/1.55 'DM Sans',sans-serif;color:#334155;margin:0;opacity:0;transform:translateY(5px);position:relative}
+.sni-criteria-value{display:block}
+.sni-doc-bars{display:flex;flex-direction:column;gap:7px;margin:13px 0 0}
 .sni-doc-bar{height:9px;border-radius:3px;background:#e8e6fb;opacity:0;transform:translateY(5px)}
 .sni-doc-bar:nth-child(1){width:88%}
 .sni-doc-bar:nth-child(2){width:71%}
@@ -692,10 +701,10 @@ const CSS = `
 .sni-upload-fill{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--sni-mark),var(--sni-mark-deep),var(--sni-cyan),var(--sni-mark));background-size:220% 100%;transition:width .2s}
 .sni-paper.is-processing .sni-upload-fill{animation:sni-analysis-flow 1.15s linear infinite}
 @keyframes sni-analysis-flow{to{background-position:-220% 0}}
-.sni-estimate{display:none;margin:0 0 16px;padding:13px 15px;border:1px solid rgba(124,92,255,.22);border-radius:10px;background:linear-gradient(135deg,rgba(124,92,255,.09),rgba(53,214,232,.06));position:relative;z-index:2}
+.sni-estimate{display:none;margin:0 0 16px;padding:17px 18px;border:1px solid rgba(124,92,255,.24);border-radius:12px;background:linear-gradient(135deg,rgba(124,92,255,.11),rgba(53,214,232,.075));box-shadow:0 9px 24px rgba(68,61,150,.07);position:relative;z-index:2}
 .sni-estimate.show{display:grid;gap:4px;animation:sni-fade-in .3s ease both}
 .sni-estimate span{font:600 9px 'DM Mono',monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--sni-mark)}
-.sni-estimate strong{font:700 20px 'DM Sans',sans-serif;color:var(--sni-ink)}
+.sni-estimate strong{font:750 24px 'DM Sans',sans-serif;letter-spacing:-.035em;color:var(--sni-ink)}
 .sni-estimate small{font:10px 'DM Mono',monospace;color:var(--sni-soft)}
 .sni-attachments{
   display:flex;gap:12px;flex-wrap:wrap;padding-top:18px;border-top:1px dashed rgba(17,24,39,.12);
@@ -734,6 +743,7 @@ const CSS = `
 @media (max-width:640px){
   .sni-paper{padding:26px 20px 24px}
   .sni-doc-para{max-width:none}
+  .sni-insight-grid{grid-template-columns:1fr}
   .sni-scene{perspective:850px}
   .sni-head h1{font-size:clamp(44px,13vw,58px)}
   .sni-foot{gap:12px}

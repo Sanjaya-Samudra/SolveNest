@@ -51,3 +51,17 @@ test('end-to-end application scopes receive a realistic minimum range', () => {
   assert.equal(estimate.pricingBasis, 'End-to-end application scope')
   assert.equal(estimate.deliverables, undefined)
 })
+
+test('short guided group activities stay in the lightweight price band', () => {
+  const estimate = buildProvisionalEstimate({
+    complexity: 'Medium', estimatedEffortHours: 7, taskType: 'Group activity',
+    title: 'Week 1 - 2-Hour Group Activity',
+    scope: 'Guided HCI comparison worksheet and class discussion',
+    deliverables: ['Initial analysis', 'Re-analysis', 'Discussion', 'Short report'],
+  })
+  assert.equal(estimate.complexity, 'Low')
+  assert.equal(estimate.estimatedEffortHours, 3)
+  assert.equal(estimate.low, 4000)
+  assert.equal(estimate.high, 5000)
+  assert.equal(estimate.pricingBasis, 'Short guided activity')
+})

@@ -23,7 +23,7 @@ const analysisSchema = {
 }
 
 function geminiPrompt(operation, payload) {
-  if (operation === 'analyze') return `You are Solvy, a careful senior project scoper. Analyze the actual supplied assignment materials, not merely the filename. Extract the exact visible assignment heading as title (never shorten it to a generic label), task type, subject, explicit deadline, citation style, required sections, every material deliverable, rubric criteria, and missing information. Then estimate realistic human support effort. Consider research depth, word/page count, number of deliverables, technical breadth, UI, frontend, backend, database, authentication, integrations, testing, documentation, deployment, and revision risk. A complete application or end-to-end software system is Very high complexity and normally requires at least 16 support hours; do not price it like an essay. Return a short scope explanation and realistic estimatedEffortHours. Do not calculate money; the application applies its pricing policy. Do not invent requirements. Use null or an empty list only when the material truly does not provide a value. File metadata: ${JSON.stringify((payload.files || []).map(({ id, role, name, mimeType, size }) => ({ id, role, name, mimeType, size })))}`
+  if (operation === 'analyze') return `You are Solvy, a careful senior project scoper. Analyze the actual supplied assignment materials, not merely the filename. Extract the exact visible assignment heading as title (never shorten it to a generic label), task type, subject, explicit deadline, citation style, required sections, every material deliverable, rubric criteria, and missing information. Then estimate realistic human support effort. Consider research depth, word/page count, number of deliverables, technical breadth, UI, frontend, backend, database, authentication, integrations, testing, documentation, deployment, and revision risk. Respect explicit duration: a guided 1-3 hour class/group activity or worksheet is usually Low complexity and about 2-3 support hours even when it contains several prompts. A complete application or end-to-end software system is Very high complexity and normally requires at least 16 support hours; do not price it like an essay. Return a short scope explanation and realistic estimatedEffortHours. Do not calculate money; the application applies its pricing policy. Do not invent requirements. Use null or an empty list only when the material truly does not provide a value. File metadata: ${JSON.stringify((payload.files || []).map(({ id, role, name, mimeType, size }) => ({ id, role, name, mimeType, size })))}`
   return `You are Solvy Explain & Defend, a learning assistant. Respond to the student's request in clear language grounded in the supplied context. Never claim to have inspected an artifact when its content was not supplied. Return JSON with grounding set to "general", plainExplanation containing paragraphs and bullets, whyItMatters containing paragraphs and bullets, and trySayingIt as a short practice sentence. Request: ${JSON.stringify(payload)}`
 }
 
@@ -118,19 +118,20 @@ export function buildProvisionalEstimate(rawEstimate = {}) {
   const scopeText = [rawEstimate.taskType, rawEstimate.title, rawEstimate.scope, rawEstimate.notes, ...(rawEstimate.requiredSections || []), ...(rawEstimate.deliverables || [])].filter(Boolean).join(' ')
   const softwareSignals = ['application', 'software', 'full stack', 'full-stack', 'frontend', 'backend', 'database', 'api', 'authentication', 'deployment', 'mobile app', 'web app', 'system development'].filter((term) => scopeText.toLowerCase().includes(term))
   const isApplicationProject = softwareSignals.length >= 2 || /(?:build|develop|implement|design)\s+(?:a|an|the)?\s*(?:complete|full|web|mobile|software)?\s*(?:application|system|platform)/i.test(scopeText)
+  const isShortGuidedActivity = !isApplicationProject && /(?:\b[1-3][ -]?hour\b|group activity|class activity|in-class|guided worksheet|workshop activity)/i.test(scopeText)
   const deliverableCount = Array.isArray(rawEstimate.deliverables) ? rawEstimate.deliverables.length : 0
-  const scopedComplexity = isApplicationProject ? 'Very high' : deliverableCount >= 6 && normalizedComplexity === 'Medium' ? 'High' : normalizedComplexity
+  const scopedComplexity = isApplicationProject ? 'Very high' : isShortGuidedActivity ? 'Low' : deliverableCount >= 6 && normalizedComplexity === 'Medium' ? 'High' : normalizedComplexity
   const defaultHours = { Low: 4, Medium: 6, High: 12, 'Very high': 20 }[scopedComplexity]
   const providerHours = Number(rawEstimate.estimatedEffortHours || rawEstimate.effortHours) || defaultHours
-  const scopeMinimumHours = isApplicationProject ? 16 : deliverableCount >= 6 ? 10 : 2
-  const effortHours = Math.min(120, Math.max(scopeMinimumHours, providerHours))
+  const scopeMinimumHours = isApplicationProject ? 16 : isShortGuidedActivity ? 2.5 : deliverableCount >= 6 ? 10 : 2
+  const effortHours = isShortGuidedActivity ? Math.min(3, Math.max(scopeMinimumHours, providerHours)) : Math.min(120, Math.max(scopeMinimumHours, providerHours))
   const lowRate = Math.max(100, Number(process.env.SOLVY_LKR_LOW_HOURLY || 1300))
   const highRate = Math.max(lowRate, Number(process.env.SOLVY_LKR_HIGH_HOURLY || 1700))
   const round500 = (value) => Math.max(500, Math.round(value / 500) * 500)
   const categoryFloor = isApplicationProject ? 22000 : scopedComplexity === 'Very high' ? 18000 : 0
   const low = Math.max(categoryFloor, round500(effortHours * lowRate))
-  const high = Math.max(low + 500, round500(effortHours * highRate))
-  const result = { ...rawEstimate, complexity: scopedComplexity, estimatedEffortHours: effortHours, pricingBasis: isApplicationProject ? 'End-to-end application scope' : `${scopedComplexity} complexity`, low, high, currency: 'LKR', label: `LKR ${low.toLocaleString('en-US')} – ${high.toLocaleString('en-US')}`, provisional: true }
+  const high = isShortGuidedActivity ? Math.max(low + 500, Math.min(5000, round500(effortHours * highRate))) : Math.max(low + 500, round500(effortHours * highRate))
+  const result = { ...rawEstimate, complexity: scopedComplexity, estimatedEffortHours: effortHours, pricingBasis: isApplicationProject ? 'End-to-end application scope' : isShortGuidedActivity ? 'Short guided activity' : `${scopedComplexity} complexity`, low, high, currency: 'LKR', label: `LKR ${low.toLocaleString('en-US')} – ${high.toLocaleString('en-US')}`, provisional: true }
   for (const contextKey of ['taskType', 'title', 'requiredSections', 'deliverables']) delete result[contextKey]
   return result
 }
