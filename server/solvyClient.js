@@ -125,7 +125,7 @@ export function buildProvisionalEstimate(rawEstimate = {}) {
   const scopeText = [rawEstimate.taskType, rawEstimate.title, rawEstimate.scope, rawEstimate.notes, ...(rawEstimate.requiredSections || []), ...(rawEstimate.deliverables || [])].filter(Boolean).join(' ')
   const softwareSignals = ['application', 'software', 'full stack', 'full-stack', 'frontend', 'backend', 'database', 'api', 'authentication', 'deployment', 'mobile app', 'web app', 'system development'].filter((term) => scopeText.toLowerCase().includes(term))
   const isApplicationProject = softwareSignals.length >= 2 || /(?:build|develop|implement|design)\s+(?:a|an|the)?\s*(?:complete|full|web|mobile|software)?\s*(?:application|system|platform)/i.test(scopeText)
-  const isPlatformScale = isApplicationProject && softwareSignals.length >= 5 && /(?:android|ios|admin console|multi[ -]?tenant|multi[ -]?club|role[ -]?based|offline|audit trail|full product|operating platform)/i.test(scopeText)
+  const isPlatformScale = isApplicationProject && /(?:android|ios|admin console|multi[ -]?tenant|multi[ -]?club|role[ -]?based|offline|audit trail|full product|operating platform)/i.test(scopeText)
   const isShortGuidedActivity = !isApplicationProject && /(?:\b[1-3][ -]?hour\b|group activity|class activity|in-class|guided worksheet|workshop activity)/i.test(scopeText)
   const deliverableCount = Array.isArray(rawEstimate.deliverables) ? rawEstimate.deliverables.length : 0
   const scopedComplexity = isApplicationProject ? 'Very high' : isShortGuidedActivity ? 'Low' : deliverableCount >= 6 && normalizedComplexity === 'Medium' ? 'High' : normalizedComplexity
