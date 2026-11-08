@@ -130,7 +130,9 @@ export function buildProvisionalEstimate(rawEstimate = {}) {
   // A multi-question statistics/programming assignment is not a software project.
   // Screenshots, plots and numbered answers are supporting evidence, so they must
   // not inflate the quote just because Gemini lists each one as a deliverable.
-  const isStatisticalCoursework = !isApplicationProject && /(?:\br\s+(?:code|programming|studio)\b|statistic(?:s|al)|hypothesis test|regression|anova|confidence interval|code and output|data analysis)/i.test(scopeText)
+  const hasStatisticsWork = /(?:statistic(?:s|al)|hypothesis test|regression|anova|confidence interval|data analysis)/i.test(scopeText)
+  const hasCourseworkShape = /(?:assignment|coursework|exercise|question|\br\s+(?:code|programming|studio)\b|code and output|plots?)/i.test(scopeText)
+  const isStatisticalCoursework = !isApplicationProject && hasStatisticsWork && hasCourseworkShape
   const deliverableCount = Array.isArray(rawEstimate.deliverables) ? rawEstimate.deliverables.length : 0
   const scopedComplexity = isApplicationProject ? 'Very high' : isShortGuidedActivity ? 'Low' : isStatisticalCoursework ? 'Medium' : deliverableCount >= 6 && normalizedComplexity === 'Medium' ? 'High' : normalizedComplexity
   const defaultHours = { Low: 4, Medium: 6, High: 12, 'Very high': 20 }[scopedComplexity]
