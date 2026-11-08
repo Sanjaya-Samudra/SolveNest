@@ -17,13 +17,13 @@ const analysisSchema = {
     taskType: { type: 'STRING' }, title: { type: 'STRING' }, subject: { type: 'STRING', nullable: true }, deadline: { type: 'STRING', nullable: true }, citationStyle: { type: 'STRING', nullable: true },
     requiredSections: { type: 'ARRAY', items: { type: 'STRING' } }, deliverables: { type: 'ARRAY', items: { type: 'STRING' } }, missingInformation: { type: 'ARRAY', items: { type: 'STRING' } },
     rubric: { type: 'OBJECT', nullable: true, properties: { criteria: { type: 'ARRAY', items: { type: 'OBJECT', properties: { id: { type: 'STRING' }, label: { type: 'STRING' }, description: { type: 'STRING' } } } } } },
-    estimate: { type: 'OBJECT', nullable: true, properties: { complexity: { type: 'STRING' }, suggestedDays: { type: 'NUMBER' }, notes: { type: 'STRING' } } },
+    estimate: { type: 'OBJECT', nullable: true, properties: { complexity: { type: 'STRING' }, estimatedEffortHours: { type: 'NUMBER' }, suggestedDays: { type: 'NUMBER' }, notes: { type: 'STRING' } } },
   },
   required: ['taskType', 'title', 'requiredSections', 'deliverables', 'missingInformation'],
 }
 
 function geminiPrompt(operation, payload) {
-  if (operation === 'analyze') return `You are Solvy, an academic task-intake assistant. Analyze only the supplied assignment materials. Extract the task type, concise title, subject, explicit deadline, citation style, required sections, deliverables, rubric criteria, missing information, and a non-binding complexity estimate. Do not invent requirements. Use null or an empty list when the material does not provide a value. File metadata: ${JSON.stringify((payload.files || []).map(({ id, role, name, mimeType, size }) => ({ id, role, name, mimeType, size })))}`
+  if (operation === 'analyze') return `You are Solvy, an academic task-intake assistant. Analyze only the supplied assignment materials. Extract the task type, concise title, subject, explicit deadline, citation style, required sections, deliverables, rubric criteria, missing information, and a non-binding effort estimate. Classify complexity as Low, Medium, High, or Very high and estimate the human support hours required. Do not calculate money; the application applies its own pricing policy. Do not invent requirements. Use null or an empty list when the material does not provide a value. File metadata: ${JSON.stringify((payload.files || []).map(({ id, role, name, mimeType, size }) => ({ id, role, name, mimeType, size })))}`
   return `You are Solvy Explain & Defend, a learning assistant. Respond to the student's request in clear language grounded in the supplied context. Never claim to have inspected an artifact when its content was not supplied. Return JSON with grounding set to "general", plainExplanation containing paragraphs and bullets, whyItMatters containing paragraphs and bullets, and trySayingIt as a short practice sentence. Request: ${JSON.stringify(payload)}`
 }
 
@@ -102,9 +102,25 @@ export function normalizeSolvyAnalysis(payload) {
   if (!source || typeof source !== 'object' || Array.isArray(source)) throw Object.assign(new Error('SOLVY_INVALID_RESPONSE'), { code: 'SOLVY_INVALID_RESPONSE' })
   const text = (value, max = 500) => value == null ? null : String(value).trim().slice(0, max) || null
   const list = (value, max = 20) => Array.isArray(value) ? value.slice(0, max).map((item) => typeof item === 'string' ? item.slice(0, 500) : item).filter(Boolean) : []
+  const rawEstimate = source.estimate && typeof source.estimate === 'object' && !Array.isArray(source.estimate) ? source.estimate : {}
+  const estimate = buildProvisionalEstimate(rawEstimate)
   const result = {
     taskType: text(source.taskType, 100) || 'Academic task', title: text(source.title, 200) || 'New academic task', subject: text(source.subject, 120), deadline: text(source.deadline, 40), citationStyle: text(source.citationStyle, 80),
-    requiredSections: list(source.requiredSections), deliverables: list(source.deliverables), missingInformation: list(source.missingInformation), rubric: source.rubric && typeof source.rubric === 'object' && !Array.isArray(source.rubric) ? source.rubric : null, estimate: source.estimate && typeof source.estimate === 'object' && !Array.isArray(source.estimate) ? source.estimate : null,
+    requiredSections: list(source.requiredSections), deliverables: list(source.deliverables), missingInformation: list(source.missingInformation), rubric: source.rubric && typeof source.rubric === 'object' && !Array.isArray(source.rubric) ? source.rubric : null, estimate,
   }
   return { ...result, provider: process.env.GEMINI_API_KEY ? 'gemini' : 'solvy', providerVersion: text(payload.version || source.providerVersion, 80), analyzedAt: new Date().toISOString(), provisional: true }
+}
+
+export function buildProvisionalEstimate(rawEstimate = {}) {
+  const textValue = (value, max = 500) => value == null ? null : String(value).trim().slice(0, max) || null
+  const complexityText = textValue(rawEstimate.complexity, 40) || 'Medium'
+  const normalizedComplexity = /very\s*high|advanced|extreme/i.test(complexityText) ? 'Very high' : /high|complex/i.test(complexityText) ? 'High' : /low|simple|basic/i.test(complexityText) ? 'Low' : 'Medium'
+  const defaultHours = { Low: 4, Medium: 6, High: 10, 'Very high': 16 }[normalizedComplexity]
+  const effortHours = Math.min(80, Math.max(2, Number(rawEstimate.estimatedEffortHours || rawEstimate.effortHours) || defaultHours))
+  const lowRate = Math.max(100, Number(process.env.SOLVY_LKR_LOW_HOURLY || 1300))
+  const highRate = Math.max(lowRate, Number(process.env.SOLVY_LKR_HIGH_HOURLY || 1700))
+  const round500 = (value) => Math.max(500, Math.round(value / 500) * 500)
+  const low = round500(effortHours * lowRate)
+  const high = Math.max(low + 500, round500(effortHours * highRate))
+  return { ...rawEstimate, complexity: normalizedComplexity, estimatedEffortHours: effortHours, low, high, currency: 'LKR', label: `LKR ${low.toLocaleString('en-US')} – ${high.toLocaleString('en-US')}`, provisional: true }
 }

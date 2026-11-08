@@ -163,11 +163,19 @@ export function IntakeCanvas({ onAnalyze, onUpload, onPreview }) {
         if (uploadBar) uploadBar.hidden = false
         if (uploadLabel) uploadLabel.textContent = 'Uploading brief…'
         try {
-          await onUploadRef.current(file, (pct) => {
+          const result = await onUploadRef.current(file, (pct) => {
             const v = Math.max(0, Math.min(100, Math.round(pct || 0)))
             if (uploadFill) uploadFill.style.width = `${v}%`
             if (uploadLabel) uploadLabel.textContent = `Uploading brief… ${v}%`
           })
+          const analysis = result?.analysis || null
+          const estimate = analysis?.estimate || null
+          const estimateValue = q('.sni-estimate-value')
+          const estimateMeta = q('.sni-estimate-meta')
+          if (estimateValue) estimateValue.textContent = estimate?.label || (estimate?.low != null && estimate?.high != null ? `LKR ${Number(estimate.low).toLocaleString()} – ${Number(estimate.high).toLocaleString()}` : 'Estimate pending')
+          if (estimateMeta) estimateMeta.textContent = `${estimate?.complexity || 'Provisional'} complexity · ${estimate?.estimatedEffortHours || '—'} support hours`
+          q('.sni-estimate')?.classList.add('show')
+          if (analysis?.title) q('.sni-doc-title').textContent = analysis.title
         } catch (e) {
           errText.style.display = 'block'
           errText.textContent = e?.message || 'Upload failed.'
@@ -456,6 +464,12 @@ export function IntakeCanvas({ onAnalyze, onUpload, onPreview }) {
                   <span className="sni-upload-track"><i className="sni-upload-fill" /></span>
                 </div>
 
+                <div className="sni-estimate" aria-live="polite">
+                  <span>Provisional support range</span>
+                  <strong className="sni-estimate-value">Estimate pending</strong>
+                  <small className="sni-estimate-meta">Human confirmation required</small>
+                </div>
+
                 <div className="sni-attachments">
                   {[['rubric', 'Attach rubric'], ['refs', 'Attach sources'], ['other', 'Attach other files']].map(([key, label]) => (
                     <span className="sni-clip-wrap" data-clip-wrap={key} key={key}>
@@ -668,6 +682,11 @@ const CSS = `
 .sni-upload[hidden]{display:none}
 .sni-upload-track{flex:1;height:4px;border-radius:4px;background:rgba(124,92,255,.14);overflow:hidden}
 .sni-upload-fill{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--sni-mark),var(--sni-mark-deep));transition:width .2s}
+.sni-estimate{display:none;margin:0 0 16px;padding:13px 15px;border:1px solid rgba(124,92,255,.22);border-radius:10px;background:linear-gradient(135deg,rgba(124,92,255,.09),rgba(53,214,232,.06));position:relative;z-index:2}
+.sni-estimate.show{display:grid;gap:4px;animation:sni-fade-in .3s ease both}
+.sni-estimate span{font:600 9px 'DM Mono',monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--sni-mark)}
+.sni-estimate strong{font:700 20px 'DM Sans',sans-serif;color:var(--sni-ink)}
+.sni-estimate small{font:10px 'DM Mono',monospace;color:var(--sni-soft)}
 .sni-attachments{
   display:flex;gap:12px;flex-wrap:wrap;padding-top:18px;border-top:1px dashed rgba(17,24,39,.12);
   opacity:0;transform:translateY(5px);position:relative;z-index:2;

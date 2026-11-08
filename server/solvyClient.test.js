@@ -30,4 +30,8 @@ test('Gemini provider returns normalized Solvy analysis JSON', async (t) => {
   assert.equal(analysis.providerVersion, 'gemini-test-model')
   assert.equal(analysis.title, 'Research report')
   assert.deepEqual(analysis.requiredSections, ['Introduction'])
+  assert.equal(analysis.estimate.currency, 'LKR')
+  assert.equal(analysis.estimate.low, 8000)
+  assert.equal(analysis.estimate.high, 10000)
+  assert.equal(analysis.estimate.label, 'LKR 8,000 – 10,000')
 })

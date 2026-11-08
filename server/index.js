@@ -64,7 +64,7 @@ import { moderateTaskMessage } from './messagePolicy.js'
 import { activePolicies, validatePolicyConsents } from './policyRegistry.js'
 import { drainEmailOutbox } from './emailOutbox.js'
 import { observeRequest, observabilitySnapshot } from './observability.js'
-import { callSolvy, normalizeSolvyAnalysis } from './solvyClient.js'
+import { buildProvisionalEstimate, callSolvy, normalizeSolvyAnalysis } from './solvyClient.js'
 import { appealRefundRequest, createRefundRequest, decideRefundRequest, listRefundQueue, listStudentRefunds, markRefundResult } from './refundStore.js'
 import { decidePayout, expertEarnings, listPayoutRequests, requestExpertPayout } from './payoutStore.js'
 import { anonymizeStudentRecords, listPrivacyRequests, prepareAccountClosure } from './privacyStore.js'
@@ -416,7 +416,7 @@ function normalizeAnalysis(files) {
     rubric: rubric ? { sourceFileId: rubric.id, criteria: [] } : null,
     deliverables: [],
     missingInformation: ['deadline', 'subject'],
-    estimate: null,
+    estimate: buildProvisionalEstimate({ complexity: 'Medium', estimatedEffortHours: 6, notes: 'Local development estimate' }),
   }
 }
 

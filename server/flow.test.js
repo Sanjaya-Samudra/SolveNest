@@ -74,6 +74,9 @@ test('Student flow is authenticated, idempotent, and ownership-scoped', async (t
     await new Promise((resolve) => setTimeout(resolve, 50))
   }
   assert.equal(analyzed?.status, 'COMPLETED')
+  assert.equal(analyzed?.estimate?.currency, 'LKR')
+  assert.ok(analyzed?.estimate?.low > 0)
+  assert.ok(analyzed?.estimate?.high > analyzed?.estimate?.low)
 
   const headers = { 'Content-Type': 'application/json', 'Idempotency-Key': `create-${suffix}` }
   const payload = JSON.stringify({ fileIds: [fileId], analysisId: analyzed.id })
